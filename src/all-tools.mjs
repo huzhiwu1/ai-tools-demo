@@ -1,5 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import fs from "node:fs/promises";
+import { spawn } from "node:child_process";
+import z from "zod";
 
 export const readFileTool = tool(
   async ({ filePath }) => {
@@ -53,7 +55,7 @@ export const execCommandTool = tool(
       }`
     );
     return new Promise((resolve, reject) => {
-      const [cmd, ...args] = cpmmand.split(" ");
+      const [cmd, ...args] = command.split(" ");
       const child = spawn(cmd, args, {
         cwd,
         shell: true,
@@ -74,9 +76,7 @@ export const execCommandTool = tool(
             `[工具调用] execCommandTool("${command}") 执行失败，错误信息：${errMsg},退出码${code}`
           );
           resolve(
-            `命令执行失败，退出码: ${code}${
-              errorMsg ? "\n错误: " + errorMsg : ""
-            }`
+            `命令执行失败，退出码: ${code}${errMsg ? "\n错误: " + errMsg : ""}`
           );
         }
       });
