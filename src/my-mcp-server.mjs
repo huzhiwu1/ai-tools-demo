@@ -88,6 +88,13 @@ server.registerResource(
     return {
       contents: [
         {
+          // 这里的 uri 是资源的唯一标识符，类似于 ID。
+          // 它不必是真实的互联网 URL（如 http://...），可以是自定义协议（如 docs://...）。
+          // 客户端使用这个 URI 来请求特定的资源内容。
+          // "docs://guide" 只是我们自己定义的一个名字：
+          // - "docs" 是我们虚构的协议名，表示这是文档类的资源
+          // - "guide" 是具体的资源路径
+          // 你完全可以把它改成 "my-app://help" 或 "resource:manual" 等任何字符串
           uri: "docs://guide",
           mimeType: "text/plain",
           text: `MCP Server 使用指南：
