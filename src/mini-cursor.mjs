@@ -53,9 +53,20 @@ async function runAgentWithTools(query, maxIteractions = 30) {
 
     const response = await modelWithTools.invoke(messages);
     messages.push(response);
+    // 修复说明: 增加对纯文本回复的处理。
+    // 之前如果 AI 只回复文本而不调用工具，会直接退出循环导致任务中断。
+    // 现在会提示 AI 继续使用工具，除非明确包含 "任务完成"。
     if (!response.tool_calls || response.tool_calls.length === 0) {
-      console.log(`ai思考结束，最终回复：${response.content}`);
-      return response.content;
+      console.log(`ai思考结束，回复：${response.content}`);
+      if (response.content.includes("任务完成") || i === maxIteractions - 1) {
+        return response.content;
+      }
+      messages.push(
+        new HumanMessage(
+          "请继续使用工具完成任务，不要只回答文字。如果任务已完成，请回复“任务完成”"
+        )
+      );
+      continue;
     }
 
     for (const toolCall of response.tool_calls) {
@@ -78,7 +89,8 @@ async function runAgentWithTools(query, maxIteractions = 30) {
 // echo 在 windows 可能不支持，可以去掉 echo 试试，不一定需要用户选择，或者换成 windows 的命令写法
 const case1 = `创建一个功能丰富的 React TodoList 应用：
 
-1. 创建项目：echo -e "n\nn" | pnpm create vite react-todo-app --template react-ts
+1. 创建项目：pnpm create vite react-todo-app --template react-ts
+   (如果目录已存在，请先删除或使用不同名称)
 2. 修改 src/App.tsx，实现完整功能的 TodoList：
  - 添加、删除、编辑、标记完成
  - 分类筛选（全部/进行中/已完成）
@@ -93,7 +105,7 @@ const case1 = `创建一个功能丰富的 React TodoList 应用：
  - 使用 CSS transitions
 5. 列出目录确认
 
-注意：使用 pnpm，功能要完整，样式要美观，要有动画效果,尽量在40轮思考内完成,如果已经有现成的项目目录，直接在项目目录下操作即可
+注意：使用 pnpm，功能要完整，样式要美观，要有动画效果。
 
 之后在 react-todo-app 项目中：
 1. 在react-todo-app目录下, 使用 pnpm install 安装依赖
@@ -101,7 +113,7 @@ const case1 = `创建一个功能丰富的 React TodoList 应用：
 `;
 
 try {
-  await runAgentWithTools(case1, 40);
+  await runAgentWithTools(case1);
 } catch (error) {
   console.error(`\n❌ 错误: ${error.message}\n`);
 }

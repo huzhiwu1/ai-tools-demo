@@ -21,10 +21,13 @@ export const readFileTool = tool(
   }
 );
 
+// 修复说明: 之前使用 fs.readdir 获取目录是错误的，这会导致写入失败。
+// 现在改用 path.dirname(filePath) 正确获取目录路径，确保文件写入功能的稳定性。
+// filePath如果是不存在的，使用fs.readdir会报错，所以使用path.dirnname
 export const writeFileTool = tool(
   async ({ filePath, content }) => {
     try {
-      const dir = await fs.readdir(filePath);
+      const dir = path.dirname(filePath);
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(filePath, content, "utf-8");
     } catch (error) {
@@ -46,6 +49,8 @@ export const writeFileTool = tool(
   }
 );
 
+// 修复说明: 之前 stdio: "inherit" 导致命令输出直接打印到控制台，AI 无法读取。
+// 现在通过监听 stdout 和 stderr 捕获输出并返回给 AI，使其能看到命令执行结果（如错误信息或文件列表）。
 export const execCommandTool = tool(
   async ({ command, workingDirectory }) => {
     const cwd = process.cwd() || workingDirectory;
@@ -59,25 +64,36 @@ export const execCommandTool = tool(
       const child = spawn(cmd, args, {
         cwd,
         shell: true,
-        stdio: "inherit",
+        stdio: "pipe",
       });
-      let errMsg = "";
+      let output = "";
+
+      child.stdout.on("data", (data) => {
+        const str = data.toString();
+        output += str;
+        process.stdout.write(str);
+      });
+
+      child.stderr.on("data", (data) => {
+        const str = data.toString();
+        output += str;
+        process.stderr.write(str);
+      });
+
       child.on("error", (err) => {
-        errMsg += err.message;
+        output += err.message;
       });
       child.on("close", (code) => {
         if (code === 0) {
           const cwdInfo = workingDirectory
             ? `\n\n重要提示：命令在目录 "${workingDirectory}" 中执行成功。如果需要在这个项目目录中继续执行命令，请使用 workingDirectory: "${workingDirectory}" 参数，不要使用 cd 命令。`
             : "";
-          resolve(`命令执行成功${cmd}`);
+          resolve(`命令执行成功:\n${output}\n${cwdInfo}`);
         } else {
           console.log(
-            `[工具调用] execCommandTool("${command}") 执行失败，错误信息：${errMsg},退出码${code}`
+            `[工具调用] execCommandTool("${command}") 执行失败，退出码${code}`
           );
-          resolve(
-            `命令执行失败，退出码: ${code}${errMsg ? "\n错误: " + errMsg : ""}`
-          );
+          resolve(`命令执行失败，退出码: ${code}\n输出:\n${output}`);
         }
       });
     });
