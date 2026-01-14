@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/huzhiwu1/ai-tools-demo#readme",
   "dependencies": {
+    "@langchain/classic": "^1.0.9",
     "@langchain/core": "^1.1.11",
     "@langchain/mcp-adapters": "^1.1.1",
     "@langchain/openai": "^1.2.1",
