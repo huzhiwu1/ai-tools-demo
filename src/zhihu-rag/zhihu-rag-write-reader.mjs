@@ -7,7 +7,7 @@ import {
   MetricType,
   MilvusClient,
 } from "@zilliz/milvus2-sdk-node";
-import { OpenAIEmbeddings } from "@langchain/openai";
+import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import chalk from "chalk";
 import { createHash } from "node:crypto";
 /**
@@ -336,6 +336,179 @@ async function ensureCollectionReady({ client, collectionName, dim }) {
   }
 }
 
+function normalizeSearchResults(searchRes) {
+  const r = searchRes?.results;
+  if (!r) return [];
+  if (Array.isArray(r) && r.length > 0 && Array.isArray(r[0])) return r[0];
+  return r;
+}
+
+async function performSearchWithFallback(client, baseReq) {
+  // 兼容不同 SDK 版本的参数命名：data / vectors / vector
+  try {
+    return await client.search({ ...baseReq, data: baseReq.queryVectors });
+  } catch {
+    try {
+      return await client.search({ ...baseReq, vectors: baseReq.queryVectors });
+    } catch {
+      return await client.search({
+        ...baseReq,
+        vector: baseReq.queryVectors[0],
+      });
+    }
+  }
+}
+
+function formatContextFromChunks(rows) {
+  return rows
+    .map((r, i) => {
+      return [
+        `【参考片段 ${i + 1}】`,
+        `source_url: ${r.source_url}`,
+        `title: ${r.title}`,
+        `chunk_index: ${r.chunk_index}`,
+        `content: ${r.content}`,
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
+}
+
+function extractMarkdownImages(text) {
+  const re = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  const images = [];
+  const seen = new Set();
+  for (const m of text.matchAll(re)) {
+    const alt = (m[1] || "").trim();
+    const url = (m[2] || "").trim();
+    if (!url) continue;
+    const key = `${alt}@@${url}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    images.push({ alt, url });
+  }
+  return images;
+}
+
+function formatImagesForPrompt(images) {
+  if (!images || images.length === 0) return "（无）";
+  return images.map((img) => `- ![${img.alt}](${img.url})`).join("\n");
+}
+
+function buildRagPrompt({ question, context, imagesText }) {
+  return (
+    "你是一个严谨的中文助手，只能基于【参考片段】回答问题。\n" +
+    "如果【参考片段】里没有明确依据，请回复：不知道，并说明缺少哪些信息。\n" +
+    "回答时尽量引用你依据的片段编号（例如：参考片段 2）。\n\n" +
+    "如果【参考片段】里包含图片（Markdown 形式：![alt](url)），请你在回答末尾追加一个【图片列表】小节，原样输出这些图片链接。\n" +
+    "如果没有图片，请在【图片列表】里输出：无。\n\n" +
+    `【参考片段】\n${context}\n\n` +
+    `【已提取的图片列表（供你核对，仍需以参考片段为准）】\n${imagesText}\n\n` +
+    `【问题】\n${question}\n\n` +
+    "【回答】\n"
+  );
+}
+
+async function ragAnswerFromMilvus({ question, sourceUrl }) {
+  // 第五步：RAG 问答（Retrieve -> Augment -> Generate）
+  //
+  // 你现在已经完成了：
+  // - 抓取网页 -> 清洗 -> 分块 -> 写入 Milvus
+  //
+  // RAG 问答做的事是：
+  // 1) 把问题 question 向量化（embedding）
+  // 2) 在 Milvus 里检索最相关的 chunks（Retrieval）
+  // 3) 把 chunks 拼成 context（Augment）
+  // 4) 把 question + context 发给大模型生成回答（Generation）
+  const milvusAddress = process.env.MILVUS_ADDRESS || "127.0.0.1:19530";
+  const collectionName = process.env.MILVUS_COLLECTION || "zhihu_articles";
+  const milvusClient = new MilvusClient({ address: milvusAddress });
+
+  console.log(chalk.blue(`连接 Milvus：${milvusAddress}`));
+  await connectMilvusWithRetry(milvusClient, milvusAddress);
+  console.log(chalk.green("✓ Milvus 已连接"));
+
+  console.log(chalk.blue("加载集合（load）"));
+  try {
+    await milvusClient.loadCollectionSync({ collection_name: collectionName });
+  } catch {
+    try {
+      await milvusClient.loadCollection({ collection_name: collectionName });
+    } catch (e) {
+      const msg = String(e?.message || e || "").toLowerCase();
+      if (!msg.includes("already loaded")) throw e;
+    }
+  }
+
+  // embeddings + chat 模型初始化
+  const apiKey = mustEnvAny(["OPENAI_API_KEY", "API_KEY"], "OpenAI API Key");
+  const baseURL = optionalEnvAny(["OPENAI_BASE_URL", "BASE_URL"]);
+  const embeddingsModel = mustEnvAny(
+    ["EMBEDDINGS_MODEL_NAME"],
+    "向量模型名（EMBEDDINGS_MODEL_NAME）",
+  );
+  const chatModel = mustEnvAny(["MODEL_NAME"], "对话模型名（MODEL_NAME）");
+
+  const batchSize = Number(process.env.EMBEDDINGS_BATCH_SIZE || "10");
+  const embeddings = new OpenAIEmbeddings({
+    apiKey,
+    model: embeddingsModel,
+    configuration: baseURL ? { baseURL } : undefined,
+    batchSize,
+  });
+  const llm = new ChatOpenAI({
+    apiKey,
+    model: chatModel,
+    configuration: baseURL ? { baseURL } : undefined,
+    temperature: 0,
+  });
+
+  // 检索：问题向量
+  const topK = Number(process.env.TOPK || "5");
+  const nprobe = Number(process.env.IVF_NPROBE || "16");
+  const queryVectors = [await embeddings.embedQuery(question)];
+
+  // 过滤：只在当前 sourceUrl 这篇文章里检索（避免不同网页混在一个库里后互相干扰）
+  const filter =
+    sourceUrl ?
+      `source_url == "${sourceUrl.replaceAll('"', '\\"')}"`
+    : undefined;
+
+  const baseReq = {
+    collection_name: collectionName,
+    queryVectors,
+    limit: topK,
+    output_fields: ["source_url", "title", "chunk_index", "content"],
+    metric_type: MetricType.COSINE,
+    params: { nprobe },
+    ...(filter ? { filter } : {}),
+  };
+
+  console.log(chalk.yellow("\n[Step 6/??] Retrieval：从 Milvus 检索相关片段"));
+  console.log(chalk.red(`问题：${question}`));
+  if (filter) console.log(chalk.gray(`filter: ${filter}`));
+
+  const searchRes = await performSearchWithFallback(milvusClient, baseReq);
+  const results = normalizeSearchResults(searchRes);
+  console.log(chalk.green(`✓ 检索完成：TopK=${topK}，命中=${results.length}`));
+  results.forEach((r, i) => {
+    console.log(
+      chalk.cyan(
+        `[Top ${i + 1}] score=${r.score} chunk_index=${r.chunk_index} title=${r.title}`,
+      ),
+    );
+  });
+
+  const context = formatContextFromChunks(results);
+  const images = extractMarkdownImages(context);
+  const imagesText = formatImagesForPrompt(images);
+  const prompt = buildRagPrompt({ question, context, imagesText });
+
+  console.log(chalk.yellow("\n[Step 6/??] Generation：基于检索片段生成回答"));
+  const resp = await llm.invoke(prompt);
+  console.log(chalk.green("\nAI 回答："));
+  console.log(resp.content);
+}
+
 async function writeChunksToMilvus({ url, title, chunks }) {
   // 1) 初始化 Milvus 客户端
   const milvusAddress = process.env.MILVUS_ADDRESS || "127.0.0.1:19530";
@@ -602,6 +775,15 @@ async function main() {
     // - IVF_NLIST：索引 nlist（默认 1024）
     // - RESET_COLLECTION=1：每次运行都 drop 重建集合（练习时更方便）
     await writeChunksToMilvus({ url, title, chunks });
+
+    // 跳过第五步（纯检索验证），直接第六步：接入 RAG 问答
+    //
+    // 使用方式：
+    // - QUESTION="结构突破之后如何结合动量判断强弱？" node src/zhihu-rag/zhihu-rag-write-reader.mjs
+    // - TOPK=5 IVF_NPROBE=16 控制检索召回
+    const question =
+      process.env.QUESTION || "这篇文章里，结构突破和动量的关系是什么？";
+    await ragAnswerFromMilvus({ question, sourceUrl: url });
   } catch (error) {
     console.error(error);
   }
