@@ -187,6 +187,47 @@ function stableDocIdFromUrl(url) {
   return createHash("sha1").update(url).digest("hex").slice(0, 12);
 }
 
+function parseCliArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (!a.startsWith("--")) continue;
+    const [k, vRaw] = a.slice(2).split("=", 2);
+    const next = argv[i + 1];
+    const v =
+      vRaw !== undefined ? vRaw
+      : next && !next.startsWith("--") ? next
+      : true;
+    args[k] = v;
+    if (v === next) i++;
+  }
+  return args;
+}
+
+function printUsageAndExit() {
+  const lines = [
+    "用法：",
+    "  node src/zhihu-rag/zhihu-rag-write-reader.mjs --url <知乎文章URL> --question <问题> [--mode all|ingest|rag]",
+    "",
+    "示例：",
+    '  node src/zhihu-rag/zhihu-rag-write-reader.mjs --url "https://zhuanlan.zhihu.com/p/1993469340872377578" --question "结构突破和动量的关系是什么？"',
+    "",
+    "模式说明：",
+    "  --mode=all     抓取+清洗+分块+写入Milvus+RAG回答（默认）",
+    "  --mode=ingest  只抓取+清洗+分块+写入Milvus（不问答）",
+    "  --mode=rag     只做RAG回答（不重新抓取/写入；要求该URL已写入Milvus）",
+    "",
+    "常用可选项：",
+    "  --noUrlFilter  RAG检索时不按 source_url 过滤（跨文章检索）",
+    "",
+    "环境变量（与项目其他脚本一致）：",
+    "  MILVUS_ADDRESS / MILVUS_COLLECTION / API_KEY(或OPENAI_API_KEY) / BASE_URL(或OPENAI_BASE_URL) / EMBEDDINGS_MODEL_NAME / MODEL_NAME",
+    "  COOKIE（可选，仅本机使用，别泄露）",
+  ];
+  console.log(lines.join("\n"));
+  process.exit(1);
+}
+
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -617,7 +658,7 @@ async function getZhihuArticle(url) {
   // - 如果目标网页结构变化，建议改成更稳的容器，例如：
   //   "article, .Post-RichText, .RichText"
   // - 这个 rootSelector 只决定“从哪里开始抽”，真正抽取的是 root 内的 p/img
-  const rootSelector = ".Post-Main";
+  const rootSelector = process.env.ROOT_SELECTOR || ".Post-Main";
 
   // 知乎等站点可能会：
   // - 对非浏览器 UA 返回简化/空内容
@@ -662,7 +703,8 @@ async function getZhihuArticle(url) {
   }
 
   // title 只是辅助信息，方便你验证抓到的是不是目标网页（以及后续做 metadata）
-  const title = $(".Post-Title").text().trim();
+  const titleSelector = process.env.TITLE_SELECTOR || ".Post-Title";
+  const title = $(titleSelector).text().trim() || $("title").text().trim();
   let root = $(rootSelector).first();
   if (root.length === 0) {
     // 兜底：知乎专栏文章常见的正文容器
@@ -730,60 +772,70 @@ async function getZhihuArticle(url) {
 
 async function main() {
   try {
-    console.log(chalk.blue("开始抓取知乎文章"));
-    const url =
-      process.env.ZHIHU_URL ||
-      "https://zhuanlan.zhihu.com/p/1993469340872377578";
-    const { title, content, images } = await getZhihuArticle(url);
+    const cli = parseCliArgs(process.argv.slice(2));
+    if (cli.help || cli.h) printUsageAndExit();
 
+    const mode = String(cli.mode || process.env.MODE || "all").toLowerCase();
+    const url = String(cli.url || process.env.ZHIHU_URL || "");
+    const question = String(
+      cli.question ||
+        process.env.QUESTION ||
+        "这篇文章里，结构突破和动量的关系是什么？",
+    );
+    const noUrlFilter = cli.noUrlFilter === true || cli.noUrlFilter === "true";
+
+    if (!url) {
+      printUsageAndExit();
+    }
+
+    if (mode === "rag") {
+      console.log(chalk.blue("模式：RAG（不重新抓取/写入）"));
+      await ragAnswerFromMilvus({
+        question,
+        sourceUrl: noUrlFilter ? undefined : url,
+      });
+      return;
+    }
+
+    console.log(chalk.blue("模式：抓取 -> 清洗 -> 分块"));
+    const { title, content, images } = await getZhihuArticle(url);
     console.log(chalk.green(`✓ 标题：${title || "（无）"}`));
     console.log(chalk.green(`✓ 文本长度：${content.length}`));
     console.log(chalk.green(`✓ 图片数量：${images.length}`));
 
-    // 第三步：分块
     console.log(chalk.yellow("\n[Step 3/??] 分块（Chunking）"));
     const { chunks, chunkSize, chunkOverlap } = await splitToChunks(content);
     const avgLen =
       chunks.length === 0 ?
         0
       : Math.round(chunks.reduce((s, c) => s + c.length, 0) / chunks.length);
-
     console.log(
       chalk.green(
         `✓ 分块完成：chunks=${chunks.length}（chunkSize=${chunkSize}, chunkOverlap=${chunkOverlap}, avgLen≈${avgLen}）`,
       ),
     );
 
-    // 预览前 2 个 chunk（帮助你理解“切出来长什么样”）
     const previewCount = Math.min(2, chunks.length);
     for (let i = 0; i < previewCount; i++) {
       console.log(chalk.cyan(`\n--- chunk #${i + 1}/${chunks.length} ---`));
       console.log(chunks[i]);
     }
 
-    // 第四步：写入 Milvus（Embedding + Insert）
-    //
-    // 运行前需要准备的环境变量（与你项目其他脚本一致）：
-    // - MILVUS_ADDRESS：例如 127.0.0.1:19530（可选，默认就是这个）
-    // - MILVUS_COLLECTION：集合名（可选，默认 zhihu_articles）
-    // - API_KEY 或 OPENAI_API_KEY：向量模型 key
-    // - BASE_URL 或 OPENAI_BASE_URL：兼容 OpenAI 的服务地址
-    // - EMBEDDINGS_MODEL_NAME：向量模型名（例如 text-embedding-3-large）
-    //
-    // 可选调参：
-    // - EMBEDDINGS_BATCH_SIZE：一次 embedding 多少条（默认 10）
-    // - IVF_NLIST：索引 nlist（默认 1024）
-    // - RESET_COLLECTION=1：每次运行都 drop 重建集合（练习时更方便）
+    console.log(
+      chalk.yellow("\n[Step 4/??] 写入 Milvus（Embedding + Insert）"),
+    );
     await writeChunksToMilvus({ url, title, chunks });
 
-    // 跳过第五步（纯检索验证），直接第六步：接入 RAG 问答
-    //
-    // 使用方式：
-    // - QUESTION="结构突破之后如何结合动量判断强弱？" node src/zhihu-rag/zhihu-rag-write-reader.mjs
-    // - TOPK=5 IVF_NPROBE=16 控制检索召回
-    const question =
-      process.env.QUESTION || "这篇文章里，结构突破和动量的关系是什么？";
-    await ragAnswerFromMilvus({ question, sourceUrl: url });
+    if (mode === "ingest") {
+      console.log(chalk.blue("模式：ingest（已写入 Milvus，跳过问答）"));
+      return;
+    }
+
+    console.log(chalk.yellow("\n[Step 6/??] RAG 问答"));
+    await ragAnswerFromMilvus({
+      question,
+      sourceUrl: noUrlFilter ? undefined : url,
+    });
   } catch (error) {
     console.error(error);
   }
