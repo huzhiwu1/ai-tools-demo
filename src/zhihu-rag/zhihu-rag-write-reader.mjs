@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import chalk from "chalk";
 /**
  * 从知乎抓取文章
@@ -109,6 +110,37 @@ function cleanContentParts(rawParts, { keepImages = true } = {}) {
   }
 
   return cleaned;
+}
+
+/**
+ * 第三步：分块（Chunking / Text Splitting）
+ *
+ * 目标：
+ * - 把一篇长文章切成很多个“小块 chunk”，方便后续：
+ *   1) 逐块做 embedding（避免超出模型输入限制，且更省钱）
+ *   2) 检索粒度更细（你问一个点，只需要召回相关 chunk，而不是整篇文章）
+ *
+ * 关键参数：
+ * - chunkSize：每块的大致长度（这里用“字符数”理解就行）
+ * - chunkOverlap：块之间重叠长度（避免“关键句刚好被切断”造成语义丢失）
+ *
+ * 为什么用 RecursiveCharacterTextSplitter：
+ * - 它会按 separators 优先级“递归拆分”，尽量在自然边界切（段落/换行/句号等）
+ * - 比起硬切（每 N 字一刀）更不容易把一句话切成两半
+ */
+async function splitToChunks(text) {
+  const chunkSize = Number(process.env.CHUNK_SIZE || "500");
+  const chunkOverlap = Number(process.env.CHUNK_OVERLAP || "50");
+
+  const splitter = new RecursiveCharacterTextSplitter({
+    chunkSize,
+    chunkOverlap,
+    separators: ["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""],
+  });
+
+  // splitText：输入一个长字符串，输出 string[]（每个元素就是一个 chunk）
+  const chunks = await splitter.splitText(text);
+  return { chunks, chunkSize, chunkOverlap };
 }
 
 async function getZhihuArticle(url) {
@@ -239,9 +271,31 @@ async function main() {
     console.log(chalk.green(`✓ 标题：${title || "（无）"}`));
     console.log(chalk.green(`✓ 文本长度：${content.length}`));
     console.log(chalk.green(`✓ 图片数量：${images.length}`));
-    console.log("\n===== 内容预览（前 1200 字）=====\n");
-    console.log(content.slice(0, 1200));
-    console.log("\n===== 预览结束 =====");
+
+    // 第三步：分块
+    console.log(chalk.yellow("\n[Step 3/??] 分块（Chunking）"));
+    const { chunks, chunkSize, chunkOverlap } = await splitToChunks(content);
+    const avgLen =
+      chunks.length === 0 ?
+        0
+      : Math.round(chunks.reduce((s, c) => s + c.length, 0) / chunks.length);
+
+    console.log(
+      chalk.green(
+        `✓ 分块完成：chunks=${chunks.length}（chunkSize=${chunkSize}, chunkOverlap=${chunkOverlap}, avgLen≈${avgLen}）`,
+      ),
+    );
+
+    // 预览前 2 个 chunk（帮助你理解“切出来长什么样”）
+    const previewCount = Math.min(2, chunks.length);
+    for (let i = 0; i < previewCount; i++) {
+      console.log(chalk.cyan(`\n--- chunk #${i + 1}/${chunks.length} ---`));
+      console.log(chunks[i]);
+    }
+
+    // 你接下来要做的第四步（还没实现）通常是：
+    // - 对 chunks 做 embedding
+    // - 写入 Milvus（每条记录存：url/title/chunk_index/content/vector）
   } catch (error) {
     console.error(error);
   }
