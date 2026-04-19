@@ -1,7 +1,15 @@
 import "dotenv/config";
 import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import {
+  DataType,
+  IndexType,
+  MetricType,
+  MilvusClient,
+} from "@zilliz/milvus2-sdk-node";
+import { OpenAIEmbeddings } from "@langchain/openai";
 import chalk from "chalk";
+import { createHash } from "node:crypto";
 /**
  * 从知乎抓取文章
  *
@@ -141,6 +149,293 @@ async function splitToChunks(text) {
   // splitText：输入一个长字符串，输出 string[]（每个元素就是一个 chunk）
   const chunks = await splitter.splitText(text);
   return { chunks, chunkSize, chunkOverlap };
+}
+
+/**
+ * 第四步：写入 Milvus（Embedding + Insert + Flush）
+ *
+ * Milvus 在 RAG 里的定位：
+ * - 你可以把它理解成“向量索引的数据库表”
+ * - 每条记录里存两类信息：
+ *   1) vector：文本的向量（用于相似度检索）
+ *   2) scalar fields：原文与元数据（用于展示、过滤、溯源）
+ *
+ * 为什么“先建表/建索引/加载，再插入”：
+ * - schema 决定你能存哪些字段，以及 vector 的维度 dim 必须固定
+ * - index 决定检索性能与召回（IVF_FLAT 是常见入门选择）
+ * - load 决定检索/插入后的可用性（更稳定）
+ */
+const mustEnvAny = (names, label) => {
+  for (const n of names) {
+    const v = process.env[n];
+    if (v) return v;
+  }
+  throw new Error(`缺少环境变量：${label}\n已尝试：${names.join(" / ")}`);
+};
+
+const optionalEnvAny = (names) => {
+  for (const n of names) {
+    const v = process.env[n];
+    if (v) return v;
+  }
+  return undefined;
+};
+
+function stableDocIdFromUrl(url) {
+  // 用 URL 生成一个稳定的短 id，便于你反复跑脚本时定位同一篇文章
+  // 这里用 sha1 的前 12 位，够用且可读
+  return createHash("sha1").update(url).digest("hex").slice(0, 12);
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function connectMilvusWithRetry(client, address) {
+  // 解决常见报错：
+  // "Milvus Proxy is not ready yet. please wait"
+  //
+  // 原因：容器刚启动时，19530 端口可能已经开放，但 Proxy 还没就绪。
+  // 做法：连接 + 轻量 RPC 探测，失败则退避重试。
+  const maxAttempts = Number(process.env.MILVUS_CONNECT_RETRIES || "12");
+  const baseDelayMs = Number(
+    process.env.MILVUS_CONNECT_RETRY_DELAY_MS || "1500",
+  );
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await client.connectPromise;
+      // 用一个轻量 API 做“就绪探测”：
+      // 如果 Proxy 未就绪，这里通常会抛出 "not ready yet"
+      await client.hasCollection({ collection_name: "_health_probe_" });
+      return;
+    } catch (e) {
+      lastError = e;
+      const msg = String(e?.message || e || "").toLowerCase();
+      const retryable =
+        msg.includes("not ready yet") ||
+        msg.includes("service unavailable") ||
+        msg.includes("unavailable") ||
+        msg.includes("connection refused") ||
+        msg.includes("deadline exceeded");
+
+      if (!retryable || attempt === maxAttempts) {
+        break;
+      }
+
+      const waitMs = baseDelayMs * attempt;
+      console.log(
+        chalk.yellow(
+          `Milvus 尚未就绪（attempt ${attempt}/${maxAttempts}），${waitMs}ms 后重试...`,
+        ),
+      );
+      await sleep(waitMs);
+    }
+  }
+
+  throw new Error(
+    [
+      `Milvus 连接失败：${String(lastError?.message || lastError || "unknown")}`,
+      `address=${address}`,
+      "请先确认：",
+      "1) docker compose 已启动：docker compose -f milvus-standalone-docker-compose.yml up -d",
+      "2) 健康检查通过：curl http://localhost:9091/healthz",
+      "3) 如果刚启动，等待 20~60 秒再重试",
+      "",
+      "也可调大重试参数：",
+      "- MILVUS_CONNECT_RETRIES=20",
+      "- MILVUS_CONNECT_RETRY_DELAY_MS=2000",
+    ].join("\n"),
+  );
+}
+
+async function ensureCollectionReady({ client, collectionName, dim }) {
+  const reset = (process.env.RESET_COLLECTION || "0") === "1";
+  const has = await client.hasCollection({ collection_name: collectionName });
+  if (has?.value === true && reset) {
+    console.log(
+      chalk.yellow(
+        `RESET_COLLECTION=1，删除旧集合：${collectionName}（方便你反复练习）`,
+      ),
+    );
+    await client.dropCollection({ collection_name: collectionName });
+  }
+
+  const existsNow = reset ? { value: false } : has;
+  if (existsNow?.value !== true) {
+    console.log(chalk.blue(`创建集合：${collectionName}`));
+
+    // schema 设计要点：
+    // - id：主键（我们用 docId_chunkIndex 拼出来），保证唯一
+    // - source_url/title/chunk_index：用于溯源与过滤（后续检索/展示非常关键）
+    // - content：原文 chunk
+    // - vector：content 的向量（dim 必须与 embedding 输出一致）
+    await client.createCollection({
+      collection_name: collectionName,
+      fields: [
+        {
+          name: "id",
+          data_type: DataType.VarChar,
+          max_length: 200,
+          is_primary_key: true,
+          auto_id: false,
+        },
+        {
+          name: "source_url",
+          data_type: DataType.VarChar,
+          max_length: 2048,
+        },
+        {
+          name: "title",
+          data_type: DataType.VarChar,
+          max_length: 512,
+        },
+        {
+          name: "chunk_index",
+          data_type: DataType.Int32,
+        },
+        {
+          name: "content",
+          data_type: DataType.VarChar,
+          max_length: 10000,
+        },
+        {
+          name: "vector",
+          data_type: DataType.FloatVector,
+          dim,
+        },
+      ],
+    });
+
+    // 建索引：入门用 IVF_FLAT + COSINE
+    // - COSINE：文本语义向量常用度量
+    // - nlist：粗聚类桶数量；经验上与数据量相关（这里给默认 1024，后续可调）
+    const nlist = Number(process.env.IVF_NLIST || "1024");
+    console.log(chalk.blue("创建向量索引（IVF_FLAT + COSINE）"));
+    await client.createIndex({
+      collection_name: collectionName,
+      field_name: "vector",
+      index_type: IndexType.IVF_FLAT,
+      metric_type: MetricType.COSINE,
+      params: { nlist },
+    });
+  }
+
+  // load：让集合进入可检索状态（不同 SDK 版本有 sync / async 两种）
+  console.log(chalk.blue("加载集合（load）"));
+  try {
+    await client.loadCollectionSync({ collection_name: collectionName });
+  } catch {
+    try {
+      await client.loadCollection({ collection_name: collectionName });
+    } catch (e) {
+      const msg = String(e?.message || e || "").toLowerCase();
+      if (!msg.includes("already loaded")) throw e;
+    }
+  }
+}
+
+async function writeChunksToMilvus({ url, title, chunks }) {
+  // 1) 初始化 Milvus 客户端
+  const milvusAddress = process.env.MILVUS_ADDRESS || "127.0.0.1:19530";
+  const collectionName = process.env.MILVUS_COLLECTION || "zhihu_articles";
+  const milvusClient = new MilvusClient({ address: milvusAddress });
+
+  console.log(chalk.blue(`连接 Milvus：${milvusAddress}`));
+  await connectMilvusWithRetry(milvusClient, milvusAddress);
+  console.log(chalk.green("✓ Milvus 已连接"));
+
+  // 2) 初始化 embeddings
+  // 注意：这里尽量与项目其他脚本保持一致的环境变量命名（兼容 OPENAI_* 与 API_KEY/BASE_URL）
+  const apiKey = mustEnvAny(["OPENAI_API_KEY", "API_KEY"], "OpenAI API Key");
+  const baseURL = optionalEnvAny(["OPENAI_BASE_URL", "BASE_URL"]);
+  const embeddingsModel = mustEnvAny(
+    ["EMBEDDINGS_MODEL_NAME"],
+    "向量模型名（EMBEDDINGS_MODEL_NAME）",
+  );
+
+  // batchSize：很多服务端会限制一次 embedding 最多多少条（你项目里常见限制是 10）
+  const batchSize = Number(process.env.EMBEDDINGS_BATCH_SIZE || "10");
+  const embeddings = new OpenAIEmbeddings({
+    apiKey,
+    model: embeddingsModel,
+    configuration: baseURL ? { baseURL } : undefined,
+    batchSize,
+  });
+
+  if (chunks.length === 0) {
+    console.log(chalk.yellow("没有可写入的 chunks，跳过写入。"));
+    return;
+  }
+
+  // 3) 先用第一条 chunk 推断 dim（Milvus 建表必须固定 dim）
+  console.log(
+    chalk.blue("推断向量维度 dim（用第一条 chunk 做一次 embedding）"),
+  );
+  const dim = (await embeddings.embedQuery(chunks[0])).length;
+  console.log(chalk.green(`✓ dim=${dim}`));
+
+  // 4) 确保集合存在 + 索引 + load
+  await ensureCollectionReady({
+    client: milvusClient,
+    collectionName,
+    dim,
+  });
+  console.log(chalk.green(`✓ 集合就绪：${collectionName}`));
+
+  // 5) 批量 embedding + 批量 insert
+  const docId = stableDocIdFromUrl(url);
+  const maxContentLength = 10000;
+  let inserted = 0;
+
+  console.log(chalk.yellow("\n[Step 4/??] Embedding + Insert"));
+  for (let start = 0; start < chunks.length; start += batchSize) {
+    const batchChunks = chunks.slice(start, start + batchSize);
+
+    // embedDocuments：一次性对多条文本做 embedding，比多次 embedQuery 更省网络往返
+    const vectors = await embeddings.embedDocuments(batchChunks);
+
+    const data = batchChunks.map((c, i) => {
+      // 防御：content 超过 schema 的 max_length 时截断
+      const content =
+        c.length > maxContentLength ? c.slice(0, maxContentLength) : c;
+      const chunkIndex = start + i;
+      return {
+        id: `${docId}_${chunkIndex}`,
+        source_url: url,
+        title: title || "",
+        chunk_index: chunkIndex,
+        content,
+        vector: vectors[i],
+      };
+    });
+
+    const res = await milvusClient.insert({
+      collection_name: collectionName,
+      data,
+    });
+    inserted += Number(res?.insert_cnt || 0);
+    console.log(
+      chalk.gray(
+        `- inserted batch: [${start}-${start + batchChunks.length - 1}] insert_cnt=${res?.insert_cnt ?? "unknown"}`,
+      ),
+    );
+  }
+
+  // 6) flush：让数据持久化并更稳定地参与索引/检索
+  console.log(chalk.blue("flush（持久化数据）"));
+  try {
+    await milvusClient.flushSync({ collection_names: [collectionName] });
+  } catch {
+    await milvusClient.flushCollection({ collection_name: collectionName });
+  }
+
+  console.log(
+    chalk.green(
+      `✓ 写入完成：inserted=${inserted} collection=${collectionName}`,
+    ),
+  );
 }
 
 async function getZhihuArticle(url) {
@@ -293,9 +588,20 @@ async function main() {
       console.log(chunks[i]);
     }
 
-    // 你接下来要做的第四步（还没实现）通常是：
-    // - 对 chunks 做 embedding
-    // - 写入 Milvus（每条记录存：url/title/chunk_index/content/vector）
+    // 第四步：写入 Milvus（Embedding + Insert）
+    //
+    // 运行前需要准备的环境变量（与你项目其他脚本一致）：
+    // - MILVUS_ADDRESS：例如 127.0.0.1:19530（可选，默认就是这个）
+    // - MILVUS_COLLECTION：集合名（可选，默认 zhihu_articles）
+    // - API_KEY 或 OPENAI_API_KEY：向量模型 key
+    // - BASE_URL 或 OPENAI_BASE_URL：兼容 OpenAI 的服务地址
+    // - EMBEDDINGS_MODEL_NAME：向量模型名（例如 text-embedding-3-large）
+    //
+    // 可选调参：
+    // - EMBEDDINGS_BATCH_SIZE：一次 embedding 多少条（默认 10）
+    // - IVF_NLIST：索引 nlist（默认 1024）
+    // - RESET_COLLECTION=1：每次运行都 drop 重建集合（练习时更方便）
+    await writeChunksToMilvus({ url, title, chunks });
   } catch (error) {
     console.error(error);
   }
