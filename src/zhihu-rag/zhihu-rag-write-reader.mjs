@@ -14,6 +14,103 @@ import chalk from "chalk";
  * - 适合“静态 HTML / SSR 页面”的抓取（不需要执行浏览器 JS）
  * - 若目标网页强依赖 JS 渲染，Cheerio 可能拿不到正文，需要换 Puppeteer 方案（后面可扩展）
  */
+
+/**
+ * 第二步：文本清洗（Text Cleaning）
+ *
+ * 清洗目的（面向 RAG）：
+ * - 降噪：去掉“对检索/问答没有帮助”的内容，减少 embedding 成本与误召回
+ * - 统一格式：把换行/空白变得可控，避免切分器把同一段切成碎片
+ * - 保留语义：尽量不改动原文含义（不要做“改写/总结”，那是 LLM 的事）
+ *
+ * 我们通常要清洗掉什么：
+ * - 纯 UI 文案：如“点赞/收藏/分享/举报/展开全文”等
+ * - 连续空白/过多换行/不可见字符（\u00a0 等）
+ * - 重复的空行、重复的同一句（有些站点会重复渲染）
+ * - 过短且无信息的行（例如只有一个标点或单个字）
+ *
+ * 我们要保留什么：
+ * - 正文段落的自然顺序（重要：顺序会影响上下文连贯性）
+ * - 图片的“占位信息”（用 Markdown 图片语法）：
+ *   - embedding 看不懂图片内容，但它能保留“这里有图/图的 alt 文本/图的 URL”作为线索
+ *   - 如果你后续做 OCR 或多模态，再把图片内容补进来
+ */
+function cleanContentParts(rawParts, { keepImages = true } = {}) {
+  // 这个函数做的事情可以理解成：把“原始抓取片段 rawParts”变成“可用于 RAG 的干净片段 cleanedParts”。
+  //
+  // 为什么要在“切分/向量化”之前做清洗：
+  // - embedding 很贵：把噪音也向量化，会白花钱
+  // - 检索会被污染：噪音也进入向量库，TopK 更容易召回无关内容
+  // - 切分会变差：杂乱空白/重复段落会让 chunk 粒度不稳定
+  //
+  // 这个清洗器遵循一个原则：只做“格式/噪音处理”，不做“改写/总结”。
+  // - 改写/总结属于 LLM 的工作，会改变原文语义，容易把“证据”变得不可追溯
+  // - RAG 更希望你存的是“原始证据”，让回答可引用、可核对
+
+  // 1) UI 噪音模式：用于过滤网页里的“互动/按钮/元信息”等文案。
+  // 这些内容会干扰语义检索（例如你问“动量”，却召回“点赞/收藏/评论”）。
+  const uiNoisePatterns = [
+    /^(赞同|喜欢|收藏|分享|举报|发布于|编辑于|赞|踩)\b/,
+    /^(\d+)?\s*(赞同|点赞|收藏|分享|评论)\b/,
+    /^(展开阅读全文|收起|查看全部|继续阅读)$/i,
+  ];
+
+  // 2) 行归一化（normalize）：统一空白形态，避免“同一句话因为空格不同而无法去重/匹配”。
+  // - \u00a0 是网页里常见的“不间断空格”，看起来像空格但会影响处理
+  // - \s+ 合并：把多空格/换行/tab 等压成单空格，让切分更稳定
+  const normalizeLine = (s) =>
+    s
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  // 3) cleaned：清洗后的片段列表（保持原始顺序）
+  // 4) seen：用于“完全一致去重”
+  // - 只做完全一致去重，不做语义去重：语义去重容易误删有价值的细节句
+  const cleaned = [];
+  const seen = new Set();
+
+  // 5) 主循环：逐条处理 rawParts（可能包含：段落文本、图片 Markdown 占位）
+  for (const part of rawParts) {
+    if (!part) continue;
+
+    // 6) 判断是否为图片占位（Markdown 形式：![alt](url)）
+    // - 图片在 embedding 中不会被“看懂”，但它能作为“这里有图”的上下文线索
+    // - 你可以用 keepImages 控制是否保留图片占位（默认保留）
+    const isImage =
+      part.startsWith("![") && part.includes("](") && part.endsWith(")");
+    if (isImage && !keepImages) continue;
+
+    // 7) 格式归一化；归一化后为空则跳过
+    const line = normalizeLine(part);
+    if (!line) continue;
+
+    if (!isImage) {
+      // 8) 仅对“文本行”做 UI 噪音过滤（图片占位不走这套规则）
+      let isNoise = false;
+      for (const p of uiNoisePatterns) {
+        if (p.test(line)) {
+          isNoise = true;
+          break;
+        }
+      }
+      if (isNoise) continue;
+
+      // 太短的文本通常对语义检索没价值（比如“嗯”“好”“…”），这里直接丢弃
+      // 图片占位（![alt](url)）不受此规则影响
+      if (line.length < 3) continue;
+    }
+
+    // 简单去重：同一行内容重复出现时，只保留第一次
+    // 注意：这里是“完全一致”去重，不会做语义去重，避免误删
+    if (seen.has(line)) continue;
+    seen.add(line);
+    cleaned.push(line);
+  }
+
+  return cleaned;
+}
+
 async function getZhihuArticle(url) {
   // 你想抓取的 DOM 根节点：
   // - 你的目标是抓 #content 下的文本和图片，因此这里默认写 #content
@@ -120,7 +217,10 @@ async function getZhihuArticle(url) {
 
   // 最终用于后续 RAG 的正文内容（文本 + 图片链接）
   // 如果 content 为空，常见原因是：没命中正文容器 or 返回的是登录/验证页
-  const content = parts.join("\n\n").trim();
+  const cleanedParts = cleanContentParts(parts, {
+    keepImages: (process.env.KEEP_IMAGES || "1") === "1",
+  });
+  const content = cleanedParts.join("\n\n").trim();
   if (!content) {
     throw new Error("抓到的正文为空（可能被反爬/需要登录/正文选择器不匹配）");
   }
