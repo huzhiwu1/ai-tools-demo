@@ -196,8 +196,8 @@ function parseCliArgs(argv) {
     const next = argv[i + 1];
     const v =
       vRaw !== undefined ? vRaw
-      : next && !next.startsWith("--") ? next
-      : true;
+        : next && !next.startsWith("--") ? next
+          : true;
     args[k] = v;
     if (v === next) i++;
   }
@@ -512,7 +512,7 @@ async function ragAnswerFromMilvus({ question, sourceUrl }) {
   const filter =
     sourceUrl ?
       `source_url == "${sourceUrl.replaceAll('"', '\\"')}"`
-    : undefined;
+      : undefined;
 
   const baseReq = {
     collection_name: collectionName,
@@ -779,8 +779,8 @@ async function main() {
     const url = String(cli.url || process.env.ZHIHU_URL || "");
     const question = String(
       cli.question ||
-        process.env.QUESTION ||
-        "这篇文章里，结构突破和动量的关系是什么？",
+      process.env.QUESTION ||
+      "这篇文章里，结构突破和动量的关系是什么？",
     );
     const noUrlFilter = cli.noUrlFilter === true || cli.noUrlFilter === "true";
 
@@ -808,7 +808,7 @@ async function main() {
     const avgLen =
       chunks.length === 0 ?
         0
-      : Math.round(chunks.reduce((s, c) => s + c.length, 0) / chunks.length);
+        : Math.round(chunks.reduce((s, c) => s + c.length, 0) / chunks.length);
     console.log(
       chalk.green(
         `✓ 分块完成：chunks=${chunks.length}（chunkSize=${chunkSize}, chunkOverlap=${chunkOverlap}, avgLen≈${avgLen}）`,
