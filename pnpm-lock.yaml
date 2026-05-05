@@ -13,7 +13,7 @@ importers:
         version: 1.0.9(@langchain/core@1.1.11(@opentelemetry/api@1.9.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5)))(@opentelemetry/api@1.9.1)(cheerio@1.2.0)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(ws@5.2.4)
       '@langchain/community':
         specifier: ^1.1.25
-        version: 1.1.25(@aws-crypto/sha256-js@5.2.0)(@aws-sdk/client-s3@3.1019.0)(@aws-sdk/credential-provider-node@3.972.27)(@browserbasehq/sdk@2.9.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.58.2)(deepmerge@4.3.1)(dotenv@17.2.3)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(zod@4.3.5))(@ibm-cloud/watsonx-ai@1.7.10(typescript@6.0.2))(@langchain/core@1.1.11(@opentelemetry/api@1.9.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5)))(@opentelemetry/api@1.9.1)(@smithy/eventstream-codec@4.2.12)(@smithy/protocol-http@5.3.12)(@smithy/signature-v4@5.3.12)(@smithy/util-utf8@4.2.2)(@zilliz/milvus2-sdk-node@2.6.12)(cheerio@1.2.0)(epub2@3.0.2(ts-toolbelt@9.6.0))(fast-xml-parser@5.5.8)(html-to-text@9.0.5)(ibm-cloud-sdk-core@5.4.9)(jsonwebtoken@9.0.3)(lodash@4.18.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(playwright@1.58.2)(ws@5.2.4)
+        version: 1.1.25(@aws-crypto/sha256-js@5.2.0)(@aws-sdk/client-s3@3.1019.0)(@aws-sdk/credential-provider-node@3.972.27)(@browserbasehq/sdk@2.9.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.58.2)(deepmerge@4.3.1)(dotenv@17.2.3)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(zod@4.3.5))(@ibm-cloud/watsonx-ai@1.7.10(typescript@6.0.2))(@langchain/core@1.1.11(@opentelemetry/api@1.9.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5)))(@opentelemetry/api@1.9.1)(@smithy/eventstream-codec@4.2.12)(@smithy/protocol-http@5.3.12)(@smithy/signature-v4@5.3.12)(@smithy/util-utf8@4.2.2)(@zilliz/milvus2-sdk-node@2.6.12)(cheerio@1.2.0)(epub2@3.0.2(ts-toolbelt@9.6.0))(fast-xml-parser@5.5.8)(html-to-text@9.0.5)(ibm-cloud-sdk-core@5.4.9)(jsonwebtoken@9.0.3)(lodash@4.18.1)(mysql2@3.22.3(@types/node@22.19.15))(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(playwright@1.58.2)(ws@5.2.4)
       '@langchain/core':
         specifier: ^1.1.11
         version: 1.1.11(@opentelemetry/api@1.9.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))
@@ -47,6 +47,9 @@ importers:
       html-to-text:
         specifier: ^9.0.5
         version: 9.0.5
+      mysql2:
+        specifier: ^3.22.3
+        version: 3.22.3(@types/node@22.19.15)
       zod:
         specifier: ^4.3.5
         version: 4.3.5
@@ -1146,6 +1149,10 @@ packages:
   asynckit@0.4.0:
     resolution: {integrity: sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==}
 
+  aws-ssl-profiles@1.1.2:
+    resolution: {integrity: sha512-NZKeq9AfyQvEeNlN0zSYAaWrmBffJh3IELMZfRpJVWgrpEbtEpnjvzqBPf+mxoI287JohRDoa+/nsfqqiZmF6g==}
+    engines: {node: '>= 6.0.0'}
+
   axios@1.14.0:
     resolution: {integrity: sha512-3Y8yrqLSwjuzpXuZ0oIYZ/XGgLwUIBU3uLvbcpb0pidD9ctpShJd43KSlEEkVQg6DS0G9NKyzOvBfUtDKEyHvQ==}
 
@@ -1315,6 +1322,10 @@ packages:
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
+
+  denque@2.1.0:
+    resolution: {integrity: sha512-HVQE3AAb/pxF8fQAoiqpvg9i3evqug3hoiwakOyZAwJm+6vZehbkYXZ0l4JxS+I3QxM97v5aaRNhj8v5oBhekw==}
+    engines: {node: '>=0.10'}
 
   depd@2.0.0:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
@@ -1515,6 +1526,9 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
+  generate-function@2.3.1:
+    resolution: {integrity: sha512-eeB5GfMNeevm/GRYq20ShmsaGcmI81kIX2K9XQx5miC8KdHaC6Jm0qQ8ZNeGOi7wYB8OsdxKs+Y2oVuTFuVwKQ==}
+
   generic-pool@3.9.0:
     resolution: {integrity: sha512-hymDOu5B53XvN4QT9dBmZxPX4CWhBPPLguTZ9MMFeFa/Kg0xWVfylOVNlJji/E7yTZWFd/q9GO5TxDLq156D7g==}
     engines: {node: '>= 4'}
@@ -1612,6 +1626,9 @@ packages:
 
   is-promise@4.0.0:
     resolution: {integrity: sha512-hvpoI6korhJMnej285dSg6nu1+e6uxs7zG3BYAm5byqDsgJNWwxzM6z6iZiAgQR4TJ30JmBTOwqZUw3WlyH3AQ==}
+
+  is-property@1.0.2:
+    resolution: {integrity: sha512-Ks/IoX00TtClbGQr4TWXemAnktAQvYB7HzcCxDGqEZU6oCmb2INHuOoKxbtR+HFkmYWBKv/dOZtGRiAjDhj92g==}
 
   is-stream@2.0.1:
     resolution: {integrity: sha512-hFoiJiTl63nn+kstHGBtewWSKnQLpyb155KHheA1l39uvtO9nWIop1p3udqPcUd/xbF1VLMO4n7OI6p7RbngDg==}
@@ -1723,6 +1740,10 @@ packages:
     resolution: {integrity: sha512-ERJq3FOzJTxBbFjZ7iDs+NiK4VI9Wz+RdrrAB8dio1oV+YvdPzUEE4QNiT2VD51DkIbCYRUUzCRkssXCHqSnKQ==}
     engines: {node: 14 || >=16.14}
 
+  lru.min@1.1.4:
+    resolution: {integrity: sha512-DqC6n3QQ77zdFpCMASA1a3Jlb64Hv2N2DciFGkO/4L9+q/IpIAuRlKOvCXabtRW6cQf8usbmM6BE/TOPysCdIA==}
+    engines: {bun: '>=1.0.0', deno: '>=1.30.0', node: '>=8.0.0'}
+
   make-error@1.3.6:
     resolution: {integrity: sha512-s8UhlNe7vPKomQhC1qFelMokr/Sc3AgNbso3n74mVPA5LTZwkB9NlXf4XPamLxJE8h0gh73rM94xvwRT2CVInw==}
 
@@ -1766,6 +1787,16 @@ packages:
   mustache@4.2.0:
     resolution: {integrity: sha512-71ippSywq5Yb7/tVYyGbkBggbU8H3u5Rz56fH60jGFgr8uHwxs+aSKeqmluIVzM0m0kB7xQjKS6qPfd0b2ZoqQ==}
     hasBin: true
+
+  mysql2@3.22.3:
+    resolution: {integrity: sha512-uWWxvZSRvRhtBdh2CdcuK83YcOfPdmEeEYB069bAmPnV93QApDGVPuvCQOLjlh7tYHEWdgQPrn6kosDxHBVLkA==}
+    engines: {node: '>= 8.0'}
+    peerDependencies:
+      '@types/node': '>= 8'
+
+  named-placeholders@1.1.6:
+    resolution: {integrity: sha512-Tz09sEL2EEuv5fFowm419c1+a/jSMiBjI9gHxVLrVdbUkkNUUfjsVYs9pVZu5oCon/kmRh9TfLEObFtkVxmY0w==}
+    engines: {node: '>=8.0.0'}
 
   negotiator@1.0.0:
     resolution: {integrity: sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg==}
@@ -2048,6 +2079,10 @@ packages:
   source-map@0.6.1:
     resolution: {integrity: sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g==}
     engines: {node: '>=0.10.0'}
+
+  sql-escaper@1.3.3:
+    resolution: {integrity: sha512-BsTCV265VpTp8tm1wyIm1xqQCS+Q9NHx2Sr+WcnUrgLrQ6yiDIvHYJV5gHxsj1lMBy2zm5twLaZao8Jd+S8JJw==}
+    engines: {bun: '>=1.0.0', deno: '>=2.0.0', node: '>=12.0.0'}
 
   stack-trace@0.0.10:
     resolution: {integrity: sha512-KGzahc7puUKkzyMt+IqAep+TVNbKP+k2Lmwhub39m1AsTSkaDutx56aDCo+HLDzf/D26BIHTJWNiTG1KAJiQCg==}
@@ -2910,7 +2945,7 @@ snapshots:
       - openai
       - ws
 
-  '@langchain/community@1.1.25(@aws-crypto/sha256-js@5.2.0)(@aws-sdk/client-s3@3.1019.0)(@aws-sdk/credential-provider-node@3.972.27)(@browserbasehq/sdk@2.9.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.58.2)(deepmerge@4.3.1)(dotenv@17.2.3)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(zod@4.3.5))(@ibm-cloud/watsonx-ai@1.7.10(typescript@6.0.2))(@langchain/core@1.1.11(@opentelemetry/api@1.9.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5)))(@opentelemetry/api@1.9.1)(@smithy/eventstream-codec@4.2.12)(@smithy/protocol-http@5.3.12)(@smithy/signature-v4@5.3.12)(@smithy/util-utf8@4.2.2)(@zilliz/milvus2-sdk-node@2.6.12)(cheerio@1.2.0)(epub2@3.0.2(ts-toolbelt@9.6.0))(fast-xml-parser@5.5.8)(html-to-text@9.0.5)(ibm-cloud-sdk-core@5.4.9)(jsonwebtoken@9.0.3)(lodash@4.18.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(playwright@1.58.2)(ws@5.2.4)':
+  '@langchain/community@1.1.25(@aws-crypto/sha256-js@5.2.0)(@aws-sdk/client-s3@3.1019.0)(@aws-sdk/credential-provider-node@3.972.27)(@browserbasehq/sdk@2.9.0)(@browserbasehq/stagehand@1.14.0(@playwright/test@1.58.2)(deepmerge@4.3.1)(dotenv@17.2.3)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(zod@4.3.5))(@ibm-cloud/watsonx-ai@1.7.10(typescript@6.0.2))(@langchain/core@1.1.11(@opentelemetry/api@1.9.1)(openai@6.33.0(ws@5.2.4)(zod@4.3.5)))(@opentelemetry/api@1.9.1)(@smithy/eventstream-codec@4.2.12)(@smithy/protocol-http@5.3.12)(@smithy/signature-v4@5.3.12)(@smithy/util-utf8@4.2.2)(@zilliz/milvus2-sdk-node@2.6.12)(cheerio@1.2.0)(epub2@3.0.2(ts-toolbelt@9.6.0))(fast-xml-parser@5.5.8)(html-to-text@9.0.5)(ibm-cloud-sdk-core@5.4.9)(jsonwebtoken@9.0.3)(lodash@4.18.1)(mysql2@3.22.3(@types/node@22.19.15))(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(playwright@1.58.2)(ws@5.2.4)':
     dependencies:
       '@browserbasehq/stagehand': 1.14.0(@playwright/test@1.58.2)(deepmerge@4.3.1)(dotenv@17.2.3)(openai@6.33.0(ws@5.2.4)(zod@4.3.5))(zod@4.3.5)
       '@ibm-cloud/watsonx-ai': 1.7.10(typescript@6.0.2)
@@ -2942,6 +2977,7 @@ snapshots:
       html-to-text: 9.0.5
       jsonwebtoken: 9.0.3
       lodash: 4.18.1
+      mysql2: 3.22.3(@types/node@22.19.15)
       playwright: 1.58.2
       ws: 5.2.4
     transitivePeerDependencies:
@@ -3581,6 +3617,8 @@ snapshots:
 
   asynckit@0.4.0: {}
 
+  aws-ssl-profiles@1.1.2: {}
+
   axios@1.14.0(debug@4.4.3):
     dependencies:
       follow-redirects: 1.15.11(debug@4.4.3)
@@ -3757,6 +3795,8 @@ snapshots:
   deepmerge@4.3.1: {}
 
   delayed-stream@1.0.0: {}
+
+  denque@2.1.0: {}
 
   depd@2.0.0: {}
 
@@ -3969,6 +4009,10 @@ snapshots:
 
   function-bind@1.1.2: {}
 
+  generate-function@2.3.1:
+    dependencies:
+      is-property: 1.0.2
+
   generic-pool@3.9.0: {}
 
   get-caller-file@2.0.5: {}
@@ -4093,6 +4137,8 @@ snapshots:
 
   is-promise@4.0.0: {}
 
+  is-property@1.0.2: {}
+
   is-stream@2.0.1: {}
 
   isexe@2.0.0: {}
@@ -4192,6 +4238,8 @@ snapshots:
 
   lru-cache@9.1.2: {}
 
+  lru.min@1.1.4: {}
+
   make-error@1.3.6: {}
 
   math-expression-evaluator@2.0.7: {}
@@ -4219,6 +4267,22 @@ snapshots:
   ms@2.1.3: {}
 
   mustache@4.2.0: {}
+
+  mysql2@3.22.3(@types/node@22.19.15):
+    dependencies:
+      '@types/node': 22.19.15
+      aws-ssl-profiles: 1.1.2
+      denque: 2.1.0
+      generate-function: 2.3.1
+      iconv-lite: 0.7.2
+      long: 5.3.2
+      lru.min: 1.1.4
+      named-placeholders: 1.1.6
+      sql-escaper: 1.3.3
+
+  named-placeholders@1.1.6:
+    dependencies:
+      lru.min: 1.1.4
 
   negotiator@1.0.0: {}
 
@@ -4485,6 +4549,8 @@ snapshots:
   snappyjs@0.7.0: {}
 
   source-map@0.6.1: {}
+
+  sql-escaper@1.3.3: {}
 
   stack-trace@0.0.10: {}
 
