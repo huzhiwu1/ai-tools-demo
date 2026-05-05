@@ -52,11 +52,11 @@ import { executeCommandTool, listDirectoryTool, readFileTool, writeFileTool } fr
 import chalk from 'chalk';
 
 const model = new ChatOpenAI({
-    modelName: "qwen-plus",
-    apiKey: process.env.OPENAI_API_KEY,
+    modelName: process.env.MODEL_NAME,
+    apiKey: process.env.API_KEY,
     temperature: 0,
     configuration: {
-        baseURL: process.env.OPENAI_BASE_URL,
+        baseURL: process.env.BASE_URL,
     },
 });
 
