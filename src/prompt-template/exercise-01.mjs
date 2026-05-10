@@ -42,7 +42,7 @@ await translate({
 })
 
 
-const translatePrompt = await translate({
+await translate({
     source_lang: "中文",
     target_lang: "日文",
     style: "口语化风格",
