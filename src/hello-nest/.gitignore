@@ -1,0 +1,19 @@
+# compiled output
+/dist
+/node_modules
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+
+# IDE
+.idea
+.vscode
+
+# System
+.DS_Store
