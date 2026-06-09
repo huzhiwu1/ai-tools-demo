@@ -44,13 +44,26 @@ function milvusClient() {
 }
 
 async function ensureCollection(client) {
+  const RESET_COLLECTION = (process.env.RESET_COLLECTION || "1") === "1";
+
   try {
     const hasCollection = await client.hasCollection({
       collection_name: COLLECTION_NAME,
     });
 
-    if (!hasCollection.value) {
-      console.log(chalk.blue("集合不存在，正在创建集合"));
+    // 如果集合已存在且要求重置，先删除旧集合
+    if (hasCollection.value && RESET_COLLECTION) {
+      console.log(
+        chalk.blue(
+          `集合 ${COLLECTION_NAME} 已存在，RESET_COLLECTION=1，删除旧集合`,
+        ),
+      );
+      await client.dropCollection({ collection_name: COLLECTION_NAME });
+    }
+
+    // 集合不存在（或刚被删除），重新创建
+    if (!hasCollection.value || RESET_COLLECTION) {
+      console.log(chalk.blue("正在创建集合"));
       await client.createCollection({
         collection_name: COLLECTION_NAME,
         fields: [
@@ -62,7 +75,7 @@ async function ensureCollection(client) {
             auto_id: false,
           },
           {
-            name: "id",
+            name: "book_id",
             data_type: DataType.VarChar,
             max_length: 100,
           },
@@ -104,16 +117,23 @@ async function ensureCollection(client) {
         metric_type: MetricType.COSINE,
       });
       console.log(chalk.blue("索引创建成功"));
+    } else {
+      console.log(chalk.blue(`集合 ${COLLECTION_NAME} 已存在，跳过创建`));
     }
 
     try {
       await client.loadCollection({ collection_name: COLLECTION_NAME });
       console.log(chalk.blue("集合加载成功"));
     } catch (error) {
-      console.log(chalk.blue("集合加载失败"));
+      const msg = String(error?.message || "").toLowerCase();
+      if (msg.includes("already loaded")) {
+        console.log(chalk.blue("集合已处于加载状态"));
+      } else {
+        console.log(chalk.blue("集合加载失败：" + error.message));
+      }
     }
   } catch (error) {
-    console.log(chalk.blue("集合已存在"));
+    console.log(chalk.blue("集合操作失败：" + error.message));
   }
 }
 
@@ -161,8 +181,8 @@ async function loadAndProcessEPUBStreaming(bookId, client) {
       );
       totlalInserterd += insertedCount;
       console.log(chalk.blue(`已插入${totlalInserterd}条数据`));
-      return totlalInserterd;
     }
+    return totlalInserterd;
   } catch (error) {
     console.log(chalk.blue("加载和处理 EPUB 流式传输失败" + error));
   }
@@ -183,6 +203,7 @@ async function insertChunksBatch(chunks, bookId, chapterNum, client) {
         return {
           id: `${bookId}_${chapterNum}_${index}`,
           book_name: "天龙八部",
+          book_id: String(bookId),
           content: chunk,
           chapter_num: chapterNum,
           index: index,

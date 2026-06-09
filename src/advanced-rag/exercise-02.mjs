@@ -70,6 +70,8 @@ const GraphState = Annotation.Root({
   documents: Annotation,
   generation: Annotation,
   gradeResult: Annotation,
+  strategy: Annotation,
+  routeReason: Annotation,
 });
 
 let vectorStore;
@@ -109,35 +111,109 @@ const GradeSchema = z.object({
 });
 
 async function grade(state) {
-  const { documents, generation } = state;
+  const { documents, generation, strategy } = state;
   const modelWithSchema = model.withStructuredOutput(GradeSchema);
+  let result = "";
 
-  const result = await modelWithSchema.invoke(
-    `你是回答质量评估器。请判断生成的回答是否基于检索到的文档内容，是否存在编造。
+  if (strategy === "simple") {
+    result = await modelWithSchema.invoke(
+      `你是回答质量评估器。请判断回答是否合理、准确。
+
+评估标准：
+- passed=true: 回答内容是合理的常识，没有明显错误
+- passed=false: 回答有明显错误或胡说八道
+
+用户问题: ${state.question}
+
+生成的回答: ${generation}
+`,
+    );
+  } else {
+    result = await modelWithSchema.invoke(
+      `你是回答质量评估器。请判断生成的回答是否基于检索到的文档内容，是否存在编造。
 
 评估标准：
 - passed=true: 回答内容能在检索文档中找到依据，没有编造
 - passed=false: 回答包含检索文档中找不到的内容，或与文档矛盾
-：
-【引用片段：】${documents.map((doc) => doc.content).join("\n\n--------\n\n")}
+
+【引用片段：】${documents?.map?.((doc) => doc.content).join("\n\n--------\n\n")}
 
 【用户问题】: ${state.question}
 
 【回答】: ${generation}
 `,
-  );
+    );
+  }
 
   return {
     gradeResult: result,
   };
 }
+
+const RouteSchema = z.object({
+  strategy: z
+    .enum(["simple", "complex"])
+
+    .describe("判断是走检索流程还是直接回答"),
+  reason: z.string().describe("判断理由"),
+});
+
+const routeNode = async (state) => {
+  const { question } = state;
+  const prompt = `你是问答路由器。请判断用户问题是否需要检索小说内容。
+
+规则：
+- simple: 常识问答、简短定义、无需小说细节即可回答（如"1+1等于几"）
+- complex: 需要《天龙八部》具体情节、人物关系、章节事实等小说细节才能回答（如"阿朱的结局"）
+
+用户问题: ${question}
+`;
+  const modelWithSchema = model.withStructuredOutput(RouteSchema);
+
+  const result = await modelWithSchema.invoke(prompt);
+  console.log(chalk.blue("【路由判断】", result));
+  return {
+    strategy: result.strategy,
+    routeReason: result.reason,
+  };
+};
+
+const directAnswerNode = async (state) => {
+  console.log(chalk.blue("【AI直接回答】"));
+  const { question } = state;
+  const prompt = `你是一个专业的助手。请根据用户问题，直接回答问题。
+  用户问题: ${question}
+`;
+  let generation = "";
+  const stream = await model.stream(prompt);
+  for await (const chunk of stream) {
+    const text = typeof chunk?.content === "string" ? chunk.content : "";
+    if (!text) {
+      continue;
+    }
+    process.stdout.write(text);
+    generation += text;
+  }
+  return {
+    generation: generation,
+  };
+};
+
 const graph = new StateGraph(GraphState)
   .addNode("generate", generateNode)
   .addNode("retrieve", retrieveNode)
+  .addNode("directAnswer", directAnswerNode)
   .addNode("grade", grade)
-  .addEdge(START, "retrieve")
+  .addNode("route", routeNode)
+  .addEdge(START, "route")
+  .addConditionalEdges("route", (state) => state.strategy, {
+    simple: "directAnswer",
+    complex: "retrieve",
+  })
+
   .addEdge("retrieve", "generate")
   .addEdge("generate", "grade")
+  .addEdge("directAnswer", "grade")
   .addEdge("grade", END)
   .compile();
 
@@ -175,15 +251,28 @@ async function main() {
     }
 
     const result = await graph.invoke({
-      question: "啊朱的结局是什么？",
+      question: "1+1等于几",
       k: 3,
     });
+
     console.log(
       chalk.blue(
         `【回答质量评估】: 是否过关 ：${result.gradeResult.passed}，理由：${result.gradeResult.reason}`,
       ),
     );
-  } catch (err) {}
+
+    const result2 = await graph.invoke({
+      question: "《天龙八部》的作者是谁？",
+      k: 3,
+    });
+    console.log(
+      chalk.blue(
+        `【回答质量评估】: 是否过关 ：${result2.gradeResult.passed}，理由：${result2.gradeResult.reason}`,
+      ),
+    );
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 main();

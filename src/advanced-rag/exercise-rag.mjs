@@ -5,7 +5,6 @@ import chalk from "chalk";
 import { Milvus } from "@langchain/community/vectorstores/milvus";
 import { COLLECTION_NAME, MILVUS_ADDRESS } from "./constants.mjs";
 import { IndexType, MetricType } from "@zilliz/milvus2-sdk-node";
-import { z } from "zod";
 
 const model = new ChatOpenAI({
   modelName: process.env.MODEL_NAME,
@@ -69,7 +68,6 @@ const GraphState = Annotation.Root({
   k: Annotation,
   documents: Annotation,
   generation: Annotation,
-  gradeResult: Annotation,
 });
 
 let vectorStore;
@@ -101,44 +99,12 @@ async function retrieveNode(state) {
   return { documents: documents };
 }
 
-const GradeSchema = z.object({
-  passed: z
-    .boolean()
-    .describe("回答质量是否过关，是否有据可依,true表示过关,false表示不过关"),
-  reason: z.string().describe("评估理由，说明通过或不通过的原因"),
-});
-
-async function grade(state) {
-  const { documents, generation } = state;
-  const modelWithSchema = model.withStructuredOutput(GradeSchema);
-
-  const result = await modelWithSchema.invoke(
-    `你是回答质量评估器。请判断生成的回答是否基于检索到的文档内容，是否存在编造。
-
-评估标准：
-- passed=true: 回答内容能在检索文档中找到依据，没有编造
-- passed=false: 回答包含检索文档中找不到的内容，或与文档矛盾
-：
-【引用片段：】${documents.map((doc) => doc.content).join("\n\n--------\n\n")}
-
-【用户问题】: ${state.question}
-
-【回答】: ${generation}
-`,
-  );
-
-  return {
-    gradeResult: result,
-  };
-}
 const graph = new StateGraph(GraphState)
   .addNode("generate", generateNode)
   .addNode("retrieve", retrieveNode)
-  .addNode("grade", grade)
   .addEdge(START, "retrieve")
   .addEdge("retrieve", "generate")
-  .addEdge("generate", "grade")
-  .addEdge("grade", END)
+  .addEdge("generate", END)
   .compile();
 
 async function main() {
@@ -178,11 +144,6 @@ async function main() {
       question: "啊朱的结局是什么？",
       k: 3,
     });
-    console.log(
-      chalk.blue(
-        `【回答质量评估】: 是否过关 ：${result.gradeResult.passed}，理由：${result.gradeResult.reason}`,
-      ),
-    );
   } catch (err) {}
 }
 
