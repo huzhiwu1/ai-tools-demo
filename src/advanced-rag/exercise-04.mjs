@@ -36,7 +36,9 @@ const EvaluateSchema = z.object({
 
 // 3. evaluateNode
 const evaluateNode = async (state) => {
-  const hasWeb = Boolean(state.webContext?.trim());
+  const { webContext, webSearchCount, maxWebSearches } = state;
+  const hasWeb = Boolean(webContext?.trim());
+  const remainingSearches = maxWebSearches - webSearchCount;
   const evaluator = model.withStructuredOutput(EvaluateSchema);
 
   const out = await evaluator.invoke(
@@ -45,18 +47,23 @@ const evaluateNode = async (state) => {
 用户问题：${state.question}
 
 本地检索上下文：
-${state.localContext || "（空）"}
+${state.localContext?.map?.((doc) => doc.content).join("\n\n--------\n\n") || "（空）"}
 
-${hasWeb ? `联网搜索结果：\n${state.webContext}\n` : ""}
+${hasWeb ? `联网搜索结果（已搜索${webSearchCount}次，还剩${remainingSearches}次机会）：\n${webContext}\n` : ""}
+
+评估规则：
+1. 如果本地检索 + 联网搜索的信息已足够回答问题，enough=true
+2. 如果信息不足且还有联网机会（剩余${remainingSearches}次），enough=false 并给出不同角度的 webQuery
+3. 如果已经用完联网机会，请基于已有信息尽量回答，enough=true
 
 输出字段：
 - enough: 是否足够
 - missing: 若不够，列出缺失信息点
 - reason: 简短原因
-${hasWeb ? "" : "- web_query: 若不够，给出适合联网搜索的中文查询句"}`,
+- webQuery: 若不够且还有联网机会，给出适合联网搜索的中文查询句（每次必须不同角度）"}`,
   );
 
-  console.log(chalk.blue(`【评估是否要网络搜索】：${JSON.stringify(out)}`));
+  console.log(chalk.blue(`【评估是否要网络搜索（已搜${webSearchCount}/${maxWebSearches}次）】：${JSON.stringify(out)}`));
 
   return { evaluation: JSON.stringify(out) };
 };
@@ -64,6 +71,8 @@ ${hasWeb ? "" : "- web_query: 若不够，给出适合联网搜索的中文查�
 async function bochaWebSearch(query, count = 8) {
   const apiKey = process.env.BOCHA_API_KEY;
   if (!apiKey) throw new Error("BOCHA_API_KEY 未配置");
+
+  console.log(chalk.blue(`【开始搜索问题】：${query}`))
 
   const response = await fetch("https://api.bochaai.com/v1/web-search", {
     method: "POST",
@@ -73,7 +82,6 @@ async function bochaWebSearch(query, count = 8) {
     },
     body: JSON.stringify({
       query,
-      freshness: "oneDay",
       summary: true,
       count: count ?? 10,
     }),
@@ -97,12 +105,17 @@ async function bochaWebSearch(query, count = 8) {
 }
 
 async function webSearchNode(state) {
-  const { evaluation } = state;
+  const { evaluation, webContext, webSearchCount } = state;
   const parsed = JSON.parse(evaluation || "{}");
-  console.log(chalk.blue(`【网络搜索】：${parsed?.webQuery}`));
+  console.log(chalk.blue(`【网络搜索（第${webSearchCount + 1}次）】：${parsed?.webQuery}`));
   const result = await bochaWebSearch(parsed?.webQuery);
   console.log(chalk.green(`【网络搜索结果】：${result}`));
-  return { webContext: result };
+
+  return {
+    webContext: webContext ? webContext + "\n\n" + result : result,
+    evaluation: JSON.stringify(parsed),
+    webSearchCount: webSearchCount + 1,
+  };
 }
 
 const generateNode = async (state) => {
@@ -165,6 +178,8 @@ const GraphState = Annotation.Root({
   localContext: Annotation,
   webContext: Annotation,
   evaluation: Annotation,
+  webSearchCount: Annotation({ defaultValue: 0 }),
+  maxWebSearches: Annotation({ defaultValue: 8 }),
 });
 
 let vectorStore;
@@ -386,6 +401,7 @@ const routeNode = async (state) => {
 规则：
 - simple: 常识问答、简短定义、无需小说细节即可回答（如"1+1等于几"）
 - complex: 需要《天龙八部》具体情节、人物关系、章节事实等小说细节才能回答（如"阿朱的结局"）
+- 如果用户问题明显超出《天龙八部》的范围，如"什么是量子力学"，则判断为complex
 
 用户问题: ${question}
 `;
@@ -429,11 +445,12 @@ function afterPlanNext(state) {
 }
 
 function afterEvaluate(state) {
-  const { evaluation } = state;
+  const { webSearchCount, maxWebSearches } = state;
+  // 联网次数已达上限，强制生成（防止无限循环）
+  if (webSearchCount >= maxWebSearches) return "generate";
 
   const parsed = JSON.parse(state.evaluation || "{}");
   if (parsed.enough === true) return "generate";
-  if (parsed.missing) return "webSearch";
   return "webSearch";
 }
 
@@ -503,7 +520,7 @@ async function main() {
     }
 
     const result = await graph.invoke({
-      question: "《天龙八部》2013版电视剧中，雁门关事件主要出现在哪几集？",
+      question: "《天龙八部》的乔峰是个什么样的人，网友对他的评价怎么样",
       k: 5,
       strategy: "",
       routeReason: "",
@@ -511,10 +528,12 @@ async function main() {
       nextSubIdx: 0,
       localContext: [],
       retrievalCount: 0,
-      maxRetrievals: 8,
+      maxRetrievals: 6,
       nextAction: "",
       generation: "",
       gradeResult: null,
+      webSearchCount: 0,
+      maxWebSearches: 2,
     });
     console.log(
       chalk.blue(
