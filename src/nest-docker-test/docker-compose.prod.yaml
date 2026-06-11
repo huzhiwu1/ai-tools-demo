@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  # 生产环境 MySQL
+  mysql-prod:
+    image: mysql:5.7
+    container_name: mysql-prod
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_DATABASE: book
+    ports:
+      - "3306:3306"
+    command: mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mysql-prod:/var/lib/mysql
+    restart: always
+
+  # NestJS 应用（自动构建镜像）
+  nest-app:
+    container_name: nest-app
+    # 基于当前目录的 Dockerfile 自动构建镜像
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+    # 等 MySQL 启动后再启动应用
+    depends_on:
+      - mysql-prod
+    restart: always

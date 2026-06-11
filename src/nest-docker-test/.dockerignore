@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.DS_Store
+vscode/
+# 数据卷目录
+volumes/
+*.sock
