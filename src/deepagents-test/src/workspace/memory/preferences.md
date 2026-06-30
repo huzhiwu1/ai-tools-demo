@@ -1,7 +1,4 @@
-# 用户偏好
-
-## 编程语言
-- 偏好 TypeScript 而非 JavaScript
-
-## 其他偏好
-（待补充）
+- 包管理器：pnpm
+- 姓名：小明
+- 学习主题：DeepAgents
+- 职业目标：AI 工程师
