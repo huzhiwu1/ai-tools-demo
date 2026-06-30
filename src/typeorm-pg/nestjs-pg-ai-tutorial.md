@@ -31,16 +31,16 @@
 
 本教程对应项目目录为 `src/typeorm-pg`，其中包含以下关键文件：
 
-| 文件 | 说明 |
-| --- | --- |
-| `src/app.module.ts` | 原示例：硬编码数据库连接 |
-| `src/app.module.env.ts` | 增强示例：使用 `.env` 管理数据库配置 |
-| `src/conversations/conversations.service.ts` | 原示例：仅含查询与语义检索 |
-| `src/conversations/conversations.service.enhanced.ts` | 增强示例：新增消息写入并自动生成 Embedding |
-| `src/conversations/conversations.controller.ts` | 原示例：仅含 GET 接口 |
-| `src/conversations/conversations.controller.enhanced.ts` | 增强示例：新增 POST /messages 与语义搜索 |
-| `src/conversations/dto/create-message.dto.ts` | 新增：写入消息请求体 DTO |
-| `.env.example` | 环境变量模板 |
+| 文件                                                     | 说明                                       |
+| -------------------------------------------------------- | ------------------------------------------ |
+| `src/app.module.ts`                                      | 原示例：硬编码数据库连接                   |
+| `src/app.module.env.ts`                                  | 增强示例：使用 `.env` 管理数据库配置       |
+| `src/conversations/conversations.service.ts`             | 原示例：仅含查询与语义检索                 |
+| `src/conversations/conversations.service.enhanced.ts`    | 增强示例：新增消息写入并自动生成 Embedding |
+| `src/conversations/conversations.controller.ts`          | 原示例：仅含 GET 接口                      |
+| `src/conversations/conversations.controller.enhanced.ts` | 增强示例：新增 POST /messages 与语义搜索   |
+| `src/conversations/dto/create-message.dto.ts`            | 新增：写入消息请求体 DTO                   |
+| `.env.example`                                           | 环境变量模板                               |
 
 建议学习顺序：先按原示例跑通查询，再参考增强示例补齐写入能力。
 
@@ -57,11 +57,11 @@
 
 核心接口：
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/conversations/users/:userId` | 查询某用户的全部会话 |
-| GET | `/conversations/:id/messages` | 查询某会话的全部消息 |
-| POST | `/conversations/:id/search` | 会话内语义检索 |
+| 方法 | 路径                           | 说明                 |
+| ---- | ------------------------------ | -------------------- |
+| GET  | `/conversations/users/:userId` | 查询某用户的全部会话 |
+| GET  | `/conversations/:id/messages`  | 查询某会话的全部消息 |
+| POST | `/conversations/:id/search`    | 会话内语义检索       |
 
 ---
 
@@ -107,16 +107,16 @@
 
 ## 4. 任务总览
 
-| 任务 | 主题 | 难度 | 产出 |
-| --- | --- | --- | --- |
-| Task 01 | 初始化 NestJS 项目 | 入门 | 可运行的空项目 |
-| Task 02 | 启动 PostgreSQL + pgvector | 入门 | 本地数据库实例 |
-| Task 03 | TypeORM 连接数据库 | 入门 | 连接成功、可自动同步表结构 |
-| Task 04 | 设计 User / Conversation / Message 实体 | 中等 | 三张表及关系 |
-| Task 05 | 基础 CRUD（查询） | 中等 | 两个 GET 接口 |
-| Task 06 | 接入 OpenAI Embedding | 中等 | 消息写入时自动生成向量 |
-| Task 07 | 会话内语义搜索 | 较难 | `POST /conversations/:id/search` |
-| Task 08 | 验证与调优 | 入门 | curl 测试、性能观察 |
+| 任务    | 主题                                    | 难度 | 产出                             |
+| ------- | --------------------------------------- | ---- | -------------------------------- |
+| Task 01 | 初始化 NestJS 项目                      | 入门 | 可运行的空项目                   |
+| Task 02 | 启动 PostgreSQL + pgvector              | 入门 | 本地数据库实例                   |
+| Task 03 | TypeORM 连接数据库                      | 入门 | 连接成功、可自动同步表结构       |
+| Task 04 | 设计 User / Conversation / Message 实体 | 中等 | 三张表及关系                     |
+| Task 05 | 基础 CRUD（查询）                       | 中等 | 两个 GET 接口                    |
+| Task 06 | 接入 OpenAI Embedding                   | 中等 | 消息写入时自动生成向量           |
+| Task 07 | 会话内语义搜索                          | 较难 | `POST /conversations/:id/search` |
+| Task 08 | 验证与调优                              | 入门 | curl 测试、性能观察              |
 
 ---
 
@@ -265,11 +265,11 @@ pnpm run start:dev
 
 ### 关键参数说明
 
-| 参数 | 说明 |
-| --- | --- |
+| 参数                | 说明                                                       |
+| ------------------- | ---------------------------------------------------------- |
 | `synchronize: true` | 开发时自动根据实体同步表结构。生产环境建议关闭，改用迁移。 |
-| `logging: true` | 打印所有 SQL，便于调试。 |
-| `entities: []` | 需要 TypeORM 扫描的实体类数组。 |
+| `logging: true`     | 打印所有 SQL，便于调试。                                   |
+| `entities: []`      | 需要 TypeORM 扫描的实体类数组。                            |
 
 ---
 
@@ -517,12 +517,7 @@ export class ConversationsService {
 编辑 `src/conversations/conversations.controller.ts`：
 
 ```typescript
-import {
-  Controller,
-  Get,
-  Param,
-  ParseIntPipe,
-} from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
 import { ConversationsService } from './conversations.service';
 
 @Controller('conversations')
@@ -637,9 +632,7 @@ export class ConversationsService {
   private getEmbeddings(): OpenAIEmbeddings {
     if (!this.embeddings) {
       if (!process.env.OPENAI_API_KEY) {
-        throw new BadRequestException(
-          '语义检索需要配置 OPENAI_API_KEY',
-        );
+        throw new BadRequestException('语义检索需要配置 OPENAI_API_KEY');
       }
       this.embeddings = new OpenAIEmbeddings({
         model: process.env.EMBEDDING_MODEL || 'text-embedding-v3',
@@ -980,4 +973,4 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 ---
 
-*本文档基于 typeorm-pg-crud 示例整理，可根据实际学习进度拆分完成。*
+_本文档基于 typeorm-pg-crud 示例整理，可根据实际学习进度拆分完成。_
