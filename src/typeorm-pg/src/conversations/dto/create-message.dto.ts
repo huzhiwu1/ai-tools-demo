@@ -1,3 +1,4 @@
+import { IsEnum, IsInt, IsString, IsNotEmpty } from 'class-validator';
 import { MessageRole } from '../entities/message.entity';
 
 /**
@@ -10,7 +11,11 @@ import { MessageRole } from '../entities/message.entity';
  * - content 为消息正文，写入时会自动调用 Embedding 服务生成向量
  */
 export class CreateMessageDto {
+  @IsInt()
   conversationId!: number;
+  @IsEnum(MessageRole)
   role!: MessageRole;
+  @IsString()
+  @IsNotEmpty()
   content!: string;
 }

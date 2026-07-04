@@ -11,6 +11,8 @@ import { User } from './entities/user.entity';
 import { Conversation } from './entities/conversation.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { CreateConversationDto } from './dto/create-conversation.dto';
+import { CreateMessageDto } from './dto/create-message.dto';
+import { Message } from './entities/message.entity';
 
 export interface SemanticSearchResult {
   id: number;
@@ -121,6 +123,25 @@ export class ConversationsService {
       title: dto.title ?? null,
     });
     return this.em.save(conversation);
+  }
+
+  async createMessage(dto: CreateMessageDto) {
+    const conversation = await this.em.findOne(Conversation, {
+      where: { id: dto.conversationId },
+    });
+    if (!conversation) {
+      throw new NotFoundException(
+        `Conversation #${dto.conversationId} not found`,
+      );
+    }
+    const embedding = await this.embedQuery(dto.content);
+    const message = this.em.create(Message, {
+      conversationId: conversation.id,
+      role: dto.role,
+      content: dto.content,
+      embedding,
+    });
+    return this.em.save(message);
   }
 
   private getEmbeddings(): OpenAIEmbeddings {

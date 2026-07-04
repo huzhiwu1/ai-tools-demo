@@ -12,6 +12,7 @@ import { ConversationsService } from './conversations.service';
 import { SemanticSearchDto } from './dto/semantic-search.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { CreateConversationDto } from './dto/create-conversation.dto';
+import { CreateMessageDto } from './dto/create-message.dto';
 
 @Controller('conversations')
 export class ConversationsController {
@@ -25,6 +26,11 @@ export class ConversationsController {
   @Post('conversations')
   createConversation(@Body() dto: CreateConversationDto) {
     return this.conversationsService.createConversation(dto);
+  }
+
+  @Post('messages')
+  createMessage(@Body() dto: CreateMessageDto) {
+    return this.conversationsService.createMessage(dto);
   }
 
   /** GET /conversations/users/:userId — 用户的会话列表 */
