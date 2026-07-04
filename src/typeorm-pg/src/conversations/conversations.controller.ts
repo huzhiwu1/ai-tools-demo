@@ -10,10 +10,22 @@ import {
 } from '@nestjs/common';
 import { ConversationsService } from './conversations.service';
 import { SemanticSearchDto } from './dto/semantic-search.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { CreateConversationDto } from './dto/create-conversation.dto';
 
 @Controller('conversations')
 export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
+
+  @Post('users')
+  createUser(@Body() dto: CreateUserDto) {
+    return this.conversationsService.createUser(dto);
+  }
+
+  @Post('conversations')
+  createConversation(@Body() dto: CreateConversationDto) {
+    return this.conversationsService.createConversation(dto);
+  }
 
   /** GET /conversations/users/:userId — 用户的会话列表 */
   @Get('users/:userId')

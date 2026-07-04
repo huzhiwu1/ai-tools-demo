@@ -9,6 +9,8 @@ import { OpenAIEmbeddings } from '@langchain/openai';
 import { EntityManager } from 'typeorm';
 import { User } from './entities/user.entity';
 import { Conversation } from './entities/conversation.entity';
+import { CreateUserDto } from './dto/create-user.dto';
+import { CreateConversationDto } from './dto/create-conversation.dto';
 
 export interface SemanticSearchResult {
   id: number;
@@ -102,6 +104,23 @@ export class ConversationsService {
       ...row,
       similarity: Number(row.similarity),
     }));
+  }
+
+  async createUser(dto: CreateUserDto) {
+    const user = this.em.create(User, dto);
+    return this.em.save(user);
+  }
+
+  async createConversation(dto: CreateConversationDto) {
+    const user = await this.em.findOne(User, { where: { id: dto.userId } });
+    if (!user) {
+      throw new NotFoundException(`User #${dto.userId} not found`);
+    }
+    const conversation = this.em.create(Conversation, {
+      userId: user.id,
+      title: dto.title ?? null,
+    });
+    return this.em.save(conversation);
   }
 
   private getEmbeddings(): OpenAIEmbeddings {
