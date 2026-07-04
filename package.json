@@ -35,6 +35,7 @@
     "html-to-text": "^9.0.5",
     "langchain": "^1.4.4",
     "mysql2": "^3.22.3",
+    "neo4j-driver": "^6.2.0",
     "zod": "^4.3.5"
   }
 }

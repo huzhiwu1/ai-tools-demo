@@ -1,0 +1,42 @@
+# ============================================
+# Neo4j Docker Compose 配置
+# ============================================
+# 【核心知识点】
+# Neo4j 是主流的图数据库，用「节点」和「关系」来存储数据，
+# 天然适合表达现实世界中复杂的关联关系。
+#
+# 【知识扩展：为什么用 Docker？】
+# Neo4j 是 Java 应用，本地安装需要 JDK 环境。
+# 用 Docker 一键启动，避免环境配置的麻烦。
+#
+# 【小白注意】
+# 启动命令：docker compose up -d
+# 停止命令：docker compose down
+# 查看日志：docker compose logs -f neo4j
+# ============================================
+
+services:
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j-container
+    ports:
+      - "7474:7474" # Web 管理界面（浏览器访问 http://localhost:7474）
+      - "7687:7687" # Bolt 协议端口（Node.js 连接用这个）
+    environment:
+      # 【知识扩展】
+      # NEO4J_AUTH 格式为 "用户名/密码"
+      # Neo4j 默认用户名是 neo4j，初始密码至少 8 位
+      # 首次登录后会要求修改密码，但 Docker 每次重建都是全新的
+      - NEO4J_AUTH=neo4j/12345678
+      # 启用 APOC 插件（Advanced Procedures for Neo4j）
+      # APOC 提供了大量实用函数，如文本处理、数据导入导出等
+      # 类似于 MySQL 的存储过程扩展
+      - NEO4J_PLUGINS=["apoc"]
+      # 允许 APOC 过程不受安全限制（开发环境用，生产环境不要这样配）
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      # 数据持久化：容器删除后数据不丢失
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/data:/data
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/logs:/logs
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/neo4j/conf:/conf
+    restart: unless-stopped
