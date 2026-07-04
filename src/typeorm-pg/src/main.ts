@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './filters/all-exceptions.filter';
 import { ValidationPipe } from '@nestjs/common';
 
 async function bootstrap() {
@@ -11,6 +12,7 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  app.useGlobalFilters(new AllExceptionsFilter());
   await app.listen(process.env.PORT ?? 3005);
 }
 bootstrap();
