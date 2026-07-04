@@ -1,5 +1,6 @@
 import { IsEnum, IsInt, IsString, IsNotEmpty } from 'class-validator';
 import { MessageRole } from '../entities/message.entity';
+import { ApiProperty } from '@nestjs/swagger';
 
 /**
  * [DTO]
@@ -12,10 +13,13 @@ import { MessageRole } from '../entities/message.entity';
  */
 export class CreateMessageDto {
   @IsInt()
+  @ApiProperty({ example: 1, description: '会话ID' })
   conversationId!: number;
   @IsEnum(MessageRole)
+  @ApiProperty({ example: 'user', description: '消息角色' })
   role!: MessageRole;
   @IsString()
+  @ApiProperty({ example: 'Hello, how are you?', description: '消息内容' })
   @IsNotEmpty()
   content!: string;
 }
