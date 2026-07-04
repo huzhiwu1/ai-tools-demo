@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -11,16 +12,16 @@ import { Message } from './conversations/entities/message.entity';
   imports: [
     TypeOrmModule.forRoot({
       type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username: 'user',
-      password: '123456',
-      database: 'hello_pg',
+      host: process.env.DB_HOST || 'localhost',
+      port: Number(process.env.DB_PORT) || 5432,
+      username: process.env.DB_USERNAME || 'user',
+      password: process.env.DB_PASSWORD || '123456',
+      database: process.env.DB_DATABASE || 'hello_pg',
       synchronize: true,
       logging: true,
       entities: [User, Conversation, Message],
     }),
-    ConversationsModule
+    ConversationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

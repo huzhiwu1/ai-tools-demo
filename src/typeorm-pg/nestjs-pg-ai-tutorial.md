@@ -191,6 +191,30 @@ docker run -d \
   pgvector/pgvector:pg17
 ```
 
+各参数含义：
+
+| 参数                       | 说明                                                             |
+| -------------------------- | ---------------------------------------------------------------- |
+| `--name pg-vector`         | 容器名，方便后续 `docker exec` 进入                              |
+| `POSTGRES_USER=user`       | 数据库用户名，和 `.env` 中 `DB_USERNAME` 对应                    |
+| `POSTGRES_PASSWORD=123456` | 密码，和 `DB_PASSWORD` 对应                                      |
+| `POSTGRES_DB=hello_pg`     | 自动创建的库名，和 `DB_DATABASE` 对应                            |
+| `-p 5432:5432`             | 映射到宿主机 5432 端口                                           |
+| `pgvector/pgvector:pg17`   | 官方 pgvector 镜像，基于 PostgreSQL 17，自带 vector 扩展编译产物 |
+
+#### 常用运维命令
+
+```bash
+# 停止
+docker stop pg-vector
+
+# 启动（已创建过的容器）
+docker start pg-vector
+
+# 删除重来
+docker rm -f pg-vector
+```
+
 ### 方式 B：使用本地 PostgreSQL
 
 1. 安装 `pgvector` 扩展（Windows 可参考其官方 README，或使用 WSL2 + Docker）。
@@ -205,10 +229,22 @@ CREATE EXTENSION IF NOT EXISTS vector;
 ### 验证
 
 ```bash
+# 确认容器在运行
+docker ps | grep pg-vector
+
+# 确认 pgvector 扩展可用
 docker exec -it pg-vector psql -U user -d hello_pg -c "SELECT * FROM pg_extension WHERE extname = 'vector';"
 ```
 
 看到 `vector` 记录即成功。
+
+### 知识扩展：pgvector 镜像 vs 普通 postgres 镜像
+
+`pgvector/pgvector:pg17` 镜像和普通 `postgres:17` 的区别是——它在镜像构建时已经把 `vector` 扩展的编译产物装好了，但**扩展不会自动启用**。TypeORM 的 `synchronize: true` 会自动建表，但不会自动 `CREATE EXTENSION`。如果后续报错 `type "vector" does not exist`，需要手动执行：
+
+```bash
+docker exec -it pg-vector psql -U user -d hello_pg -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
 
 ---
 
