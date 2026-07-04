@@ -2,6 +2,7 @@ import 'dotenv/config';
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectEntityManager } from '@nestjs/typeorm';
@@ -26,6 +27,7 @@ export interface SemanticSearchResult {
 @Injectable()
 export class ConversationsService {
   private embeddings: OpenAIEmbeddings | null = null;
+  private readonly logger = new Logger(ConversationsService.name)
 
   constructor(
     @InjectEntityManager()
@@ -134,7 +136,12 @@ export class ConversationsService {
         `Conversation #${dto.conversationId} not found`,
       );
     }
-    const embedding = await this.embedQuery(dto.content);
+    let embedding: number[] | null = null;
+    try {
+      embedding = await this.embedQueryWithTimeout(dto.content);
+    } catch (error) {
+      this.logger.error(`Embedding失败，消息将不带想量写入: ${error}`);
+    }
     const message = this.em.create(Message, {
       conversationId: conversation.id,
       role: dto.role,
@@ -164,5 +171,13 @@ export class ConversationsService {
 
   private async embedQuery(text: string): Promise<number[]> {
     return this.getEmbeddings().embedQuery(text);
+  }
+  
+  private async embedQueryWithTimeout(text: string, timeoutMs = 5000) {
+    const embeddingPromise = this.embedQuery(text);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Embedding 超时 (${timeoutMs}ms)`)), timeoutMs),
+    );
+    return Promise.race([embeddingPromise, timeoutPromise]);
   }
 }
