@@ -27,7 +27,7 @@ export interface SemanticSearchResult {
 @Injectable()
 export class ConversationsService {
   private embeddings: OpenAIEmbeddings | null = null;
-  private readonly logger = new Logger(ConversationsService.name)
+  private readonly logger = new Logger(ConversationsService.name);
 
   constructor(
     @InjectEntityManager()
@@ -92,13 +92,14 @@ export class ConversationsService {
       throw new NotFoundException(`Conversation #${conversationId} not found`);
     }
 
-    const vector = await this.embedQuery(searchText);
+    const vector = await this.embedQueryWithTimeout(searchText);
 
     const rows: SemanticSearchResult[] = await this.em.query(
       `SELECT id, conversation_id, role, content, created_at,
               1 - (embedding <=> $1::vector) AS similarity
        FROM messages
        WHERE conversation_id = $2 AND embedding IS NOT NULL
+          AND 1 - (embedding <=> $1::vector) > 0.5   -- 新增：相似度阈值
        ORDER BY embedding <=> $1::vector
        LIMIT $3`,
       [JSON.stringify(vector), conversationId, limit],
@@ -140,7 +141,7 @@ export class ConversationsService {
     try {
       embedding = await this.embedQueryWithTimeout(dto.content);
     } catch (error) {
-      this.logger.error(`Embedding失败，消息将不带想量写入: ${error}`);
+      this.logger.error(`Embedding失败，消息将不带向量写入: ${error}`);
     }
     const message = this.em.create(Message, {
       conversationId: conversation.id,

@@ -22,8 +22,15 @@
 11. [Task 07：实现会话内语义搜索](#task-07实现会话内语义搜索)
 12. [Task 08：验证与调优](#task-08验证与调优)
 13. [扩展：把数据库配置迁移到环境变量](#扩展把数据库配置迁移到环境变量)
-14. [常见问题](#常见问题)
-15. [下一步](#下一步)
+14. [进阶实战：从半成品到生产级](#进阶实战从半成品到生产级)
+    - [Task 09：补全创建接口（用户 + 会话）](#task-09补全创建接口用户--会话)
+    - [Task 10：DTO 校验（class-validator）](#task-10dto-校验class-validator)
+    - [Task 11：全局异常过滤器](#task-11全局异常过滤器)
+    - [Task 12：Swagger API 文档](#task-12swagger-api-文档)
+    - [Task 13：Embedding 超时与降级](#task-13embedding-超时与降级)
+    - [Task 14：向量索引与性能优化](#task-14向量索引与性能优化)
+15. [常见问题](#常见问题)
+16. [下一步](#下一步)
 
 ---
 
@@ -117,6 +124,12 @@
 | Task 06 | 接入 OpenAI Embedding                   | 中等 | 消息写入时自动生成向量           |
 | Task 07 | 会话内语义搜索                          | 较难 | `POST /conversations/:id/search` |
 | Task 08 | 验证与调优                              | 入门 | curl 测试、性能观察              |
+| Task 09 | 补全创建接口（用户 + 会话）              | 中等 | `POST /users` + `POST /conversations` |
+| Task 10 | DTO 校验（class-validator）              | 中等 | 全局 ValidationPipe + 装饰器校验 |
+| Task 11 | 全局异常过滤器                           | 较难 | 统一错误响应格式                 |
+| Task 12 | Swagger API 文档                          | 中等 | `/docs` 可交互文档               |
+| Task 13 | Embedding 超时与降级                      | 较难 | Promise.race 超时 + 降级写入     |
+| Task 14 | 向量索引与性能优化                        | 较难 | HNSW 索引 + 相似度阈值过滤       |
 
 ---
 
@@ -964,6 +977,638 @@ TypeOrmModule.forRoot({
 
 3. 确保 `main.ts` 或 `app.module.ts` 顶部最先执行 `import 'dotenv/config';`。
 
+> **注意**：`process.env` 读出的值全是字符串，`port` 必须用 `Number()` 转换。不要用 `String(process.env.XXX) || '默认值'`，因为 `String(undefined)` 返回 `'undefined'`（truthy），默认值永远不会生效。
+
+---
+
+## 进阶实战：从半成品到生产级
+
+> 基础任务（Task 01-08）完成后，项目已能跑通查询与语义检索。但此时项目仍是"半成品"：只能查不能建、DTO 零校验、错误格式不统一、没有 API 文档、Embedding 超时会卡死。以下 6 个进阶任务将逐步打磨成生产级。
+
+---
+
+### Task 09：补全创建接口（用户 + 会话）
+
+#### 目标
+
+补上 `POST /users` 和 `POST /conversations` 两个接口，让数据可以通过 API 流转，不再需要手动 SQL 插入。
+
+#### 步骤
+
+1. 新建 DTO：
+
+```typescript
+// src/conversations/dto/create-user.dto.ts
+export class CreateUserDto {
+  name!: string;
+}
+
+// src/conversations/dto/create-conversation.dto.ts
+export class CreateConversationDto {
+  userId!: number;
+  title?: string;
+}
+```
+
+2. 在 `ConversationsService` 中新增方法：
+
+```typescript
+import { CreateUserDto } from './dto/create-user.dto';
+import { CreateConversationDto } from './dto/create-conversation.dto';
+
+/** 创建用户 */
+async createUser(dto: CreateUserDto) {
+  const user = this.em.create(User, dto);
+  return this.em.save(user);
+}
+
+/** 创建会话 */
+async createConversation(dto: CreateConversationDto) {
+  const user = await this.em.findOne(User, { where: { id: dto.userId } });
+  if (!user) {
+    throw new NotFoundException(`User #${dto.userId} not found`);
+  }
+  const conversation = this.em.create(Conversation, {
+    userId: user.id,
+    title: dto.title ?? null,
+  });
+  return this.em.save(conversation);
+}
+```
+
+3. 在 `ConversationsController` 中新增路由：
+
+```typescript
+@Post('users')
+createUser(@Body() dto: CreateUserDto) {
+  return this.conversationsService.createUser(dto);
+}
+
+@Post('conversations')
+createConversation(@Body() dto: CreateConversationDto) {
+  return this.conversationsService.createConversation(dto);
+}
+```
+
+#### 知识扩展：`em.create` vs `em.save` vs `em.insert`
+
+| 方法 | 作用 | 是否执行 SQL |
+| ---- | ---- | ------------ |
+| `em.create(Entity, data)` | 内存中实例化实体对象 | 否 |
+| `em.save(entity)` | 执行 INSERT 或 UPDATE | 是 |
+| `em.insert(Entity, data)` | 直接执行 INSERT（不经过实体生命周期） | 是 |
+
+`em.create` + `em.save` 是最常见的组合。如果不需要实体钩子（`@BeforeInsert` 等），也可以直接用 `em.insert` 一步到位。
+
+#### 路由顺序
+
+NestJS 的路由匹配按声明顺序。养成好习惯：具体路由写在通配路由前面。
+
+```typescript
+@Post('users')           // 具体
+@Post('conversations')   // 具体
+@Get('users/:userId')    // 半通配
+@Get(':id/messages')     // 通配
+@Post(':id/search')      // 通配
+```
+
+#### 验证
+
+```bash
+curl -s -X POST http://localhost:3005/conversations/users \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Alice"}' | jq
+
+curl -s -X POST http://localhost:3005/conversations/conversations \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":1,"title":"AI 学习笔记"}' | jq
+```
+
+---
+
+### Task 10：DTO 校验（class-validator）
+
+#### 目标
+
+给所有 DTO 添加校验装饰器，配合全局 `ValidationPipe` 自动拒绝非法请求。
+
+#### 步骤
+
+1. 安装依赖：
+
+```bash
+pnpm add class-validator class-transformer
+```
+
+2. 在 `main.ts` 中启用全局校验管道：
+
+```typescript
+import { ValidationPipe } from '@nestjs/common';
+
+app.useGlobalPipes(
+  new ValidationPipe({
+    whitelist: true,           // 自动剔除 DTO 中未定义的多余字段
+    forbidNonWhitelisted: true, // 遇到多余字段直接报错
+    transform: true,           // 自动把字符串参数转为 DTO 中声明的类型
+  }),
+);
+```
+
+3. 给所有 DTO 添加校验装饰器：
+
+```typescript
+// create-user.dto.ts
+import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+
+export class CreateUserDto {
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(1)
+  name!: string;
+}
+
+// create-conversation.dto.ts
+import { IsNumber, IsOptional, IsString, MaxLength } from 'class-validator';
+
+export class CreateConversationDto {
+  @IsNumber()
+  userId!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  title?: string;
+}
+
+// create-message.dto.ts
+import { IsEnum, IsInt, IsString, IsNotEmpty } from 'class-validator';
+
+export class CreateMessageDto {
+  @IsInt()
+  conversationId!: number;
+
+  @IsEnum(MessageRole)
+  role!: MessageRole;
+
+  @IsString()
+  @IsNotEmpty()
+  content!: string;
+}
+
+// semantic-search.dto.ts
+import { IsOptional, IsString, MinLength, IsInt } from 'class-validator';
+
+export class SemanticSearchDto {
+  @IsString()
+  @MinLength(1)
+  query!: string;
+
+  @IsOptional()
+  @IsInt()
+  limit?: number;
+}
+```
+
+#### 知识扩展：ValidationPipe 三个核心选项
+
+| 选项 | 作用 | 不开的后果 |
+| ---- | ---- | ---------- |
+| `whitelist: true` | 自动剔除 DTO 中未定义的字段 | 请求体里塞 `{isAdmin:true}` 会被静默接受 |
+| `forbidNonWhitelisted: true` | 遇到多余字段直接报 400 | 配合 whitelist，多余字段从"静默剔除"变成"拒绝请求" |
+| `transform: true` | 自动类型转换 | `userId:"5"` 不会自动转成 `5`，`@IsNumber()` 会报错 |
+
+#### 知识扩展：`||` vs `??`
+
+| 操作符 | `undefined` | `''`（空串） | `0` |
+| ------ | ----------- | ------------ | --- |
+| `\|\|` | 走右侧 | 走右侧 | 走右侧 |
+| `??` | 走右侧 | **保留** | **保留** |
+
+环境变量场景一般用 `||` 就够了。如果 `DB_HOST` 配了空字符串 `DB_HOST=`，用 `||` 会回退到默认值，用 `??` 会保留空串。
+
+#### 验证
+
+```bash
+# 空 name → 400
+curl -s -X POST http://localhost:3005/conversations/users \
+  -H 'Content-Type: application/json' -d '{"name":""}' | jq
+
+# 字符串 userId → 400
+curl -s -X POST http://localhost:3005/conversations/conversations \
+  -H 'Content-Type: application/json' -d '{"userId":"abc"}' | jq
+
+# 非法 role → 400
+curl -s -X POST http://localhost:3005/conversations/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"conversationId":1,"role":"admin","content":"test"}' | jq
+
+# 多余字段 → 400（forbidNonWhitelisted）
+curl -s -X POST http://localhost:3005/conversations/users \
+  -H 'Content-Type: application/json' -d '{"name":"Hack","isAdmin":true}' | jq
+```
+
+---
+
+### Task 11：全局异常过滤器
+
+#### 目标
+
+实现全局异常过滤器，统一所有错误响应格式。
+
+#### 统一响应格式
+
+```json
+{
+  "success": false,
+  "statusCode": 404,
+  "error": "NOT_FOUND",
+  "message": "User #999 not found",
+  "timestamp": "2026-07-04T08:22:52.976Z",
+  "path": "/conversations/users/999"
+}
+```
+
+#### 步骤
+
+1. 创建 `src/filters/all-exceptions.filter.ts`：
+
+```typescript
+import {
+  ArgumentsHost, Catch, ExceptionFilter,
+  HttpException, HttpStatus, Logger,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
+
+@Catch() // 无参数 = 捕获所有异常
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AllExceptionsFilter.name);
+
+  catch(exception: unknown, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
+
+    let status: number;
+    let message: string | string[];
+
+    if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      const res = exception.getResponse();
+      // getResponse() 返回三种形态：string / object / object+message数组
+      if (typeof res === 'string') {
+        message = res;
+      } else {
+        message = (res as any).message ?? res;
+      }
+    } else {
+      // 非 HTTP 异常：记录完整堆栈，返回 500
+      status = HttpStatus.INTERNAL_SERVER_ERROR;
+      message = 'Internal server error';
+      this.logger.error(exception);
+    }
+
+    const errorName =
+      status >= 500 ? 'Internal Server Error' : (HttpStatus[status] ?? 'Error');
+
+    response.status(status).json({
+      success: false,
+      statusCode: status,
+      error: errorName,
+      message,
+      timestamp: new Date().toISOString(),
+      path: request.url,
+    });
+  }
+}
+```
+
+2. 在 `main.ts` 中注册（必须在 `useGlobalPipes` 之后）：
+
+```typescript
+import { AllExceptionsFilter } from './filters/all-exceptions.filter';
+
+app.useGlobalPipes(new ValidationPipe({ /* ... */ }));
+app.useGlobalFilters(new AllExceptionsFilter());
+```
+
+#### 知识扩展：`@Catch()` 的两种用法
+
+| 写法 | 捕获范围 | 适用场景 |
+| ---- | -------- | ------ |
+| `@Catch(HttpException)` | 只捕获 NestJS 内置 HTTP 异常 | 只想统一 HTTP 异常格式 |
+| `@Catch()`（无参数） | 捕获所有异常 | 兜底所有未捕获异常，防止堆栈泄露 |
+
+#### 知识扩展：`exception.getResponse()` 的三种形态
+
+```typescript
+// 形态1: string
+exception.getResponse() === 'User not found'
+
+// 形态2: object（NestJS 内置异常默认）
+exception.getResponse() === { statusCode: 404, message: '...', error: 'Not Found' }
+
+// 形态3: object + message 数组（ValidationPipe 抛的）
+exception.getResponse() === { statusCode: 400, message: ['name must be...'], error: 'Bad Request' }
+```
+
+#### 小心坑
+
+过滤器的注册顺序：`useGlobalPipes` 要在 `useGlobalFilters` **之前**调用。Pipe 抛出的异常需要先被 Filter 捕获。
+
+---
+
+### Task 12：Swagger API 文档
+
+#### 目标
+
+集成 `@nestjs/swagger`，自动生成可交互的 API 文档页面。
+
+#### 步骤
+
+1. 安装依赖：
+
+```bash
+pnpm add @nestjs/swagger
+```
+
+2. 在 `main.ts` 中配置 Swagger（在 `useGlobalFilters` 之后、`app.listen` 之前）：
+
+```typescript
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+
+const config = new DocumentBuilder()
+  .setTitle('AI 会话管理 API')
+  .setDescription('NestJS + TypeORM + PostgreSQL(pgvector) 会话管理与语义检索')
+  .setVersion('1.0')
+  .build();
+const document = SwaggerModule.createDocument(app, config);
+SwaggerModule.setup('docs', app, document); // 访问路径：/docs
+```
+
+3. 给 Controller 添加装饰器：
+
+```typescript
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+
+@ApiTags('会话管理')
+@Controller('conversations')
+export class ConversationsController {
+  @ApiOperation({ summary: '创建用户' })
+  @ApiResponse({ status: 201, description: '用户创建成功' })
+  @Post('users')
+  createUser(@Body() dto: CreateUserDto) { ... }
+
+  // ... 其他接口同理
+}
+```
+
+4. 给 DTO 添加字段描述：
+
+```typescript
+import { ApiProperty } from '@nestjs/swagger';
+
+export class CreateUserDto {
+  @ApiProperty({ example: 'Alice', description: '用户名' })
+  @IsString()
+  @IsNotEmpty()
+  name!: string;
+}
+
+export class CreateConversationDto {
+  @ApiProperty({ example: 1, description: '用户 ID' })
+  @IsNumber()
+  userId!: number;
+
+  @ApiProperty({ example: 'AI 学习笔记', description: '会话标题', required: false })
+  @IsOptional()
+  @IsString()
+  title?: string;
+}
+
+export class CreateMessageDto {
+  @ApiProperty({ example: 1, description: '会话 ID' })
+  @IsInt()
+  conversationId!: number;
+
+  @ApiProperty({ example: 'user', description: '消息角色', enum: MessageRole })
+  @IsEnum(MessageRole)
+  role!: MessageRole;
+
+  @ApiProperty({ example: 'PostgreSQL 支持哪些数据类型', description: '消息正文' })
+  @IsString()
+  @IsNotEmpty()
+  content!: string;
+}
+```
+
+#### 知识扩展：Swagger 的工作原理
+
+启动时：NestJS 扫描所有 `@Controller` 装饰器 → 读取 `@ApiTags`、`@ApiOperation`、`@ApiProperty` 等元数据 → 生成 OpenAPI JSON 规范 → 挂载到 `/docs` 路径渲染 Swagger UI。
+
+运行时：浏览器访问 `/docs` → 加载 swagger-ui-bundle → 请求 `/docs-json` 获取 OpenAPI JSON → 渲染交互式文档页面。
+
+关键点：Swagger 文档是**启动时自动生成**的，改了 Controller 或 DTO 重启后自动更新。
+
+#### 知识扩展：OpenAPI vs Swagger
+
+| 名称 | 是什么 |
+| ---- | ------ |
+| OpenAPI | API 描述规范（JSON/YAML 格式），是"标准" |
+| Swagger UI | 渲染 OpenAPI 文档的可视化页面，是"工具" |
+| `@nestjs/swagger` | NestJS 装饰器 → OpenAPI JSON 的转换库，是"桥接" |
+
+#### 小心坑
+
+- 可选字段必须加 `required: false`，否则 Swagger 默认所有字段都是 required
+- 枚举字段必须加 `enum: MessageRole`，否则 Swagger 不显示可选值
+- POST 接口默认返回 200，如需返回 201 要加 `@HttpCode(201)`
+
+#### 验证
+
+浏览器访问 `http://localhost:3005/docs`，应看到所有 6 个接口，可点击 **Try it out** 直接测试。
+
+---
+
+### Task 13：Embedding 超时与降级
+
+#### 目标
+
+给 Embedding 调用加超时控制，失败时降级写入（消息照存，embedding 存 null），不卡死接口。
+
+#### 问题分析
+
+当前 `createMessage` 中的 `this.embedQuery(dto.content)` 没有 timeout，如果 Embedding 服务挂了或网络超时，整个接口会一直卡住。
+
+#### 步骤
+
+1. 在 `ConversationsService` 中添加 `Logger`：
+
+```typescript
+import { Logger } from '@nestjs/common';
+
+@Injectable()
+export class ConversationsService {
+  private readonly logger = new Logger(ConversationsService.name);
+  // ...
+}
+```
+
+2. 新增带超时的 Embedding 方法：
+
+```typescript
+/**
+ * 带超时的 Embedding 查询
+ * 原理：Promise.race 同时跑两个 Promise，谁先完成用谁的结果
+ */
+private async embedQueryWithTimeout(text: string, timeoutMs = 5000): Promise<number[]> {
+  const embeddingPromise = this.embedQuery(text);
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`Embedding 超时 (${timeoutMs}ms)`)), timeoutMs),
+  );
+  return Promise.race([embeddingPromise, timeoutPromise]);
+}
+```
+
+3. 修改 `createMessage` 方法，加 try/catch 降级：
+
+```typescript
+async createMessage(dto: CreateMessageDto) {
+  const conversation = await this.em.findOne(Conversation, {
+    where: { id: dto.conversationId },
+  });
+  if (!conversation) {
+    throw new NotFoundException(`Conversation #${dto.conversationId} not found`);
+  }
+
+  let embedding: number[] | null = null;
+  try {
+    embedding = await this.embedQueryWithTimeout(dto.content);
+  } catch (error) {
+    // 降级：embedding 保持 null，消息照常写入
+    this.logger.error(`Embedding 失败，消息将不带向量写入: ${error}`);
+    // 不 throw！让 embedding 保持 null，继续写入消息
+  }
+
+  const message = this.em.create(Message, {
+    conversationId: conversation.id,
+    role: dto.role,
+    content: dto.content,
+    embedding,
+  });
+  return this.em.save(message);
+}
+```
+
+4. `searchSimilarMessages` 也改用 `embedQueryWithTimeout`：
+
+```typescript
+const vector = await this.embedQueryWithTimeout(searchText);
+```
+
+#### 知识扩展：降级策略对比
+
+| 策略 | 行为 | 优点 | 缺点 |
+| ---- | ---- | ---- | ---- |
+| 快速失败 | Embedding 失败 → 整个请求 500 | 简单，数据一致 | 消息丢了，用户体验差 |
+| 降级写入（本任务） | Embedding 失败 → 消息照存，embedding=null | 消息不丢，可后续补向量 | 该消息暂时无法被语义搜索命中 |
+| 异步重试（进阶） | Embedding 失败 → 消息照存 + 入队列稍后重试 | 最终一致 | 需要 BullMQ 等队列基础设施 |
+
+#### 知识扩展：Promise.race 超时的局限
+
+`Promise.race` 实现超时有一个局限：timeout 触发后，`embeddingPromise` 仍在后台跑（无法取消 fetch）。如果要真正取消 HTTP 请求，需要用 `AbortController`，但 `@langchain/openai` 的 `embedQuery()` 不直接暴露 `AbortSignal` 参数。
+
+#### 关键点
+
+catch 块里**不能 throw**。一旦 throw，就不是降级而是快速失败了。降级的核心是"吞掉异常 + 继续执行"。
+
+---
+
+### Task 14：向量索引与性能优化
+
+#### 目标
+
+为 `messages.embedding` 创建 HNSW 索引加速向量检索，并添加相似度阈值过滤不相关结果。
+
+#### 步骤
+
+1. 创建 HNSW 索引：
+
+```bash
+docker exec -it pg-vector psql -U user -d hello_pg -c "
+CREATE INDEX IF NOT EXISTS idx_messages_embedding
+ON messages
+USING hnsw (embedding vector_cosine_ops);
+"
+```
+
+2. 在 `searchSimilarMessages` 中添加相似度阈值：
+
+```typescript
+const rows: SemanticSearchResult[] = await this.em.query(
+  `SELECT id, conversation_id, role, content, created_at,
+          1 - (embedding <=> $1::vector) AS similarity
+   FROM messages
+   WHERE conversation_id = $2 AND embedding IS NOT NULL
+     AND 1 - (embedding <=> $1::vector) > 0.5   -- 相似度阈值
+   ORDER BY embedding <=> $1::vector
+   LIMIT $3`,
+  [JSON.stringify(vector), conversationId, limit],
+);
+```
+
+3. 验证索引生效：
+
+```bash
+docker exec -it pg-vector psql -U user -d hello_pg -c "
+EXPLAIN SELECT id, content, 1 - (embedding <=> '[0.1,0.2,0.3]'::vector) AS similarity
+FROM messages
+WHERE conversation_id = 1 AND embedding IS NOT NULL
+ORDER BY embedding <=> '[0.1,0.2,0.3]'::vector
+LIMIT 5;
+"
+```
+
+如果 `EXPLAIN` 输出中出现 `Index Scan using idx_messages_embedding`，说明索引生效。
+
+#### 知识扩展：HNSW vs IVFFlat
+
+| 维度 | HNSW | IVFFlat |
+| ---- | ---- | ------- |
+| 原理 | 分层小世界图，导航式搜索 | 倒排文件 + 扁平量化，分区搜索 |
+| 查询速度 | 快（图遍历） | 较快（只搜分区） |
+| 构建速度 | 慢（需要建图） | 快 |
+| 内存占用 | 高 | 低 |
+| 召回率 | 高 | 中 |
+| 数据量要求 | 无 | 需要一定数据量才能分区 |
+| 适用场景 | 中小数据量（本项目推荐） | 百万级以上 |
+
+#### 知识扩展：相似度阈值怎么选
+
+```text
+similarity = 1 - cosine_distance
+
+> 0.8  高度相关（几乎同义）
+> 0.5  相关（同主题不同表述）
+> 0.3  弱相关（话题沾边）
+< 0.3  不相关
+```
+
+0.5 是保守阈值——过滤掉明显不相关的，又不至于太严格漏掉有用的。客服系统可能用 0.3（宁多勿少），精确匹配系统可能用 0.7（宁少勿错）。
+
+#### 验证
+
+```bash
+# 搜索相关内容 → 应返回结果
+curl -s -X POST http://localhost:3005/conversations/1/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"数据库支持什么类型","limit":3}' | jq
+
+# 搜索完全不相关的内容 → 应返回空数组（similarity < 0.5 被过滤）
+curl -s -X POST http://localhost:3005/conversations/1/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"今天天气真好","limit":3}' | jq
+```
+
 ---
 
 ## 常见问题
@@ -1000,12 +1645,24 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 ## 下一步
 
-- 为接口添加 `class-validator` 校验 DTO 字段。
-- 使用 `@nestjs/config` 替代 `dotenv` 进行配置管理。
-- 引入 Swagger 自动生成 API 文档。
-- 添加单元测试与 e2e 测试。
-- 把 Embedding 生成改为异步队列（如 BullMQ），降低接口响应时间。
-- 引入 LangChain Chat Model，实现真正的 AI 对话能力。
+基础任务（Task 01-08）与进阶任务（Task 09-14）已全部完成。以下方向供进一步探索：
+
+**已完成（回顾）**
+
+- ~~为接口添加 `class-validator` 校验 DTO 字段。~~（Task 10）
+- ~~引入 Swagger 自动生成 API 文档。~~（Task 12）
+- ~~把数据库配置迁移到环境变量。~~（扩展章节 + Task 01 改造）
+- ~~Embedding 超时降级。~~（Task 13）
+- ~~向量索引优化。~~（Task 14）
+
+**待探索**
+
+- 使用 `@nestjs/config` 替代 `dotenv` 进行配置管理，搭配 `Joi` 做环境变量校验。
+- 添加单元测试与 e2e 测试（`jest` + `supertest`）。
+- 把 Embedding 生成改为异步队列（如 BullMQ），降低接口响应时间，实现最终一致性。
+- 引入 LangChain Chat Model，实现真正的 AI 对话能力（结合语义检索做 RAG）。
+- 使用 TypeORM migration 替代 `synchronize: true`，适合生产环境。
+- 补全用户和会话的更新、删除接口（PATCH / DELETE），形成完整 CRUD。
 
 ---
 
