@@ -1,0 +1,25 @@
+{
+  "name": "redis-test",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "ex01": "node src/exercise-01.mjs",
+    "ex02": "node src/exercise-02.mjs",
+    "ex03": "node src/exercise-03.mjs",
+    "ex04": "node src/exercise-04.mjs",
+    "ex05": "node src/exercise-05.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Redis 渐进式学习教程",
+  "dependencies": {
+    "@langchain/core": "^1.1.48",
+    "@langchain/openai": "^1.4.7",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.11.0",
+    "langchain": "^1.4.2"
+  }
+}
