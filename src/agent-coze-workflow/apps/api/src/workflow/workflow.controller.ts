@@ -75,4 +75,15 @@ export class WorkflowController {
   ) {
     return this.workflowService.testRun(body);
   }
+
+  /**
+   * 运行完整 LangGraph Agent 流程
+   *
+   * 节点链：plan → sketch → generate → validate → (条件) repair
+   * 返回完整 state 便于前端日志展示
+   */
+  @Post("run")
+  run(@Body() body: UserRequirement) {
+    return this.workflowService.run(body);
+  }
 }

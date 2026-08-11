@@ -25,16 +25,16 @@ import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { WorkflowModule } from "./workflow/workflow.module";
+import { AgentsModule } from "./agents/agents.module";
 
 // TODO: 后续导入子模块
-// import { AgentsModule } from "./agents/agents.module";
 // import { McpModule } from "./mcp/mcp.module";
 
 @Module({
   imports: [
     WorkflowModule,
+    AgentsModule,
     // TODO: 注册子模块
-    // AgentsModule,
     // McpModule,
   ],
   controllers: [AppController],

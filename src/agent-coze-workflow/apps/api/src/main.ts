@@ -22,6 +22,13 @@
  * 扫描装饰器元数据 → 解析依赖关系 → 实例化 Provider 单例
  */
 import "reflect-metadata";
+import * as dotenv from "dotenv";
+import * as path from "path";
+
+// 从 dist/main.js 出发定位到项目根 .env
+// dev 模式编译产物在 apps/api/dist/，__dirname 是 apps/api/dist，../../../.env 正好到项目根
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 
@@ -31,6 +38,7 @@ async function bootstrap() {
 
   const port = process.env.API_PORT ?? 3000;
   await app.listen(port);
+  console.log(`[API] 加载 .env:`, !!process.env.DEEPSEEK_API_KEY);
   console.log(`[API] NestJS 服务已启动: http://localhost:${port}`);
   console.log(`[API] 健康检查: http://localhost:${port}/health`);
 }

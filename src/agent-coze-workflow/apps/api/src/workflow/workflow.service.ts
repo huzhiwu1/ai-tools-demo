@@ -6,7 +6,7 @@
  * - 供 WorkflowController 调用
  * - 后续接 Agent 模块时替换为真实逻辑
  */
-import { Injectable } from "@nestjs/common";
+import { Injectable, Inject } from "@nestjs/common";
 import { createApiResponse, generateId } from "@coze-workflow/shared";
 import type {
   WorkflowPlan,
@@ -22,16 +22,41 @@ import {
   createLLMNode,
   createEndNode,
 } from "@coze-workflow/workflow-schema";
+import { WorkflowPlanner } from "../agents/workflow-planner";
+import type { WorkflowAgentStateType } from "../agents/graph";
+
+/** LangGraph 编译后的图类型（StateGraph 编译产物） */
+interface CompiledGraph {
+  invoke(state: Partial<WorkflowAgentStateType>): Promise<WorkflowAgentStateType>;
+}
 
 @Injectable()
 export class WorkflowService {
+  constructor(
+    private readonly planner: WorkflowPlanner,
+    @Inject("WORKFLOW_GRAPH") private readonly graph: CompiledGraph,
+  ) {}
   /**
    * 规划工作流
    *
    * 输入：用户自然语言需求描述
    * 输出：WorkflowPlan（规划步骤、节点类型、预估复杂度）
+   *
+   * 降级策略：LLM 调用失败时返回 mock 计划，接口不挂、前端不白屏
    */
-  plan(requirement: { description: string; constraints?: string[] }): unknown {
+  async plan(requirement: {
+    description: string;
+    constraints?: string[];
+  }): Promise<unknown> {
+    try {
+      const plan = await this.planner.plan(requirement);
+      return createApiResponse(plan);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[WorkflowPlanner] LLM 规划失败，降级 mock:", msg);
+    }
+
+    // 降级分支：返回 mock 计划
     const plan: WorkflowPlan = {
       name: "示例工作流",
       description: requirement.description,
@@ -72,7 +97,10 @@ export class WorkflowService {
    * 2. 便于做结构校验
    * 3. 便于 LLM 先规划，再落到 Coze JSON
    */
-  sketch(requirement: { description: string; constraints?: string[] }): unknown {
+  sketch(requirement: {
+    description: string;
+    constraints?: string[];
+  }): unknown {
     const sketch: WorkflowSketch = {
       name: "需求草图",
       description: requirement.description,
@@ -237,5 +265,52 @@ export class WorkflowService {
     };
 
     return createApiResponse(result);
+  }
+
+  /**
+   * 运行完整 LangGraph Agent 流程
+   *
+   * 节点链：plan → sketch → generate → validate → (条件) repair → validate
+   *
+   * 返回完整的 state（含 plan/sketch/workflow/validation/errors/repairCount），
+   * 便于前端展示每个阶段的中间产物和日志。
+   */
+  async run(requirement: {
+    description: string;
+    constraints?: string[];
+  }): Promise<unknown> {
+    const startTime = Date.now();
+
+    const initialState: Partial<WorkflowAgentStateType> = {
+      requirement: {
+        description: requirement.description,
+        constraints: requirement.constraints,
+      },
+      plan: null,
+      sketch: null,
+      workflow: null,
+      validation: null,
+      errors: [],
+      repairCount: 0,
+    };
+
+    try {
+      const finalState = await this.graph.invoke(initialState);
+      const durationMs = Date.now() - startTime;
+      return createApiResponse({
+        ...finalState,
+        durationMs,
+        startedAt: new Date(startTime).toISOString(),
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[WorkflowGraph] 执行异常:", msg);
+      return createApiResponse({
+        ...initialState,
+        errors: [`图执行异常: ${msg}`],
+        durationMs: Date.now() - startTime,
+        startedAt: new Date(startTime).toISOString(),
+      });
+    }
   }
 }

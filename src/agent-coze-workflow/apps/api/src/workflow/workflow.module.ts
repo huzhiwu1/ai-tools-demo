@@ -9,10 +9,12 @@
 import { Module } from "@nestjs/common";
 import { WorkflowController } from "./workflow.controller";
 import { WorkflowService } from "./workflow.service";
+import { AgentsModule } from "../agents/agents.module";
 
 @Module({
   imports: [
-    // TODO: 后续导入 AgentsModule、McpModule
+    AgentsModule,
+    // TODO: 后续导入 McpModule
   ],
   controllers: [WorkflowController],
   providers: [WorkflowService],
