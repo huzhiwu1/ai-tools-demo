@@ -21,6 +21,7 @@ import {
   workflowApi,
   type CozeWorkflow,
   type WorkflowRunResult,
+  type CozeSaveResult,
 } from "./api/workflow.js";
 
 type LogEntry = { time: string; level: string; msg: string };
@@ -32,6 +33,8 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedResult, setSavedResult] = useState<CozeSaveResult | null>(null);
+  const [saving, setSaving] = useState(false);
 
   /** 追加一条日志 */
   function addLog(msg: string, level: string = "info") {
@@ -49,6 +52,7 @@ export default function App() {
     setSketch(null);
     setWorkflow(null);
     setValidation(null);
+    setSavedResult(null);
     setLogs([]);
 
     try {
@@ -117,6 +121,29 @@ export default function App() {
     }
   }
 
+  /** 保存工作流到 Coze 平台 */
+  async function handleSaveToCoze() {
+    if (!workflow || saving) return;
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      const res = await workflowApi.create(workflow);
+      setSavedResult(res);
+      addLog(
+        `已保存到 Coze: workflow_id=${res.workflowId}`,
+        "success",
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      addLog(`保存失败: ${msg}`, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="app">
       <Header />
@@ -134,6 +161,37 @@ export default function App() {
         </section>
         <aside className="panel panel-right">
           <JsonPreview workflow={workflow} validation={validation} />
+
+          {/* 保存到 Coze 按钮：仅在校验通过且工作流存在时显示 */}
+          {workflow && validation?.valid && (
+            <div className="save-section">
+              {savedResult ? (
+                <div className="save-result">
+                  <p className="hint-text">
+                    已保存：workflow_id = {savedResult.workflowId}
+                  </p>
+                  <a
+                    href={`https://coze.dev1.dachensky.com/work_flow?workflow_id=${savedResult.workflowId}&space_id=7560621359533916160`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="save-link"
+                  >
+                    在平台查看
+                  </a>
+                </div>
+              ) : (
+                <button
+                  className="btn btn-primary"
+                  disabled={saving}
+                  onClick={handleSaveToCoze}
+                  style={{ width: "100%" }}
+                >
+                  {saving ? "保存中..." : "保存到 Coze"}
+                </button>
+              )}
+            </div>
+          )}
+
           <RunLogPanel logs={logs} />
         </aside>
       </main>

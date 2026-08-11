@@ -47,6 +47,17 @@ export interface WorkflowRunResult {
 }
 
 // ============================================
+// /workflow/create 返回类型
+// ============================================
+
+export interface CozeSaveResult {
+  workflowId: string;
+  status: string;
+  saved: boolean;
+  createdAt: string;
+}
+
+// ============================================
 // 内部工具
 // ============================================
 
@@ -96,4 +107,8 @@ export const workflowApi = {
   /** 运行完整 LangGraph Agent 流程（plan → sketch → generate → validate → repair） */
   run: (description: string) =>
     post<WorkflowRunResult>("/workflow/run", { description }),
+
+  /** 保存工作流到 Coze 平台 */
+  create: (workflow: CozeWorkflow) =>
+    post<CozeSaveResult>("/workflow/create", workflow),
 };

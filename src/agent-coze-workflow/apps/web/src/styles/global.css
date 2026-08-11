@@ -481,3 +481,28 @@ body {
 .log-repair .log-msg {
   color: var(--color-warning);
 }
+
+/* Save to Coze section */
+.save-section {
+  margin-top: 8px;
+}
+
+.save-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-success);
+  border-radius: var(--panel-radius);
+}
+
+.save-link {
+  font-size: 13px;
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.save-link:hover {
+  text-decoration: underline;
+}
