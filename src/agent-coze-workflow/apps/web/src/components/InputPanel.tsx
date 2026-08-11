@@ -56,7 +56,9 @@ export function InputPanel({ onGenerate, loading }: Props) {
       >
         {loading ? "生成中..." : "生成工作流"}
       </button>
-      <p className="hint-text">当前为 mock 链路：需求 → 规划 → 草图 → JSON → 校验</p>
+      <p className="hint-text">
+        当前为 mock 链路：需求 → 规划 → 草图 → JSON → 校验
+      </p>
     </div>
   );
 }

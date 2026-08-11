@@ -7,7 +7,11 @@
  * - 三栏布局，通过 props 向子组件传递数据
  */
 import { useState } from "react";
-import type { WorkflowPlan, WorkflowSketch, ValidationResult } from "@coze-workflow/shared";
+import type {
+  WorkflowPlan,
+  WorkflowSketch,
+  ValidationResult,
+} from "@coze-workflow/shared";
 import { Header } from "./components/Header.js";
 import { InputPanel } from "./components/InputPanel.js";
 import { WorkflowCanvas } from "./components/WorkflowCanvas.js";
@@ -44,7 +48,9 @@ export default function App() {
     setLogs([]);
 
     try {
-      addLog(`收到需求: "${description.slice(0, 50)}${description.length > 50 ? "..." : ""}"`);
+      addLog(
+        `收到需求: "${description.slice(0, 50)}${description.length > 50 ? "..." : ""}"`,
+      );
 
       // Step 1: plan
       addLog("Plan: 正在分析需求...");
@@ -73,7 +79,7 @@ export default function App() {
         v.valid
           ? "Validate: 校验通过"
           : `Validate: 校验失败，${v.errors.length} 个错误`,
-        v.valid ? "success" : "error"
+        v.valid ? "success" : "error",
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -90,7 +96,11 @@ export default function App() {
       <main className="main-layout">
         <aside className="panel panel-left">
           <InputPanel onGenerate={handleGenerate} loading={loading} />
-          {error && <p className="hint-text" style={{ color: "var(--color-accent)" }}>{error}</p>}
+          {error && (
+            <p className="hint-text" style={{ color: "var(--color-accent)" }}>
+              {error}
+            </p>
+          )}
         </aside>
         <section className="panel panel-center">
           <WorkflowCanvas sketch={sketch} />

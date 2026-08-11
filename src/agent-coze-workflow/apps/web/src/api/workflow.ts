@@ -7,7 +7,12 @@
 // - 不使用 axios / react-query 等第三方库，保持依赖最小化
 // - CozeWorkflow 类型在此定义（web 无法直接 import CommonJS 的 workflow-schema 包）
 
-import type { ApiResponse, WorkflowPlan, WorkflowSketch, ValidationResult } from "@coze-workflow/shared";
+import type {
+  ApiResponse,
+  WorkflowPlan,
+  WorkflowSketch,
+  ValidationResult,
+} from "@coze-workflow/shared";
 
 // ============================================
 // 最小 CozeWorkflow 类型（与后端 generate 返回结构一致）
