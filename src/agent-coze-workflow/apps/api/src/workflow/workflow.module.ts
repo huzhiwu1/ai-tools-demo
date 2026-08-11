@@ -2,28 +2,19 @@
  * WorkflowModule —— 工作流业务模块
  *
  * 职责：
- * - 注册工作流相关的 Controller 和 Service
- * - 作为工作流 CRUD 操作的入口
- * - 调用 AgentsModule 的 Agent 类完成编排
- *
- * TODO: 后续完善
- * - 实现 WorkflowController（POST /generate、GET /status 等）
- * - 实现 WorkflowService（编排 Agent 调用流程）
- * - 集成 AgentsModule、McpModule
+ * - 注册 WorkflowController 和 WorkflowService
+ * - 提供工作流 CRUD 操作的 REST API
+ * - 后续集成 AgentsModule 和 McpModule
  */
 import { Module } from "@nestjs/common";
+import { WorkflowController } from "./workflow.controller";
+import { WorkflowService } from "./workflow.service";
 
 @Module({
   imports: [
-    // TODO: 导入依赖模块
-    // AgentsModule,
-    // McpModule,
+    // TODO: 后续导入 AgentsModule、McpModule
   ],
-  controllers: [
-    // TODO: 注册 WorkflowController
-  ],
-  providers: [
-    // TODO: 注册 WorkflowService
-  ],
+  controllers: [WorkflowController],
+  providers: [WorkflowService],
 })
 export class WorkflowModule {}

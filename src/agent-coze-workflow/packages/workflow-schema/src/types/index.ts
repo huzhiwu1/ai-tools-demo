@@ -13,7 +13,7 @@ import { NODE_TYPES } from "@coze-workflow/shared";
  * 设计说明：
  * - 这个结构对应 Coze 平台的工作流 JSON 导出格式
  * - 后续生成 Coze 工作流节点 JSON 时，以此为输出目标
- * - 与 WorkflowDraft（LLM 规划阶段产出）不同，这是最终可执行的结构
+ * - 与 WorkflowSketch（LLM 规划阶段产出）不同，这是最终可执行的结构
  */
 export interface CozeWorkflow {
   /** 工作流基本信息 */
@@ -22,6 +22,11 @@ export interface CozeWorkflow {
   nodes: CozeNode[];
   /** 连线列表 */
   edges: CozeEdge[];
+  /** Coze 兼容元信息 */
+  _temp?: {
+    bounds?: { x: number; y: number; width: number; height: number };
+    externalData?: Record<string, unknown>;
+  };
 }
 
 /** 工作流元信息 */
@@ -40,11 +45,6 @@ export interface WorkflowMeta {
 
 /**
  * 基础节点 —— 所有 Coze 节点的通用字段
- *
- * 关键细节：
- * - id 在工作流内唯一，用于 edges 引用
- * - type 决定了该节点的具体配置结构
- * - position 仅用于前端画布展示，不影响执行逻辑
  */
 export interface CozeNodeBase {
   /** 节点唯一 ID */
@@ -57,6 +57,11 @@ export interface CozeNodeBase {
   desc?: string;
   /** 画布位置（前端展示用） */
   position?: { x: number; y: number };
+  /** Coze 兼容元信息 */
+  _temp?: {
+    bounds?: { x: number; y: number; width: number; height: number };
+    externalData?: Record<string, unknown>;
+  };
 }
 
 /** 开始节点 */
@@ -128,6 +133,19 @@ export interface HttpNode extends CozeNodeBase {
   inputMapping?: Record<string, string>;
 }
 
+/** 数据库查询节点 */
+export interface DatabaseQueryNode extends CozeNodeBase {
+  type: "database_query";
+  /** SQL 查询语句 */
+  query: string;
+  /** 数据库连接标识 */
+  connection: string;
+  /** 查询参数 */
+  params?: Array<string | number>;
+  /** 输入变量映射 */
+  inputMapping?: Record<string, string>;
+}
+
 /** 结束节点 */
 export interface EndNode extends CozeNodeBase {
   type: "end";
@@ -146,6 +164,7 @@ export type CozeNode =
   | CodeNode
   | ConditionNode
   | HttpNode
+  | DatabaseQueryNode
   | EndNode;
 
 /** 工作流连线 */

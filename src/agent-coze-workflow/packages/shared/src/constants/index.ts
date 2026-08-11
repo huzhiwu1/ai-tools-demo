@@ -13,8 +13,15 @@ export const NODE_TYPES = [
   "code",
   "condition",
   "http",
+  "database_query",
   "end",
 ] as const;
 
 /** API 路由前缀 */
 export const API_PREFIX = "/api/v1";
+
+/** 本地开发 API 地址 */
+export const DEFAULT_API_BASE_URL = "http://localhost:3000";
+
+/** 默认工作流版本 */
+export const DEFAULT_WORKFLOW_VERSION = "1.0.0";
