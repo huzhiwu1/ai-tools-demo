@@ -34,98 +34,119 @@
 
 ---
 
-## 2. 已确认的 Coze 接口
+## 2. 已确认的 Coze 接口（2026-08-12 实测，私有部署 coze.dev1.dachensky.com）
 
-从控制台网络请求中已经确认以下接口可用：
+> **认证**：只认 cookie `session_key`（PAT 调 /api 接口会报 `missing session_key in cookie`）；cookie 为短期凭证，需定期更新。
+>
+> **完整保存链路（关键！）**：`create → edit_lock(acquire) → canvas → save（循环）→ test_run`。没有 edit_lock 直接 save 会报 `777777759 当前工作流已经不是最新副本`。
+
+### 2.0 编辑锁（首次保存必需，用户发现）
+
+`POST /api/workflow_api/edit_lock`
+
+```json
+{ "workflow_id": "7672840315094433792", "space_id": "7560621359533916160", "action": "acquire" }
+```
+
+返回：`{ "config_ttl": 900, "remaining_ttl": 900 }`（编辑锁 15 分钟）
+
+- 作用：建立可编辑会话，让后续 save 接受（绕过“不是最新副本”）
+- 锁内可多次保存；TTL 过期后需重新 acquire
 
 ### 2.1 创建工作流
 
 `POST /api/workflow_api/create`
 
-请求参数示例：
-
 ```json
 {
-  "name": "test_auto_workflow",
-  "desc": "测试",
-  "icon_uri": "default_icon/default_workflow_icon.png",
+  "name": "auto_flow",
+  "desc": "全自动闭环",
+  "icon_uri": "",
   "space_id": "7560621359533916160",
-  "flow_mode": 0
+  "flow_mode": 2
 }
 ```
 
-返回结构：
+要点：`space_id` 必须为**字符串**；`flow_mode` 必须为**数字 2**（WorkflowMode）；`icon_uri` 必填（可空串）。
+
+返回：`data.workflow_id`（name 为空是正常的，内容靠 save 提交）
+
+### 2.2 读取画布（每次保存前必调）
+
+`POST /api/workflow_api/canvas`
 
 ```json
-{
-  "data": {
-    "workflow_id": "7672788276343734272",
-    "name": "",
-    "url": "",
-    "status": 0,
-    "type": 0,
-    "node_list": null
-  },
-  "code": 0,
-  "msg": "",
-  "BaseResp": null
-}
+{ "workflow_id": "7672840315094433792", "space_id": "7560621359533916160" }
 ```
 
-### 2.2 保存工作流
+返回：`workflow.schema_json`（平台节点格式字符串）+ `vcs_data.submit_commit_id` / `draft_commit_id`
+
+**核心机制**：每次 save 成功都会推进 commit，所以**每次 save 前必须重新 canvas 拿最新 submit_commit_id**，否则报 777777759。
+
+### 2.3 保存工作流
 
 `POST /api/workflow_api/save`
 
-请求参数包含：
-
-- `workflow_id`
-- `schema`（字符串形式的 JSON）
-- `space_id`
-- `submit_commit_id`
-- `ignore_status_transfer`
-
-返回结构：
-
 ```json
 {
-  "data": {
-    "name": "",
-    "url": "",
-    "status": 0,
-    "workflow_status": 0,
-    "remaining_ttl": 900
-  },
-  "code": 0,
-  "msg": "",
-  "BaseResp": null
+  "workflow_id": "7672840315094433792",
+  "schema": "{...平台节点格式 JSON 字符串...}",
+  "space_id": "7560621359533916160",
+  "submit_commit_id": "7672840315136376832",
+  "ignore_status_transfer": true
 }
 ```
 
-### 2.3 试运行工作流
+返回 `code: 0` 即成功（`data.remaining_ttl` 为锁剩余时间）。
+
+### 2.4 试运行工作流
 
 `POST /api/workflow_api/test_run`
 
-请求参数包含：
+```json
+{ "workflow_id": "7672840315094433792", "input": { "input": "hello" }, "space_id": "7560621359533916160" }
+```
 
-- `workflow_id`
-- `input`
-- `space_id`
-- `commit_id`
+返回 `data.execute_id`（`commit_id` 不是必填）。若返回业务错误（如 `database info is required` / `BlockID is empty`），说明工作流节点配置不完整，而非接口问题。
 
-返回结构：
+### 2.5 其他已实测接口
+
+| 接口 | 用途 | 关键参数 |
+|---|---|---|
+| `update_meta` | 改名称/描述（不碰 schema） | `{workflow_id, space_id, name, desc, icon_uri}`；name 只允许字母数字下划线且字母开头 |
+| `workflow_list` | 工作流列表 | `{space_id, page, size}` |
+| `workflow_detail` | 工作流详情 | `{workflow_ids: []}` |
+| `node_template_list` | 节点模板 | `{need_types: []}` |
+| `workflow_references` | 引用信息 | `{workflow_id, space_id}` |
+
+### 2.6 平台节点 Schema 格式（与项目 workflow-schema 包格式不同！）
+
+平台内部格式（我们生成器要输出的目标格式）：
 
 ```json
 {
-  "data": {
-    "workflow_id": "7672783518455300096",
-    "execute_id": "7672785536574029824",
-    "session_id": ""
-  },
-  "code": 0,
-  "msg": "",
-  "BaseResp": null
+  "nodes": [
+    {
+      "id": "100001",
+      "type": "1",
+      "meta": { "position": { "x": 0, "y": 0 } },
+      "data": {
+        "nodeMeta": { "title": "开始", "icon": "...", "description": "...", "mainColor": "...", "subTitle": "" },
+        "outputs": [{ "type": "string", "name": "input", "required": false }],
+        "trigger_parameters": []
+      }
+    }
+  ],
+  "edges": [{ "sourceNodeID": "100001", "targetNodeID": "900001" }],
+  "versions": { "loop": "v2" }
 }
 ```
+
+- 节点 `id` / `type` 都是**字符串数字**：1=start、2=end、43=查询数据、1300=企业定制“生成人工任务”
+- 数据流靠 `data.inputs` 里的引用：`{ "type": "ref", "content": { "source": "block-output", "blockID": "100001", "name": "input" } }`（blockID 指向上游节点；edges 只是展示）
+- 节点 ID 惯例：start=100001、end=900001
+- `_temp.bounds` 是画布布局，丢了会导致粘贴不连线（你踩过的坑）
+- 参考样本：`docs/coze-platform/coze-clipboard-node-sample.json`
 
 ---
 
