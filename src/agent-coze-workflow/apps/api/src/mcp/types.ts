@@ -2,59 +2,132 @@
  * MCP 层 - Coze 平台调用类型定义
  *
  * 设计思想：
- * - MCP（Model Context Protocol）用于 AI Agent 与外部平台通信
- * - 这里定义 Coze 平台的 API 调用接口类型
- * - 后续通过 MCP client 调用 Coze 内部 API
+ * - 所有接口按实测契约定义，不猜测参数
+ * - 基础 URL：{baseUrl}/api/workflow_api/*
+ * - 认证方式：Cookie session_key（PAT 不被接受）
  */
 
-/** Coze 工作流创建请求 */
-export interface CozeCreateWorkflowRequest {
-  /** 工作空间 ID */
-  workspaceId: string;
-  /** 工作流名称 */
-  name: string;
-  /** 工作流描述 */
-  description: string;
-  /** 工作流 JSON 内容 */
-  workflowJson: string;
-}
+// ============================================
+// CozeClient 构造配置
+// ============================================
 
-/** Coze 工作流创建响应 */
-export interface CozeCreateWorkflowResponse {
-  /** 是否成功 */
-  success: boolean;
-  /** 工作流 ID */
-  workflowId?: string;
-  /** 错误信息 */
-  error?: string;
-}
-
-/** Coze 工作流试运行请求 */
-export interface CozeRunWorkflowRequest {
-  /** 工作流 ID */
-  workflowId: string;
-  /** 输入参数 */
-  inputs: Record<string, unknown>;
-}
-
-/** Coze 工作流试运行响应 */
-export interface CozeRunWorkflowResponse {
-  /** 是否成功 */
-  success: boolean;
-  /** 执行结果 */
-  result?: Record<string, unknown>;
-  /** 执行日志 */
-  logs?: string[];
-  /** 错误信息 */
-  error?: string;
-}
-
-/** MCP Client 配置 */
-export interface McpClientConfig {
-  /** Coze API 地址 */
+export interface CozeClientConfig {
+  /** Coze 平台基础 URL（如 https://coze.dev1.dachensky.com） */
   baseUrl: string;
-  /** API Key */
-  apiKey: string;
-  /** 请求超时（毫秒） */
-  timeout: number;
+  /** 会话 Cookie session_key 值 */
+  sessionKey: string;
+  /** 工作空间 ID */
+  spaceId: string;
+}
+
+// ============================================
+// 通用 API 响应
+// ============================================
+
+/** Coze 平台通用响应包装 */
+export interface CozeApiResponse<T = unknown> {
+  code: number;
+  msg: string;
+  data: T;
+}
+
+// ============================================
+// create — 创建工作流
+// ============================================
+
+export interface CreateWorkflowRequest {
+  name: string;
+  desc: string;
+  icon_uri: string;
+  space_id: string;
+  flow_mode: number;
+}
+
+export interface CreateWorkflowData {
+  workflow_id: string;
+}
+
+// ============================================
+// edit_lock — 编辑锁
+// ============================================
+
+export interface EditLockRequest {
+  workflow_id: string;
+  space_id: string;
+  action: "acquire";
+}
+
+export interface EditLockData {
+  config_ttl: number;
+  remaining_ttl: number;
+}
+
+// ============================================
+// canvas — 获取工作流 schema
+// ============================================
+
+export interface CanvasRequest {
+  workflow_id: string;
+  space_id: string;
+}
+
+export interface CanvasData {
+  workflow: {
+    schema_json: string;
+  };
+  vcs_data: {
+    submit_commit_id: string;
+  };
+}
+
+// ============================================
+// save — 保存工作流
+// ============================================
+
+export interface SaveWorkflowRequest {
+  workflow_id: string;
+  schema: string;
+  space_id: string;
+  submit_commit_id: string;
+  ignore_status_transfer: boolean;
+}
+
+// ============================================
+// test_run — 试运行
+// ============================================
+
+export interface TestRunRequest {
+  workflow_id: string;
+  input: Record<string, unknown>;
+  space_id: string;
+}
+
+export interface TestRunData {
+  execute_id: string;
+}
+
+// ============================================
+// update_meta — 更新元信息
+// ============================================
+
+export interface UpdateMetaRequest {
+  workflow_id: string;
+  space_id: string;
+  name: string;
+  desc: string;
+  icon_uri: string;
+}
+
+// ============================================
+// workflow_list — 工作流列表
+// ============================================
+
+export interface ListWorkflowsRequest {
+  space_id: string;
+  page: number;
+  size: number;
+}
+
+export interface ListWorkflowsData {
+  workflow_list: unknown[];
 }

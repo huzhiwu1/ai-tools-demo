@@ -24,6 +24,8 @@ import {
 } from "@coze-workflow/workflow-schema";
 import { WorkflowPlanner } from "../agents/workflow-planner";
 import type { WorkflowAgentStateType } from "../agents/graph";
+import { CozeClient } from "../mcp/cozeClient";
+import { convertToPlatformSchema } from "../mcp/schema-converter";
 
 /** LangGraph 编译后的图类型（StateGraph 编译产物） */
 interface CompiledGraph {
@@ -37,6 +39,7 @@ export class WorkflowService {
   constructor(
     private readonly planner: WorkflowPlanner,
     @Inject("WORKFLOW_GRAPH") private readonly graph: CompiledGraph,
+    private readonly cozeClient: CozeClient,
   ) {}
   /**
    * 规划工作流
@@ -204,8 +207,30 @@ export class WorkflowService {
 
   /**
    * 创建工作流（提交到 Coze 平台）
+   *
+   * 流程：cozeClient.createWorkflow → convertToPlatformSchema → saveWorkflow。
+   * 降级策略：CozeClient 调用失败时 console.warn + 返回 mock 结果，接口不挂。
    */
-  create(schema: CozeWorkflow): unknown {
+  async create(schema: CozeWorkflow): Promise<unknown> {
+    try {
+      const workflowId = await this.cozeClient.createWorkflow(
+        schema.meta.name,
+        schema.meta.description,
+      );
+      const platformSchema = convertToPlatformSchema(schema);
+      await this.cozeClient.saveWorkflow(workflowId, platformSchema);
+      return createApiResponse({
+        workflowId,
+        status: "created",
+        saved: true,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[WorkflowService] CozeClient 创建失败，降级 mock:", msg);
+    }
+
+    // 降级分支：返回 mock 结果
     return createApiResponse({
       workflowId: `wf_${generateId()}`,
       status: "created",
@@ -217,10 +242,29 @@ export class WorkflowService {
 
   /**
    * 保存工作流
+   *
+   * 流程：convertToPlatformSchema → cozeClient.saveWorkflow。
+   * 降级策略：CozeClient 调用失败时 console.warn + 返回 mock 结果。
    */
-  save(schema: CozeWorkflow, workflowId?: string): unknown {
+  async save(schema: CozeWorkflow, workflowId?: string): Promise<unknown> {
+    const id = workflowId ?? `wf_${generateId()}`;
+    try {
+      const platformSchema = convertToPlatformSchema(schema);
+      await this.cozeClient.saveWorkflow(id, platformSchema);
+      return createApiResponse({
+        workflowId: id,
+        version: "1.0.1",
+        saved: true,
+        savedAt: new Date().toISOString(),
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[WorkflowService] CozeClient 保存失败，降级 mock:", msg);
+    }
+
+    // 降级分支：返回 mock 结果
     return createApiResponse({
-      workflowId: workflowId ?? `wf_${generateId()}`,
+      workflowId: id,
       version: "1.0.1",
       message: "[Mock] 工作流已保存（实际需接入 Coze API）",
       savedAt: new Date().toISOString(),
@@ -230,11 +274,33 @@ export class WorkflowService {
 
   /**
    * 测试运行工作流
+   *
+   * 降级策略：CozeClient 调用失败时 console.warn + 返回 mock 结果。
    */
-  testRun(params: {
+  async testRun(params: {
     workflowId: string;
     inputData: Record<string, unknown>;
-  }): unknown {
+  }): Promise<unknown> {
+    try {
+      const executeId = await this.cozeClient.testRun(
+        params.workflowId,
+        params.inputData,
+      );
+      const result: WorkflowRunResult = {
+        runId: executeId,
+        workflowId: params.workflowId,
+        status: "running",
+        nodeOutputs: {},
+        totalDurationMs: 0,
+        timestamp: new Date().toISOString(),
+      };
+      return createApiResponse(result);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[WorkflowService] CozeClient 试运行失败，降级 mock:", msg);
+    }
+
+    // 降级分支：返回 mock 结果
     const result: WorkflowRunResult = {
       runId: `run_${generateId()}`,
       workflowId: params.workflowId,

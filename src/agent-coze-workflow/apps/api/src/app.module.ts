@@ -26,17 +26,10 @@ import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { WorkflowModule } from "./workflow/workflow.module";
 import { AgentsModule } from "./agents/agents.module";
-
-// TODO: 后续导入子模块
-// import { McpModule } from "./mcp/mcp.module";
+import { McpModule } from "./mcp/mcp.module";
 
 @Module({
-  imports: [
-    WorkflowModule,
-    AgentsModule,
-    // TODO: 注册子模块
-    // McpModule,
-  ],
+  imports: [WorkflowModule, AgentsModule, McpModule],
   controllers: [AppController],
   providers: [AppService],
 })
