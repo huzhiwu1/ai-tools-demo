@@ -1,0 +1,389 @@
+{
+    "type": "coze-workflow-clipboard-data",
+    "source": {
+        "workflowId": "7672734401762951168",
+        "flowMode": 0,
+        "spaceId": "7560621359533916160",
+        "isDouyin": false,
+        "host": "coze.dev1.dachensky.com"
+    },
+    "json": {
+        "nodes": [
+            {
+                "id": "175765",
+                "type": "1300",
+                "meta": {
+                    "position": {
+                        "x": 640,
+                        "y": 0
+                    }
+                },
+                "data": {
+                    "inputs": {
+                        "basicInfo": {
+                            "taskName": {
+                                "type": "literal",
+                                "content": "IM转人工",
+                                "rawMeta": {
+                                    "type": 1
+                                }
+                            },
+                            "taskScenario": "IM_TRANSFER",
+                            "executionRole": "AI_OPERATION",
+                            "serviceStage": "RECEPTION",
+                            "serviceMode": "ONE_TO_ONE",
+                            "priority": "MEDIUM"
+                        },
+                        "executionAction": {
+                            "triggerChannels": [
+                                "AI_CALL",
+                                "SMS",
+                                "WEWORK_MASS",
+                                "LIVE_PRIVATE_MSG"
+                            ],
+                            "message": "测试"
+                        },
+                        "taskEndSettings": {
+                            "reminderTime": {
+                                "type": "literal",
+                                "content": "15"
+                            },
+                            "reminderTimeUnit": "MINUTE",
+                            "timeoutTime": {
+                                "type": "literal",
+                                "content": "4"
+                            },
+                            "timeoutTimeUnit": "HOUR",
+                            "taskEndTimeType": "RELATIVE",
+                            "relativeEndValue": {
+                                "type": "literal",
+                                "content": "7"
+                            },
+                            "relativeEndUnit": "DAY",
+                            "absoluteDate": {
+                                "type": "literal",
+                                "content": ""
+                            },
+                            "absoluteTime": {
+                                "type": "literal",
+                                "content": "23:59"
+                            }
+                        },
+                        "destroySetting": {
+                            "events": [
+                                "ADD_FRIEND",
+                                "JOIN_GROUP",
+                                "ATTEND_COURSE",
+                                "COMPLETE_COURSE"
+                            ],
+                            "scope": "CURRENT_STUDENT"
+                        },
+                        "inputParameters": [
+                            {
+                                "name": "user_ids",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "user_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "camp_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "camp_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "sys_user_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "sys_user_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "category_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "category_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "camp_period_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "period_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "topic_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "topic_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "chat_group_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "chat_group_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "wework_user_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "wework_user_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "live_room_id",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "live_room_id"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                "name": "task_no",
+                                "input": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "ref",
+                                        "content": {
+                                            "source": "block-output",
+                                            "blockID": "100001",
+                                            "name": "task_no"
+                                        },
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                }
+                            }
+                        ],
+                        "aiTask": {
+                            "basic": {
+                                "taskName": {
+                                    "type": "string",
+                                    "value": {
+                                        "type": "literal",
+                                        "content": "IM转人工",
+                                        "rawMeta": {
+                                            "type": 1
+                                        }
+                                    }
+                                },
+                                "taskScene": "IM_TRANSFER",
+                                "operatorRole": "AI_OPERATION",
+                                "serviceStage": "RECEPTION",
+                                "serviceMode": "ONE_TO_ONE",
+                                "priority": "MEDIUM"
+                            },
+                            "action": {
+                                "channels": [
+                                    "AI_CALL",
+                                    "SMS",
+                                    "WEWORK_MASS",
+                                    "LIVE_PRIVATE_MSG"
+                                ],
+                                "message": "测试"
+                            },
+                            "endSetting": {
+                                "reminder": {
+                                    "value": {
+                                        "type": "string",
+                                        "value": {
+                                            "type": "literal",
+                                            "content": "15"
+                                        }
+                                    },
+                                    "unit": "MINUTE"
+                                },
+                                "timeout": {
+                                    "value": {
+                                        "type": "string",
+                                        "value": {
+                                            "type": "literal",
+                                            "content": "4"
+                                        }
+                                    },
+                                    "unit": "HOUR"
+                                },
+                                "endTime": {
+                                    "mode": "RELATIVE",
+                                    "relativeTime": {
+                                        "value": {
+                                            "type": "string",
+                                            "value": {
+                                                "type": "literal",
+                                                "content": "7"
+                                            }
+                                        },
+                                        "unit": "DAY"
+                                    }
+                                }
+                            },
+                            "destroySetting": {
+                                "events": [
+                                    "ADD_FRIEND",
+                                    "JOIN_GROUP",
+                                    "ATTEND_COURSE",
+                                    "COMPLETE_COURSE"
+                                ],
+                                "scope": "CURRENT_STUDENT"
+                            },
+                            "externalPayload": {}
+                        },
+                        "settingOnError": {
+                            "processType": 1,
+                            "timeoutMs": 600000,
+                            "singleTimeoutMs": 120000,
+                            "retryTimes": 0
+                        }
+                    },
+                    "outputs": [
+                        {
+                            "type": "string",
+                            "name": "task_id"
+                        },
+                        {
+                            "type": "string",
+                            "name": "status"
+                        },
+                        {
+                            "type": "string",
+                            "name": "assignee"
+                        },
+                        {
+                            "type": "string",
+                            "name": "triggered_at"
+                        }
+                    ],
+                    "settingOnError": {
+                        "processType": 1,
+                        "timeoutMs": 600000,
+                        "singleTimeoutMs": 120000,
+                        "retryTimes": 0
+                    },
+                    "nodeMeta": {
+                        "title": "生成人工任务",
+                        "icon": "https://media.qianliaowang.com/xqd/tools/activity/image/2026071411/27RWBLPA-BU8H-L43H-1784020608801-G5UGMKM3PVJI.png",
+                        "description": "将工作流中的请求派发为人工处理任务，并下发到指定通道。",
+                        "mainColor": "#A855F7",
+                        "subTitle": "生成人工任务"
+                    }
+                },
+                "_temp": {
+                    "bounds": {
+                        "x": 460,
+                        "y": 0,
+                        "width": 360,
+                        "height": 113.4
+                    },
+                    "externalData": {
+                        "icon": "https://media.qianliaowang.com/xqd/tools/activity/image/2026071411/27RWBLPA-BU8H-L43H-1784020608801-G5UGMKM3PVJI.png",
+                        "description": "将工作流中的请求派发为人工处理任务，并下发到指定通道。",
+                        "title": "生成人工任务",
+                        "mainColor": "#A855F7"
+                    }
+                }
+            }
+        ],
+        "edges": []
+    },
+    "bounds": {
+        "x": 460,
+        "y": 0,
+        "width": 360,
+        "height": 113.4
+    }
+}
