@@ -17,7 +17,11 @@ import { InputPanel } from "./components/InputPanel.js";
 import { WorkflowCanvas } from "./components/WorkflowCanvas.js";
 import { JsonPreview } from "./components/JsonPreview.js";
 import { RunLogPanel } from "./components/RunLogPanel.js";
-import { workflowApi, type CozeWorkflow } from "./api/workflow.js";
+import {
+  workflowApi,
+  type CozeWorkflow,
+  type WorkflowRunResult,
+} from "./api/workflow.js";
 
 type LogEntry = { time: string; level: string; msg: string };
 
@@ -52,35 +56,58 @@ export default function App() {
         `收到需求: "${description.slice(0, 50)}${description.length > 50 ? "..." : ""}"`,
       );
 
-      // Step 1: plan
-      addLog("Plan: 正在分析需求...");
-      const plan: WorkflowPlan = await workflowApi.plan(description);
-      addLog(`Plan: 规划完成，共 ${plan.steps.length} 个步骤`);
+      // 单次调用 /workflow/run，后端 LangGraph 走完整链
+      const state: WorkflowRunResult = await workflowApi.run(description);
 
-      // Step 2: sketch
-      addLog("Sketch: 正在生成草图...");
-      const sketchData = await workflowApi.sketch(description);
-      setSketch(sketchData);
-      addLog(`Sketch: 草图完成，共 ${sketchData.nodes.length} 个节点`);
+      // 按顺序推日志，每个节点有产物就展示
+      if (state.plan) {
+        addLog(
+          `Plan: 规划完成，共 ${state.plan.steps.length} 个步骤（${state.plan.estimatedComplexity}）`,
+        );
+      }
 
-      // Step 3: generate
-      addLog("Generate: 正在生成 Coze JSON...");
-      const wf = await workflowApi.generate(plan);
-      setWorkflow(wf);
-      const nodeCount = Array.isArray(wf.nodes) ? wf.nodes.length : "?";
-      const edgeCount = Array.isArray(wf.edges) ? wf.edges.length : "?";
-      addLog(`Generate: 生成完成，共 ${nodeCount} 个节点、${edgeCount} 条连线`);
+      if (state.sketch) {
+        setSketch(state.sketch);
+        addLog(`Sketch: 草图完成，共 ${state.sketch.nodes.length} 个节点`);
+      }
 
-      // Step 4: validate
-      addLog("Validate: 正在校验...");
-      const v = await workflowApi.validate(wf);
-      setValidation(v);
-      addLog(
-        v.valid
-          ? "Validate: 校验通过"
-          : `Validate: 校验失败，${v.errors.length} 个错误`,
-        v.valid ? "success" : "error",
-      );
+      if (state.workflow) {
+        setWorkflow(state.workflow);
+        const nodeCount = Array.isArray(state.workflow.nodes)
+          ? state.workflow.nodes.length
+          : "?";
+        const edgeCount = Array.isArray(state.workflow.edges)
+          ? state.workflow.edges.length
+          : "?";
+        addLog(
+          `Generate: 生成完成，共 ${nodeCount} 个节点、${edgeCount} 条连线`,
+        );
+      }
+
+      if (state.validation) {
+        setValidation(state.validation);
+        addLog(
+          state.validation.valid
+            ? "Validate: 校验通过"
+            : `Validate: 校验失败，${state.validation.errors.length} 个错误`,
+          state.validation.valid ? "success" : "error",
+        );
+      }
+
+      // 修复日志（repair 级别）
+      if (state.repairCount > 0) {
+        addLog(`Repair: 自动修复了 ${state.repairCount} 次`, "repair");
+      }
+
+      // graph 内部产生的错误
+      if (state.errors && state.errors.length > 0) {
+        for (const err of state.errors) {
+          addLog(err, "error");
+        }
+      }
+
+      // 完成
+      addLog(`完成: 总耗时 ${state.durationMs}ms`, "success");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);

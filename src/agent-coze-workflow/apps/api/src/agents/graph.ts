@@ -16,7 +16,11 @@
  * - 节点函数内 try/catch 不抛异常，错误写入 state.errors 保证图不中断
  */
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
-import type { WorkflowPlan, WorkflowSketch, ValidationResult } from "@coze-workflow/shared";
+import type {
+  WorkflowPlan,
+  WorkflowSketch,
+  ValidationResult,
+} from "@coze-workflow/shared";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
 import { validateWorkflow } from "@coze-workflow/workflow-schema";
 import type { WorkflowPlanner } from "./workflow-planner";
@@ -78,7 +82,7 @@ export function createWorkflowGraph(
       if (!state.plan) {
         return { errors: ["sketch_node: plan 为空，跳过"] };
       }
-      const { sketch } = generator.generate(state.plan);
+      const sketch = generator.generateSketch(state.plan);
       return { sketch };
     } catch (e) {
       return {
@@ -93,7 +97,7 @@ export function createWorkflowGraph(
       if (!state.plan) {
         return { errors: ["generate_node: plan 为空，跳过"] };
       }
-      const { workflow } = generator.generate(state.plan);
+      const workflow = generator.generateWorkflow(state.plan);
       return { workflow };
     } catch (e) {
       return {
@@ -107,7 +111,11 @@ export function createWorkflowGraph(
     try {
       if (!state.workflow) {
         return {
-          validation: { valid: false, errors: [{ code: "NO_WORKFLOW", message: "工作流为空" }], warnings: [] },
+          validation: {
+            valid: false,
+            errors: [{ code: "NO_WORKFLOW", message: "工作流为空" }],
+            warnings: [],
+          },
           errors: ["validate_node: workflow 为空"],
         };
       }
@@ -115,7 +123,11 @@ export function createWorkflowGraph(
       return { validation };
     } catch (e) {
       return {
-        validation: { valid: false, errors: [{ code: "VALIDATE_ERROR", message: (e as Error).message }], warnings: [] },
+        validation: {
+          valid: false,
+          errors: [{ code: "VALIDATE_ERROR", message: (e as Error).message }],
+          warnings: [],
+        },
         errors: [`validate_node 异常: ${(e as Error).message}`],
       };
     }

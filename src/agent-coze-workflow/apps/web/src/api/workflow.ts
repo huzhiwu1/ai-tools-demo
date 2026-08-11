@@ -31,6 +31,22 @@ export interface CozeWorkflow {
 }
 
 // ============================================
+// /workflow/run 返回类型（对齐后端 LangGraph state）
+// ============================================
+
+export interface WorkflowRunResult {
+  requirement: { description: string; constraints?: string[] };
+  plan: WorkflowPlan | null;
+  sketch: WorkflowSketch | null;
+  workflow: CozeWorkflow | null;
+  validation: ValidationResult | null;
+  errors: string[];
+  repairCount: number;
+  durationMs: number;
+  startedAt: string;
+}
+
+// ============================================
 // 内部工具
 // ============================================
 
@@ -76,4 +92,8 @@ export const workflowApi = {
   /** 校验工作流 */
   validate: (workflow: CozeWorkflow) =>
     post<ValidationResult>("/workflow/validate", workflow),
+
+  /** 运行完整 LangGraph Agent 流程（plan → sketch → generate → validate → repair） */
+  run: (description: string) =>
+    post<WorkflowRunResult>("/workflow/run", { description }),
 };

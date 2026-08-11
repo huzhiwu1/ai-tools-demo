@@ -16,11 +16,12 @@
  */
 import { generateId } from "@coze-workflow/shared";
 import type { ValidationResult } from "@coze-workflow/shared";
-import type { CozeWorkflow, CozeNode, CozeEdge } from "@coze-workflow/workflow-schema";
-import {
-  createStartNode,
-  createEndNode,
+import type {
+  CozeWorkflow,
+  CozeNode,
+  CozeEdge,
 } from "@coze-workflow/workflow-schema";
+import { createStartNode, createEndNode } from "@coze-workflow/workflow-schema";
 import { REPAIR_PROMPT } from "../prompts/repair-prompt";
 import type { DeepSeekClient } from "../llm/deepseek.client";
 import { z } from "zod";
@@ -44,10 +45,12 @@ export class WorkflowRepairer {
    */
   async repair(
     workflow: CozeWorkflow,
-    validation: ValidationResult
+    validation: ValidationResult,
   ): Promise<CozeWorkflow> {
     // 深拷贝，避免副作用
-    let fixed: CozeWorkflow = JSON.parse(JSON.stringify(workflow)) as CozeWorkflow;
+    let fixed: CozeWorkflow = JSON.parse(
+      JSON.stringify(workflow),
+    ) as CozeWorkflow;
 
     // 第一步：规则驱动修复（确定性）
     fixed = this.applyRuleFixes(fixed, validation);
@@ -55,25 +58,35 @@ export class WorkflowRepairer {
     // 第二步：如果仍有复杂错误，调 LLM 兜底
     const remainingErrors = validation.errors.filter(
       (e) =>
-        !["NO_NODES", "NO_EDGES", "MISSING_START", "MISSING_END", "DUPLICATE_NODE_ID"].includes(
-          e.code
-        )
+        ![
+          "NO_NODES",
+          "NO_EDGES",
+          "MISSING_START",
+          "MISSING_END",
+          "DUPLICATE_NODE_ID",
+        ].includes(e.code),
     );
 
     if (remainingErrors.length > 0) {
       try {
         const userPrompt = JSON.stringify({
           workflow: fixed,
-          errors: remainingErrors.map((e) => ({ code: e.code, message: e.message })),
+          errors: remainingErrors.map((e) => ({
+            code: e.code,
+            message: e.message,
+          })),
         });
         const result = await this.client.chatStructured(
           RepairOutputSchema,
           REPAIR_PROMPT,
-          userPrompt
+          userPrompt,
         );
         console.log("[WorkflowRepairer] LLM 修复完成:", result.summary);
       } catch (e) {
-        console.warn("[WorkflowRepairer] LLM 修复失败，仅应用规则修复:", (e as Error).message);
+        console.warn(
+          "[WorkflowRepairer] LLM 修复失败，仅应用规则修复:",
+          (e as Error).message,
+        );
       }
     }
 
@@ -85,7 +98,7 @@ export class WorkflowRepairer {
    */
   private applyRuleFixes(
     workflow: CozeWorkflow,
-    validation: ValidationResult
+    validation: ValidationResult,
   ): CozeWorkflow {
     const errorCodes = new Set(validation.errors.map((e) => e.code));
 
@@ -112,10 +125,13 @@ export class WorkflowRepairer {
     }
 
     // 移除引用不存在节点的死边
-    if (errorCodes.has("MISSING_SOURCE_NODE") || errorCodes.has("MISSING_TARGET_NODE")) {
+    if (
+      errorCodes.has("MISSING_SOURCE_NODE") ||
+      errorCodes.has("MISSING_TARGET_NODE")
+    ) {
       const nodeIds = new Set(workflow.nodes.map((n) => n.id));
       workflow.edges = workflow.edges.filter(
-        (e) => nodeIds.has(e.sourceNodeId) && nodeIds.has(e.targetNodeId)
+        (e) => nodeIds.has(e.sourceNodeId) && nodeIds.has(e.targetNodeId),
       );
     }
 

@@ -8,10 +8,7 @@
  */
 import { Controller, Post, Body } from "@nestjs/common";
 import { WorkflowService } from "./workflow.service";
-import type {
-  WorkflowPlan,
-  UserRequirement,
-} from "@coze-workflow/shared";
+import type { WorkflowPlan, UserRequirement } from "@coze-workflow/shared";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
 
 @Controller("workflow")
@@ -71,7 +68,7 @@ export class WorkflowController {
    */
   @Post("test-run")
   testRun(
-    @Body() body: { workflowId: string; inputData: Record<string, unknown> }
+    @Body() body: { workflowId: string; inputData: Record<string, unknown> },
   ) {
     return this.workflowService.testRun(body);
   }

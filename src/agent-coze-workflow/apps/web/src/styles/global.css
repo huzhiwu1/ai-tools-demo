@@ -476,3 +476,8 @@ body {
 .log-success .log-msg {
   color: var(--color-success);
 }
+
+/* Log repair */
+.log-repair .log-msg {
+  color: var(--color-warning);
+}

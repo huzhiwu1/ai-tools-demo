@@ -35,7 +35,25 @@ import {
 
 export class WorkflowGenerator {
   /**
-   * 从 WorkflowPlan 生成草图 + Coze 工作流
+   * 只生成 WorkflowSketch（轻量中间产物）
+   *
+   * 供 graph.ts 的 sketch_node 单独调用，避免重复计算
+   */
+  generateSketch(plan: WorkflowPlan): WorkflowSketch {
+    return this.buildSketch(plan);
+  }
+
+  /**
+   * 只生成 CozeWorkflow（完整最终 JSON）
+   *
+   * 供 graph.ts 的 generate_node 单独调用，避免重复计算
+   */
+  generateWorkflow(plan: WorkflowPlan): CozeWorkflow {
+    return this.buildWorkflow(plan);
+  }
+
+  /**
+   * 从 WorkflowPlan 生成草图 + Coze 工作流（组合调用）
    *
    * @param plan - 规划结果
    * @returns sketch（中间产物）和 workflow（最终 JSON）
@@ -44,13 +62,10 @@ export class WorkflowGenerator {
     sketch: WorkflowSketch;
     workflow: CozeWorkflow;
   } {
-    // 1. 生成草图（轻量：只含 id/type/label/purpose，便于前端预览）
-    const sketch = this.buildSketch(plan);
-
-    // 2. 生成 Coze 工作流（完整：含所有节点字段 + 连线）
-    const workflow = this.buildWorkflow(plan);
-
-    return { sketch, workflow };
+    return {
+      sketch: this.generateSketch(plan),
+      workflow: this.generateWorkflow(plan),
+    };
   }
 
   /**

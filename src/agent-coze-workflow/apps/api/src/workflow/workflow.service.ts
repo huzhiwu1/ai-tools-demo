@@ -27,7 +27,9 @@ import type { WorkflowAgentStateType } from "../agents/graph";
 
 /** LangGraph 编译后的图类型（StateGraph 编译产物） */
 interface CompiledGraph {
-  invoke(state: Partial<WorkflowAgentStateType>): Promise<WorkflowAgentStateType>;
+  invoke(
+    state: Partial<WorkflowAgentStateType>,
+  ): Promise<WorkflowAgentStateType>;
 }
 
 @Injectable()
