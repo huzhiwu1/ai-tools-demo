@@ -1,0 +1,23 @@
+{
+    "name": "agent-coze-workflow",
+    "private": true,
+    "description": "Coze 工作流自动生成 Agent - 基于 LangChain + LangGraph 的 AI Agent 项目",
+    "packageManager": "pnpm@10.15.1",
+    "scripts": {
+        "dev": "turbo run dev",
+        "dev:api": "pnpm --filter @coze-workflow/api dev",
+        "dev:web": "pnpm --filter @coze-workflow/web dev",
+        "build": "turbo run build",
+        "lint": "turbo run lint",
+        "typecheck": "turbo run typecheck",
+        "test": "turbo run test",
+        "clean": "pnpm -r exec rm -rf dist node_modules .turbo"
+    },
+    "devDependencies": {
+        "turbo": "^2.5.0"
+    },
+    "engines": {
+        "node": ">=18.0.0",
+        "pnpm": ">=8.0.0"
+    }
+}
