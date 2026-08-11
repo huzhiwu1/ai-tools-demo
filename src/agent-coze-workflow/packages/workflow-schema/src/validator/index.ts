@@ -18,8 +18,6 @@ import type {
 
 /**
  * 校验工作流 JSON 字符串是否可解析
- *
- * 适用场景：接收到前端提交的 JSON 字符串后，先校验格式再解析
  */
 export function validateWorkflowJson(jsonString: string): ValidationResult {
   const errors: ValidationError[] = [];
@@ -36,19 +34,16 @@ export function validateWorkflowJson(jsonString: string): ValidationResult {
     }
 
     // 校验 _temp 字段存在（Coze 工作流导出格式约定）
-    if (!parsed._temp) {
+    if (!(parsed as Record<string, unknown>)._temp) {
       warnings.push({
         code: "MISSING_TEMP",
-        message: "工作流 JSON 缺少 _temp 字段（Coze 平台约定）",
+        message: '工作流 JSON 缺少 _temp 字段（Coze 平台约定）',
       });
     }
 
     // JSON 可解析，继续深入校验结构
     const structResult = validateWorkflow(parsed as CozeWorkflow);
-    return {
-      ...structResult,
-      warnings: [...warnings, ...structResult.warnings],
-    };
+    return { ...structResult, warnings: [...warnings, ...structResult.warnings] };
   } catch (e) {
     errors.push({
       code: "PARSE_ERROR",
@@ -120,6 +115,14 @@ export function validateWorkflow(workflow: CozeWorkflow): ValidationResult {
     } else {
       nodeIds.add(node.id);
     }
+
+    if (!((node as unknown as Record<string, unknown>)._temp)) {
+      warnings.push({
+        code: "MISSING_TEMP",
+        message: `节点 "${node.title}" 缺少 _temp 字段（Coze 平台导出格式约定）`,
+        nodeId: node.id,
+      });
+    }
   }
 
   // ---------- edges 引用的节点存在 ----------
@@ -143,19 +146,15 @@ export function validateWorkflow(workflow: CozeWorkflow): ValidationResult {
     }
   }
 
-  // ---------- 代码节点 sourcePortID 校验 ----------
+  // ---------- 代码节点 sourcePort 校验 ----------
 
   const codeNodes = nodes.filter(
-    (n): n is CozeNode & { type: "code" } => n.type === "code",
+    (n): n is CozeNode & { type: "code" } => n.type === "code"
   );
   for (const codeNode of codeNodes) {
-    // 代码节点不应该有 sourcePortID（它只有一个输出口）
     const outgoingEdges = edges.filter((e) => e.sourceNodeId === codeNode.id);
     for (const edge of outgoingEdges) {
       if (edge.sourcePort) {
-        // 条件节点的 sourcePort 是合法的，但代码节点不应该有
-        // 这里的逻辑是：如果边有 sourcePort，需要确保源节点支持多端口
-        // 目前只有 condition 节点支持多端口
         warnings.push({
           code: "CODE_NODE_SOURCE_PORT",
           message: `代码节点 "${codeNode.title}" 的边 "${edge.id}" 包含了 sourcePort，代码节点不支持多端口输出`,
@@ -163,15 +162,6 @@ export function validateWorkflow(workflow: CozeWorkflow): ValidationResult {
         });
       }
     }
-  }
-
-  // ---------- _temp 字段存在（Coze 平台导出约定）----------
-
-  if (!(workflow as unknown as Record<string, unknown>)._temp) {
-    warnings.push({
-      code: "MISSING_TEMP",
-      message: "工作流对象缺少 _temp 字段（Coze 平台导出格式约定）",
-    });
   }
 
   return {

@@ -8,7 +8,6 @@
 import { generateId } from "@coze-workflow/shared";
 import type {
   CozeWorkflow,
-  CozeNode,
   CozeEdge,
   StartNode,
   EndNode,
@@ -24,9 +23,7 @@ import type {
 // ============================================
 
 /** 创建开始节点 */
-export function createStartNode(
-  inputs?: StartNode["inputVariables"],
-): StartNode {
+export function createStartNode(inputs?: StartNode["inputVariables"]): StartNode {
   return {
     id: generateId(),
     type: "start",
@@ -35,6 +32,10 @@ export function createStartNode(
     inputVariables: inputs ?? [
       { name: "user_input", type: "string", required: true },
     ],
+    _temp: {
+      bounds: { x: 80, y: 80, width: 160, height: 80 },
+      externalData: {},
+    },
   };
 }
 
@@ -46,6 +47,10 @@ export function createEndNode(outputs?: EndNode["outputVariables"]): EndNode {
     title: "结束",
     desc: "返回最终结果",
     outputVariables: outputs ?? [],
+    _temp: {
+      bounds: { x: 80, y: 260, width: 160, height: 80 },
+      externalData: {},
+    },
   };
 }
 
@@ -53,7 +58,7 @@ export function createEndNode(outputs?: EndNode["outputVariables"]): EndNode {
 export function createLLMNode(
   overrides: Partial<
     Pick<LLMNode, "title" | "desc" | "userPrompt" | "systemPrompt" | "config">
-  > = {},
+  > = {}
 ): LLMNode {
   return {
     id: generateId(),
@@ -68,14 +73,17 @@ export function createLLMNode(
     },
     userPrompt: overrides.userPrompt ?? "{{input}}",
     systemPrompt: overrides.systemPrompt,
+    inputMapping: {},
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
   };
 }
 
 /** 创建代码节点 */
 export function createCodeNode(
-  overrides: Partial<
-    Pick<CodeNode, "title" | "desc" | "code" | "language">
-  > = {},
+  overrides: Partial<Pick<CodeNode, "title" | "desc" | "code" | "language">> = {}
 ): CodeNode {
   return {
     id: generateId(),
@@ -85,6 +93,10 @@ export function createCodeNode(
     code: overrides.code ?? "// TODO: 填充代码逻辑",
     language: overrides.language ?? "javascript",
     inputMapping: {},
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
   };
 }
 
@@ -92,7 +104,7 @@ export function createCodeNode(
 export function createConditionNode(
   overrides: Partial<
     Pick<ConditionNode, "title" | "desc" | "branches" | "defaultBranch">
-  > = {},
+  > = {}
 ): ConditionNode {
   return {
     id: generateId(),
@@ -104,6 +116,10 @@ export function createConditionNode(
       { expression: "条件 B", targetNodeId: "TODO" },
     ],
     defaultBranch: overrides.defaultBranch,
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
   };
 }
 
@@ -111,7 +127,7 @@ export function createConditionNode(
 export function createHttpNode(
   overrides: Partial<
     Pick<HttpNode, "title" | "desc" | "method" | "url" | "headers" | "body">
-  > = {},
+  > = {}
 ): HttpNode {
   return {
     id: generateId(),
@@ -123,6 +139,10 @@ export function createHttpNode(
     headers: overrides.headers,
     body: overrides.body,
     inputMapping: {},
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
   };
 }
 
@@ -133,7 +153,7 @@ export function createDatabaseQueryNode(
       DatabaseQueryNode,
       "title" | "desc" | "query" | "connection" | "params"
     >
-  > = {},
+  > = {}
 ): DatabaseQueryNode {
   return {
     id: generateId(),
@@ -144,6 +164,10 @@ export function createDatabaseQueryNode(
     connection: overrides.connection ?? "default",
     params: overrides.params ?? [],
     inputMapping: {},
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
   };
 }
 
@@ -183,6 +207,10 @@ export function createSimpleQATemplate(name: string): CozeWorkflow {
     meta: { name, description: "简单问答工作流模板", version: "1.0.0" },
     nodes: [startNode, llmNode, endNode],
     edges,
+    _temp: {
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+      externalData: {},
+    },
   };
 }
 
@@ -233,6 +261,10 @@ export function createBranchTemplate(name: string): CozeWorkflow {
     meta: { name, description: "条件分支工作流模板", version: "1.0.0" },
     nodes: [startNode, conditionNode, llmNode, codeNode, endNode],
     edges,
+    _temp: {
+      bounds: { x: 0, y: 0, width: 1000, height: 800 },
+      externalData: {},
+    },
   };
 }
 

@@ -5,29 +5,31 @@
  * - 封装工作流相关的 mock 业务逻辑
  * - 供 WorkflowController 调用
  * - 后续接 Agent 模块时替换为真实逻辑
- *
- * TODO: 后续接入 AgentsModule、McpModule 实现真实 Agent 编排
  */
 import { Injectable } from "@nestjs/common";
 import { createApiResponse, generateId } from "@coze-workflow/shared";
 import type {
   WorkflowPlan,
-  WorkflowSchema,
   ValidationResult,
   WorkflowRunResult,
+  WorkflowSketch,
 } from "@coze-workflow/shared";
+import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
+import {
+  validateWorkflow,
+  validateWorkflowJson,
+  createStartNode,
+  createLLMNode,
+  createEndNode,
+} from "@coze-workflow/workflow-schema";
 
 @Injectable()
 export class WorkflowService {
   /**
    * 规划工作流
    *
-   * POST /workflow/plan
-   *
    * 输入：用户自然语言需求描述
    * 输出：WorkflowPlan（规划步骤、节点类型、预估复杂度）
-   *
-   * TODO: 后续接入 WorkflowPlanner Agent 实现真实规划
    */
   plan(requirement: { description: string; constraints?: string[] }): unknown {
     const plan: WorkflowPlan = {
@@ -61,61 +63,83 @@ export class WorkflowService {
   }
 
   /**
-   * 生成工作流
+   * 生成工作流草图
    *
-   * POST /workflow/generate
+   * 输出：WorkflowSketch（节点草图 + 连线）
+   *
+   * 这里先保留一层草图，是因为：
+   * 1. 便于人类审查
+   * 2. 便于做结构校验
+   * 3. 便于 LLM 先规划，再落到 Coze JSON
+   */
+  sketch(requirement: { description: string; constraints?: string[] }): unknown {
+    const sketch: WorkflowSketch = {
+      name: "需求草图",
+      description: requirement.description,
+      nodes: [
+        {
+          id: "start",
+          type: "start",
+          label: "开始",
+          purpose: "接收用户输入",
+        },
+        {
+          id: "llm_1",
+          type: "llm",
+          label: "LLM 处理",
+          purpose: "分析用户需求并生成响应",
+        },
+        {
+          id: "end",
+          type: "end",
+          label: "结束",
+          purpose: "返回最终结果",
+        },
+      ],
+      edges: [
+        { from: "start", to: "llm_1" },
+        { from: "llm_1", to: "end" },
+      ],
+      notes: ["先草图，再转为 Coze JSON"],
+    };
+
+    return createApiResponse(sketch);
+  }
+
+  /**
+   * 生成工作流
    *
    * 输入：WorkflowPlan 规划结果
    * 输出：WorkflowSchema（完整节点 + 连线）
-   *
-   * TODO: 后续接入 WorkflowGenerator Agent 实现真实生成
    */
   generate(plan: WorkflowPlan): unknown {
-    const schema: WorkflowSchema = {
+    // 先生成节点，拿到真实 ID，再连线
+    // （不能先写死 TODO 再连，边必须引用真实存在的节点）
+    const start = createStartNode();
+    const llm = createLLMNode({
+      title: "LLM 处理",
+      systemPrompt: "你是一个有用的助手",
+      userPrompt: "{{user_input}}",
+    });
+    const end = createEndNode([
+      { name: "result", type: "string", value: `${llm.id}.output` },
+    ]);
+
+    const schema: CozeWorkflow = {
       meta: {
         name: plan.name,
         description: plan.description,
         version: "1.0.0",
       },
-      nodes: [
-        {
-          id: generateId(),
-          type: "start",
-          label: "开始",
-          description: "接收用户输入",
-          config: {
-            inputVariables: [
-              { name: "user_input", type: "string", required: true },
-            ],
-          },
-        },
-        {
-          id: generateId(),
-          type: "llm",
-          label: "LLM 处理",
-          description: "调用大模型处理用户输入",
-          config: {
-            model: "gpt-4o",
-            temperature: 0.7,
-            maxTokens: 2048,
-            systemPrompt: "你是一个有用的助手",
-            userPrompt: "{{user_input}}",
-          },
-        },
-        {
-          id: generateId(),
-          type: "end",
-          label: "结束",
-          description: "返回最终结果",
-          config: {
-            outputVariables: [{ name: "result", type: "string", value: "" }],
-          },
-        },
-      ],
+      nodes: [start, llm, end],
       edges: [
-        { id: generateId(), sourceNodeId: "TODO", targetNodeId: "TODO" },
-        { id: generateId(), sourceNodeId: "TODO", targetNodeId: "TODO" },
+        { id: generateId(), sourceNodeId: start.id, targetNodeId: llm.id },
+        { id: generateId(), sourceNodeId: llm.id, targetNodeId: end.id },
       ],
+      _temp: {
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        externalData: {},
+      },
     };
 
     return createApiResponse(schema);
@@ -123,24 +147,26 @@ export class WorkflowService {
 
   /**
    * 校验工作流
-   *
-   * POST /workflow/validate
-   *
-   * 输入：工作流 JSON 字符串或对象
-   * 输出：ValidationResult（valid + errors + warnings）
-   *
-   * TODO: 后续接入 validator 包的真实校验逻辑
    */
   validate(workflow: unknown): unknown {
+    // 字符串入参：用 validateWorkflowJson，解析失败也会返回结构化错误，不会抛 500
+    if (typeof workflow === "string") {
+      return createApiResponse(validateWorkflowJson(workflow));
+    }
+
+    if (workflow && typeof workflow === "object" && "nodes" in workflow) {
+      return createApiResponse(validateWorkflow(workflow as CozeWorkflow));
+    }
+
     const result: ValidationResult = {
-      valid: true,
-      errors: [],
-      warnings: [
+      valid: false,
+      errors: [
         {
-          code: "MOCK_VALIDATION",
-          message: "当前为 mock 校验，所有输入均返回通过",
+          code: "INVALID_INPUT",
+          message: "校验输入必须是工作流 JSON 字符串或包含 nodes 的对象",
         },
       ],
+      warnings: [],
     };
 
     return createApiResponse(result);
@@ -148,51 +174,32 @@ export class WorkflowService {
 
   /**
    * 创建工作流（提交到 Coze 平台）
-   *
-   * POST /workflow/create
-   *
-   * 输入：WorkflowSchema
-   * 输出：{ workflowId: string, status: string }
-   *
-   * TODO: 后续接入 CozeClient（McpModule）实现真实创建
    */
-  create(schema: WorkflowSchema): unknown {
+  create(schema: CozeWorkflow): unknown {
     return createApiResponse({
       workflowId: `wf_${generateId()}`,
       status: "created",
       message: "[Mock] 工作流已创建（实际需接入 Coze API）",
       createdAt: new Date().toISOString(),
+      schema,
     });
   }
 
   /**
    * 保存工作流
-   *
-   * POST /workflow/save
-   *
-   * 输入：WorkflowSchema + workflowId（可选，用于更新已有工作流）
-   * 输出：{ workflowId: string, version: string }
-   *
-   * TODO: 后续接入 CozeClient 实现真实保存
    */
-  save(schema: WorkflowSchema, workflowId?: string): unknown {
+  save(schema: CozeWorkflow, workflowId?: string): unknown {
     return createApiResponse({
       workflowId: workflowId ?? `wf_${generateId()}`,
       version: "1.0.1",
       message: "[Mock] 工作流已保存（实际需接入 Coze API）",
       savedAt: new Date().toISOString(),
+      schema,
     });
   }
 
   /**
    * 测试运行工作流
-   *
-   * POST /workflow/test-run
-   *
-   * 输入：{ workflowId: string, inputData: Record<string, unknown> }
-   * 输出：WorkflowRunResult
-   *
-   * TODO: 后续接入 CozeClient 实现真实测试运行
    */
   testRun(params: {
     workflowId: string;

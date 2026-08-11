@@ -49,30 +49,6 @@ export interface ApiResponse<T = unknown> {
   timestamp: string;
 }
 
-/** 创建统一 API 响应 */
-export function createApiResponse<T>(data: T): ApiResponse<T> {
-  return {
-    success: true,
-    data,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-/** 创建失败 API 响应 */
-export function createApiError(error: string): ApiResponse<never> {
-  return {
-    success: false,
-    error,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-/** 生成简单 ID */
-export function generateId(prefix = "id"): string {
-  const random = Math.random().toString(36).slice(2, 10);
-  return `${prefix}_${Date.now().toString(36)}_${random}`;
-}
-
 // ============================================
 // 工作流核心类型（前后端共用）
 // ============================================
