@@ -381,3 +381,98 @@ body {
   margin-top: 8px;
   font-style: italic;
 }
+
+/* Sketch list */
+.sketch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 320px;
+  padding: 12px;
+}
+
+.sketch-node {
+  display: flex;
+  align-items: stretch;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.sketch-node-type {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  min-width: 70px;
+}
+
+.sketch-node-info {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  gap: 4px;
+  flex: 1;
+}
+
+.sketch-node-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.sketch-node-purpose {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* Validation summary */
+.validation-summary {
+  margin-top: 8px;
+}
+
+.validation-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+
+.error-label {
+  color: var(--color-accent);
+}
+
+.warning-label {
+  color: var(--color-warning);
+}
+
+.validation-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.validation-item {
+  font-size: 11px;
+  padding: 3px 0;
+  font-family: "Fira Code", monospace;
+}
+
+.validation-error {
+  color: var(--color-accent);
+}
+
+.validation-warning {
+  color: var(--color-warning);
+}
+
+/* Log success */
+.log-success .log-msg {
+  color: var(--color-success);
+}

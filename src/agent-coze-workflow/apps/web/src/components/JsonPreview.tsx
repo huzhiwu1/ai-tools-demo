@@ -1,64 +1,66 @@
 /**
  * JsonPreview 组件 —— 右侧 JSON 输出预览
  *
- * 职责：展示生成的工作流 JSON 结构
- *
- * TODO: 后续接入真实生成数据，支持语法高亮
+ * 职责：展示生成的工作流 JSON 结构 + 校验结果
  */
 
-const MOCK_WORKFLOW_JSON = `{
-  "meta": {
-    "name": "示例工作流",
-    "description": "简单的 QA 问答工作流",
-    "version": "1.0.0"
-  },
-  "nodes": [
-    {
-      "id": "start",
-      "type": "start",
-      "title": "开始",
-      "desc": "接收用户输入",
-      "inputVariables": [
-        { "name": "user_input", "type": "string" }
-      ]
-    },
-    {
-      "id": "llm_1",
-      "type": "llm",
-      "title": "LLM 处理",
-      "desc": "调用大模型处理用户输入",
-      "config": {
-        "model": "gpt-4o",
-        "temperature": 0.7,
-        "maxTokens": 2048
-      },
-      "userPrompt": "{{user_input}}",
-      "systemPrompt": "你是一个有用的助手"
-    },
-    {
-      "id": "end",
-      "type": "end",
-      "title": "结束",
-      "desc": "返回结果",
-      "outputVariables": [
-        { "name": "result", "type": "string" }
-      ]
-    }
-  ],
-  "edges": [
-    { "id": "e_1", "sourceNodeId": "start", "targetNodeId": "llm_1" },
-    { "id": "e_2", "sourceNodeId": "llm_1", "targetNodeId": "end" }
-  ]
-}`;
+import type { ValidationResult } from "@coze-workflow/shared";
+import type { CozeWorkflow } from "../api/workflow.js";
 
-export function JsonPreview() {
+interface Props {
+  workflow: CozeWorkflow | null;
+  validation: ValidationResult | null;
+}
+
+export function JsonPreview({ workflow, validation }: Props) {
   return (
     <div className="json-preview">
       <h2 className="panel-title">JSON 输出</h2>
       <pre className="json-content">
-        <code>{MOCK_WORKFLOW_JSON}</code>
+        <code>
+          {workflow
+            ? JSON.stringify(workflow, null, 2)
+            : "// 点击「生成工作流」后此处展示 Coze 工作流 JSON"}
+        </code>
       </pre>
-      <p className="hint-text">TODO: 后续展示真实生成的工作流 JSON</p>
+
+      {validation && (
+        <div className="validation-summary">
+          <h3 className="panel-title" style={{ marginTop: 12 }}>
+            校验结果: {validation.valid ? "通过" : "失败"}
+          </h3>
+
+          {validation.errors.length > 0 && (
+            <div className="validation-errors">
+              <p className="validation-label error-label">
+                错误 ({validation.errors.length}):
+              </p>
+              <ul className="validation-list">
+                {validation.errors.map((e, i) => (
+                  <li key={i} className="validation-item validation-error">
+                    [{e.code}] {e.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {validation.warnings.length > 0 && (
+            <div className="validation-warnings">
+              <p className="validation-label warning-label">
+                警告 ({validation.warnings.length}):
+              </p>
+              <ul className="validation-list">
+                {validation.warnings.map((w, i) => (
+                  <li key={i} className="validation-item validation-warning">
+                    [{w.code}] {w.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,10 +1,9 @@
 /**
  * InputPanel 组件 —— 左侧输入面板
  *
- * 职责：接收用户自然语言需求输入，触发工作流生成
- *
- * TODO: 后续接入后端 API，提交需求并触发工作流生成
+ * 职责：接收用户自然语言需求输入，点击生成按钮触发工作流生成
  */
+
 import { useState } from "react";
 
 const EXAMPLE_REQUIREMENTS = [
@@ -13,7 +12,12 @@ const EXAMPLE_REQUIREMENTS = [
   "构建客服机器人：识别用户意图 → 转接对应部门 → LLM 生成回复 → 记录日志。",
 ];
 
-export function InputPanel() {
+interface Props {
+  onGenerate: (description: string) => void;
+  loading: boolean;
+}
+
+export function InputPanel({ onGenerate, loading }: Props) {
   const [requirement, setRequirement] = useState("");
 
   return (
@@ -26,6 +30,7 @@ export function InputPanel() {
         rows={8}
         value={requirement}
         onChange={(e) => setRequirement(e.target.value)}
+        disabled={loading}
       />
 
       <div className="example-section">
@@ -35,16 +40,23 @@ export function InputPanel() {
             key={i}
             className="btn-example"
             onClick={() => setRequirement(text)}
+            type="button"
+            disabled={loading}
           >
             示例 {i + 1}
           </button>
         ))}
       </div>
 
-      <button className="btn btn-primary" disabled>
-        生成工作流
+      <button
+        className="btn btn-primary"
+        type="button"
+        disabled={!requirement.trim() || loading}
+        onClick={() => onGenerate(requirement)}
+      >
+        {loading ? "生成中..." : "生成工作流"}
       </button>
-      <p className="hint-text">TODO: 后续接入 LLM 规划和工作流生成</p>
+      <p className="hint-text">当前为 mock 链路：需求 → 规划 → 草图 → JSON → 校验</p>
     </div>
   );
 }
