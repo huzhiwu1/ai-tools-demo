@@ -46,13 +46,30 @@ function nodeColor(type: CozeNode["type"]): string {
   const colors: Record<string, string> = {
     start: "#52c41a",
     end: "#ff4d4f",
-    llm: "#1677ff",
+    llm: "#5C62FF",
     code: "#722ed1",
     condition: "#fa8c16",
     http: "#13c2c2",
     database_query: "#eb2f96",
   };
-  return colors[type] ?? "#1677ff";
+  return colors[type] ?? "#5C62FF";
+}
+
+/**
+ * 构造平台字面量输入项（llmParam 等用）
+ *
+ * rawMeta.type：1=string 2=integer 3=boolean 4=float
+ */
+function literal(name: string, type: string, content: unknown) {
+  const rawType =
+    type === "boolean" ? 3 : type === "float" ? 4 : type === "integer" ? 2 : 1;
+  return {
+    name,
+    input: {
+      type,
+      value: { type: "literal", content, rawMeta: { type: rawType } },
+    },
+  };
 }
 
 // ============================================
@@ -133,6 +150,37 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
           },
         ],
       };
+    }
+    if (node.type === "llm") {
+      // 大模型节点（type 3）：llmParam 结构见 docs/coze-platform/coze-llm-node-sample.json
+      const llm = node as { userPrompt?: string; systemPrompt?: string; config?: { temperature?: number; maxTokens?: number } };
+      data.inputs = {
+        inputParameters: [],
+        llmParam: [
+          literal("modelType", "integer", "201"),
+          literal("modleName", "string", "Doubao-Seed-2.0-Lite"),
+          literal("generationDiversity", "string", "balance"),
+          literal("apiType", "integer", "1"),
+          literal("temperature", "float", String(llm.config?.temperature ?? 1)),
+          literal("maxTokens", "integer", String(llm.config?.maxTokens ?? 16384)),
+          literal("topP", "float", "0.95"),
+          literal("responseFormat", "integer", "2"),
+          literal("supportThinking", "boolean", true),
+          literal("enableThinking", "boolean", true),
+          literal("prompt", "string", llm.userPrompt ?? ""),
+          literal("enableChatHistory", "boolean", false),
+          literal("chatHistoryRound", "integer", "3"),
+          literal("systemPrompt", "string", llm.systemPrompt ?? ""),
+        ],
+        settingOnError: {
+          processType: 1,
+          timeoutMs: 600000,
+          singleTimeoutMs: 120000,
+          retryTimes: 0,
+        },
+      };
+      data.outputs = [{ type: "string", name: "output" }];
+      data.version = "3";
     }
 
     return {
