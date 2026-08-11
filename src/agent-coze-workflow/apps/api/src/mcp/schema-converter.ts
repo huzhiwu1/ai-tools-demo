@@ -28,17 +28,17 @@ import type { CozeWorkflow, CozeNode } from "@coze-workflow/workflow-schema";
  * - 其余类型待下一步实测（TODO），当前填占位值避免 save 报类型错误
  */
 function mapNodeType(type: CozeNode["type"]): string {
+  // 2026-08-12 实测（node_template_list）：3=大模型 5=代码 8=选择器 45=HTTP 43=查询数据
   const map: Record<string, string> = {
     start: "1",
     end: "2",
-    database_query: "43",
-    // TODO: 以下类型映射待实测确认
-    llm: "5", // 待确认：可能是模型节点相关值
-    code: "8", // 待确认：可能是代码节点相关值
-    condition: "10", // 待确认：可能是条件分支节点相关值
-    http: "12", // 待确认：可能是 HTTP 请求节点相关值
+    llm: "3", // 大模型（实测）
+    code: "5", // 代码（实测）
+    condition: "8", // 选择器（实测）
+    http: "45", // HTTP 请求（实测）
+    database_query: "43", // 查询数据（实测）
   };
-  return map[type] ?? "5"; // 未知类型降级为 llm
+  return map[type] ?? "3"; // 未知类型降级为 llm
 }
 
 /** 节点类型 → Coze 平台主题色 */
