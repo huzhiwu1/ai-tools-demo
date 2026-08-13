@@ -315,8 +315,8 @@ export const updateWorkflowTool = tool(
       "想要的修改（自然语言即可，如「把相似度阈值从 0.8 调到 0.6」），" +
       "工具会用 LLM 自动理解意图并结构化执行，支持修改 LLM 节点提示词、" +
       "代码节点逻辑（自动生成 Python 代码）、条件分支、阈值、数据常量。" +
-      "返回修改后的完整 workflow 和 changes 列表。修改后需调用 save_to_coze 重新保存。",
-    schema: z.object({
+      "返回修改后的完整 workflow 和 changes 列表。修改后需调用 save_to_coze 重新保存，" +
+      "**保存时必须带上本工具的 workflowId 参数**（在原工作流上更新，不要新建）。",    schema: z.object({
       workflow: z
         .record(z.string(), z.any())
         .describe(

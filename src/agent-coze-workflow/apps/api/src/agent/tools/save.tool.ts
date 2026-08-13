@@ -83,7 +83,7 @@ async function createWorkflowWithRetry(
 }
 
 export const saveToCozeTool = tool(
-  async ({ workflow }) => {
+  async ({ workflow, workflowId }) => {
     try {
       const cozeWorkflow = workflow as unknown as CozeWorkflow;
 
@@ -116,38 +116,53 @@ export const saveToCozeTool = tool(
         cozeWorkflow,
         modelTypeMap,
       );
-      // 创建时遇"名称已存在"自动加后缀重试（_2/_3/_4）
-      const { workflowId, usedName } = await createWorkflowWithRetry(
-        cozeWorkflow.meta.name,
-        cozeWorkflow.meta.description,
-      );
+
+      // 目标工作流：传了 workflowId → 更新已有工作流（修复迭代用，不新建）；
+      // 没传 → 首次创建（名称冲突自动加后缀重试 _2/_3/_4）
+      const isUpdate = typeof workflowId === "string" && workflowId.length > 0;
+      let platformWorkflowId: string;
+      let usedName: string;
+      if (isUpdate) {
+        platformWorkflowId = workflowId;
+        usedName = cozeWorkflow.meta.name;
+      } else {
+        const created = await createWorkflowWithRetry(
+          cozeWorkflow.meta.name,
+          cozeWorkflow.meta.description,
+        );
+        platformWorkflowId = created.workflowId;
+        usedName = created.usedName;
+      }
 
       // 3. 平台 validate_tree 校验（保存前提前暴露端口未连接等问题，避免"保存 → 平台报错 → 重试"往返）
       const validationErrors = await cozeClient.validateTree(
-        workflowId,
+        platformWorkflowId,
         schemaJson,
       );
       const errorMessages = validationErrors.flatMap((item) =>
         item.errors.map((e) => e.message),
       );
       if (errorMessages.length > 0) {
-        // 校验失败：删除空壳工作流，避免平台上残留垃圾
-        try {
-          await cozeClient.deleteWorkflow(workflowId);
-        } catch {
-          // 删除失败不影响主流程，继续返回错误信息
+        // 仅首次创建时删除空壳工作流；更新已有工作流时保留原工作流（修复迭代不删）
+        if (!isUpdate) {
+          try {
+            await cozeClient.deleteWorkflow(platformWorkflowId);
+          } catch {
+            // 删除失败不影响主流程，继续返回错误信息
+          }
         }
         return (
-          `保存失败: 平台 validate_tree 校验未通过，已删除空壳工作流。` +
-          `请修复节点连线后重新 save_to_coze:\n` +
+          `${isUpdate ? "更新" : "保存"}失败: 平台 validate_tree 校验未通过` +
+          (isUpdate ? "（原工作流已保留，修复后重新 save_to_coze 并带上原 workflowId）" : "，已删除空壳工作流") +
+          `。请修复节点连线后重新保存:\n` +
           errorMessages.map((m) => "- " + m).join("\n")
         );
       }
 
-      await cozeClient.saveWorkflow(workflowId, schemaJson);
-      resetIteration(workflowId);
+      await cozeClient.saveWorkflow(platformWorkflowId, schemaJson);
+      resetIteration(platformWorkflowId);
       return JSON.stringify(
-        { workflowId, saved: true, name: usedName },
+        { workflowId: platformWorkflowId, saved: true, name: usedName, updated: isUpdate },
         null,
         2,
       );
@@ -158,13 +173,21 @@ export const saveToCozeTool = tool(
   {
     name: "save_to_coze",
     description:
-      "将 generate_workflow 生成的工作流 JSON 部署到 Coze 平台。创建新的工作流并保存，" +
+      "将工作流 JSON 部署到 Coze 平台。**不传 workflowId 时创建新的工作流并保存**；" +
+      "**传 workflowId 时更新该已有工作流**（修复迭代场景：update_workflow 修改后重新保存，" +
+      "必须把原 workflowId 传入，避免每次修复都新建工作流）。" +
       "返回平台分配的 workflowId。",
     schema: z.object({
       workflow: z
         .record(z.string(), z.any())
         .describe(
           "generate_workflow 返回的工作流 JSON 中的 workflow 字段（含 meta、nodes、edges）",
+        ),
+      workflowId: z
+        .string()
+        .optional()
+        .describe(
+          "已有工作流的 workflowId（可选）。修复迭代时传入，更新该工作流而非新建；首次创建时不要传",
         ),
     }),
   },
