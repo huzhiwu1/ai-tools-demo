@@ -18,18 +18,18 @@
 
 ---
 
-## 二、修复
+## 二、修复（两个参数一起改）
 
 ### 文件：apps/api/src/coze/coze.client.ts
 
-`createWorkflow()` 中 `flow_mode: 2` 改为 `flow_mode: 0`：
+`createWorkflow()` 中两处修正（对照用户手工创建成功的 curl 实测确认）：
 
 ```ts
 async createWorkflow(name: string, desc: string): Promise<string> {
   const res = await this.request<CreateWorkflowData>("create", {
     name,
     desc,
-    icon_uri: "",
+    icon_uri: "default_icon/default_workflow_icon.png", // 必须传默认工作流图标，空字符串会导致创建的资源不完整、无法打开
     space_id: this.spaceId,
     flow_mode: 0,  // 0=工作流（样本实测）；2=智能体（会导致打开报"无法查看智能体"）
   });
@@ -37,10 +37,17 @@ async createWorkflow(name: string, desc: string): Promise<string> {
 }
 ```
 
+**两个参数都要改（缺一不可）：**
+
+| 参数 | 当前值（错误） | 正确值 | 后果 |
+|---|---|---|---|
+| `icon_uri` | `""`（空） | `"default_icon/default_workflow_icon.png"` | 空图标导致资源不完整、workflow_detail 报 Go panic（ParseInt 空字符串）、无法打开 |
+| `flow_mode` | `2` | `0` | flow_mode=2 创建的是智能体，打开报"无法查看智能体" |
+
 ### 连带检查（顺手确认，不用改除非发现错误）
 
-- `apps/api/src/coze/types.ts` 的 `CreateWorkflowRequest.flow_mode` 注释补充："0=工作流，2=智能体（勿用）"
-- 若平台其他接口（如 update_meta / canvas / save）涉及 flow_mode 参数，一并确认使用 0
+- `apps/api/src/coze/types.ts` 的 `CreateWorkflowRequest`：`icon_uri` 注释补充"必须传 default_icon/default_workflow_icon.png，勿传空"；`flow_mode` 注释补充"0=工作流，2=智能体（勿用）"
+- 若平台其他接口（如 update_meta / canvas / save）涉及 icon_uri / flow_mode 参数，一并确认与手工 curl 一致
 
 ---
 
