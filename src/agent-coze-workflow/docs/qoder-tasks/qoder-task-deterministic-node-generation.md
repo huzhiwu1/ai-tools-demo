@@ -1,8 +1,16 @@
-# Qoder 任务：节点结构确定性生成（LLM 只填业务参数，不发明 schema）
+# Qoder 任务：节点结构确定性生成（LLM 只梳理节点类型与连接，其余全部代码完成）
 
 > 项目：`/Users/huzhiwu/workspace/ai-tools-demo/src/agent-coze-workflow`
 > 技术栈：NestJS 11 + LangGraph + pnpm workspace
-> **目标：彻底改变"LLM 发明节点结构"的现状——节点 schema（顺序/字段/输入映射/输出声明/分支引用）全部由代码确定性生成，LLM 只提供业务参数（模型、提示词文本、代码逻辑描述、阈值、数据）。**
+> **目标：彻底改变"LLM 发明节点结构"的现状。职责边界（用户明确要求，写进代码注释）：**
+>
+> **LLM 只做两件事：**
+> 1. 从需求中梳理出需要用什么节点（节点类型序列）
+> 2. 梳理出节点怎么连接（依赖关系/边）
+>
+> **其余一切由代码完成：** 节点 schema 构造、inputMapping 自动生成、outputVariables 声明、条件分支 targetNodeId 回填、代码节点代码生成、模型选择（平台事实匹配）、prompt 文本（模板化生成）。
+>
+> **LLM 输出极简化：只输出 `{ steps: [{ nodeType, description, dependencies }] }`，不输出任何节点 JSON、不输出 nodeConfig 业务细节。**
 
 ---
 
@@ -17,7 +25,21 @@
 5. **update_workflow 重写代码时幻觉**：把歌词库改成了周杰伦的歌——**update_workflow 不应整体重写代码节点，只应修改业务参数**
 6. **generate_workflow 生成的代码节点仍是占位**：logicDescription 未传递到代码生成器
 
-**核心原则（写进代码注释和 prompt）：节点结构是代码的责任，业务内容是 LLM 的责任。LLM 永远不输出节点 JSON 结构，只输出参数。**
+**核心原则（用户明确要求，写进代码注释和 prompt）：**
+
+```
+LLM 只从需求中梳理：用什么节点 + 怎么连接。
+其他全部由代码完成：
+- 节点 schema 构造（字段/结构）
+- inputMapping 自动生成（数据流接线）
+- outputVariables 声明
+- 条件分支 targetNodeId 回填
+- 代码节点代码生成（模板 + 参考数据）
+- 模型选择（按任务类型从平台事实匹配）
+- prompt 文本（基于节点 description 模板化生成）
+```
+
+**影响：** 本任务不只是修 bug，还要**简化 LLM 工具契约**（见修复 5）。
 
 ---
 
@@ -232,7 +254,53 @@ async generateCode(
 
 ---
 
-## 六、验收标准
+## 六、修复 5：LLM 工具契约极简化（职责边界的落地，用户明确要求）
+
+**用户原则：LLM 只从需求中梳理出"用什么节点 + 怎么连接"，其他一切由代码完成。**
+
+### 6.1 plan_workflow 输出极简化（workflow-engine/planner.ts + PLAN_PROMPT）
+
+**当前问题**：PLAN_PROMPT 要求 LLM 输出 nodeConfig（llm.model / llm.userPrompt / code.logicDescription / condition.branches / database.connectionId 等）——这违反职责边界，LLM 自由发挥这些业务细节导致幻觉（周杰伦歌词库、错误模型、错误顺序）。
+
+**改法**：LLM 输出**只保留**：
+
+```ts
+// WorkflowPlan 的 steps 极简化：
+interface PlanStep {
+  order: number;
+  description: string;        // 节点职责描述（给代码生成 prompt/逻辑用）
+  nodeType: WorkflowNodeType; // 节点类型
+  dependencies: number[];     // 连接关系
+}
+// ❌ 删除 nodeConfig 字段（llm/code/condition/database/http 的细节不再由 LLM 提供）
+```
+
+- **PlanStep.nodeConfig 整个移除**（或保留为可选但 LLM 不填，代码忽略）
+- **PLAN_PROMPT 重写**：只要求 LLM 输出节点类型序列 + 依赖关系 + 每步简短 description（一句话说明该节点做什么，如"用多模态模型识别音频中的歌词"），**禁止输出模型名、prompt 全文、代码、阈值、分支条件等业务细节**
+
+### 6.2 代码根据 description 推导业务细节（generator + 模板）
+
+节点业务内容由代码基于 `description` + 平台事实生成：
+
+- **模型选择**：根据节点 description 判断任务类型——包含"音频/视频/识别/理解"等词 → 从 platform-facts 选 audio_understanding=true 的模型（默认 Doubao-Seed-2.0-Lite）；纯文本 → 默认 Doubao-Seed-2.0-Lite。**代码规则匹配，不靠 LLM 选**
+- **prompt 生成**：用模板基于 description 生成（如 `你是一个多模态识别助手。任务：${description}。请输出 JSON 格式结果。`），不靠 LLM 写全文
+- **代码节点逻辑**：description 作为 logicDescription 传给 CodeGenerator，**参考数据（歌词库等）由代码从用户上传文件读取后传入**，LLM 生成代码时必须保留参考数据（修复 3 已约束）
+- **条件分支**：根据 description 中出现的"如果/否则/判断/分支"语义，用代码生成默认分支结构（如"匹配成功 → true 分支 / 未匹配 → false 分支"），targetNodeId 由代码回填（修复 1.3）
+
+### 6.3 shared 包类型同步（packages/shared/src/types/index.ts）
+
+- `WorkflowPlan` / `PlanStep` 类型更新：移除 nodeConfig 或标记 deprecated
+- 前端/其他引用处同步（若有）
+
+### 6.4 验收
+
+- 给 Agent 需求后，LLM 只输出节点类型 + 连接 + 描述（无模型名/prompt/代码/阈值）
+- 生成的工作流仍包含完整业务逻辑（模型/prompt/代码由代码填充）
+- 不再出现"LLM 把歌词库改成周杰伦"这类幻觉
+
+---
+
+## 七、验收标准
 
 1. `pnpm typecheck` 全绿；`pnpm build` 全绿
 2. **确定性生成实测**：给 Agent 一个"音频识别歌词→匹配歌曲"需求，检查生成的工作流 JSON：
@@ -248,7 +316,7 @@ async generateCode(
 
 ---
 
-## 七、红线
+## 八、红线
 
 - ❌ **LLM 永远不输出节点 JSON 结构**（generate_workflow 工具输入只有 plan 参数，没有 workflow JSON 让 LLM 改）
 - ❌ 不整体重写代码节点（除非有 referenceData 且明确要求）
