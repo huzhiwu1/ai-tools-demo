@@ -40,6 +40,7 @@ export interface CreateWorkflowRequest {
   desc: string;
   icon_uri: string;
   space_id: string;
+  /** 资源类型：0=工作流，2=智能体（勿用，否则创建后无法以工作流方式打开） */
   flow_mode: number;
 }
 

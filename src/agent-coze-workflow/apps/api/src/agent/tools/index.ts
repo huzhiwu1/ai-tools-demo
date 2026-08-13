@@ -19,6 +19,7 @@ export { readFileTool } from "./read-file.tool";
 export { getPlatformFactsTool } from "./platform-facts.tool";
 export { batchValidateTool } from "./batch-validate.tool";
 export { updateWorkflowTool } from "./update-workflow.tool";
+export { renameWorkflowTool } from "./rename-workflow.tool";
 
 import { Logger } from "@nestjs/common";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -32,6 +33,7 @@ import { readFileTool } from "./read-file.tool";
 import { getPlatformFactsTool } from "./platform-facts.tool";
 import { batchValidateTool } from "./batch-validate.tool";
 import { updateWorkflowTool } from "./update-workflow.tool";
+import { renameWorkflowTool } from "./rename-workflow.tool";
 
 const toolLogger = new Logger("Tool");
 
@@ -108,4 +110,5 @@ export const ALL_TOOLS = [
   withToolLog(testRunWorkflowTool, "test_run_workflow"),
   withToolLog(batchValidateTool, "batch_validate"),
   withToolLog(updateWorkflowTool, "update_workflow"),
+  withToolLog(renameWorkflowTool, "rename_workflow"),
 ] as const;

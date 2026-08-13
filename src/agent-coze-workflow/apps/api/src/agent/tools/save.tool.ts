@@ -24,6 +24,62 @@ import { checkPlatformCompatibility } from "../../workflow-engine/platform-valid
 import { convertToPlatformSchema } from "../../coze/schema-converter";
 import { cozeClient } from "./coze-client";
 
+/**
+ * 清洗工作流名称：平台只允许字母开头 + 字母/数字/下划线，长度 ≤ 50
+ *
+ * @param name - 原始名称
+ * @returns 平台合法的英文工作流名（空输入降级为 "workflow"）
+ */
+function sanitizeWorkflowName(name: string): string {
+  return (
+    name
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/^[^a-zA-Z]+/, "")
+      .slice(0, 50) || "workflow"
+  );
+}
+
+/**
+ * 创建平台工作流，遇"名称已存在"时自动加 _2/_3 后缀重试（最多 3 次）
+ *
+ * 名称冲突是常见场景（同一需求重复保存），兜底自动改名避免把冲突抛给 Agent
+ * 瞎转；若 Agent 想保留特定名称，可用 rename_workflow 先改名再保存。
+ *
+ * @param name - 工作流名称
+ * @param desc - 工作流描述
+ * @returns 成功创建的 workflowId 与实际使用的名称
+ */
+async function createWorkflowWithRetry(
+  name: string,
+  desc: string,
+): Promise<{ workflowId: string; usedName: string }> {
+  try {
+    const workflowId = await cozeClient.createWorkflow(name, desc);
+    return { workflowId, usedName: name };
+  } catch (e) {
+    const msg = (e as Error).message;
+    // 非重名错误直接抛
+    if (!/已存在|exist|duplicate/i.test(msg)) throw e;
+
+    // 名称冲突：自动加后缀重试（_2, _3, _4）
+    for (let i = 2; i <= 4; i++) {
+      const candidate = `${sanitizeWorkflowName(name)}_${i}`.slice(0, 50);
+      try {
+        const workflowId = await cozeClient.createWorkflow(candidate, desc);
+        console.warn(`[save_to_coze] 名称冲突，使用 ${candidate} 保存`);
+        return { workflowId, usedName: candidate };
+      } catch (e2) {
+        const m2 = (e2 as Error).message;
+        // 非重名错误直接抛（重名继续下一轮）
+        if (!/已存在|exist|duplicate/i.test(m2)) throw e2;
+      }
+    }
+    throw new Error(
+      `工作流名称冲突且自动重试失败（${sanitizeWorkflowName(name)}_2 ~ _4 均占用），请用 rename_workflow 改名后重试`,
+    );
+  }
+}
+
 export const saveToCozeTool = tool(
   async ({ workflow }) => {
     try {
@@ -42,12 +98,17 @@ export const saveToCozeTool = tool(
       }
 
       const schemaJson = convertToPlatformSchema(cozeWorkflow);
-      const workflowId = await cozeClient.createWorkflow(
+      // 创建时遇"名称已存在"自动加后缀重试（_2/_3/_4）
+      const { workflowId, usedName } = await createWorkflowWithRetry(
         cozeWorkflow.meta.name,
         cozeWorkflow.meta.description,
       );
       await cozeClient.saveWorkflow(workflowId, schemaJson);
-      return JSON.stringify({ workflowId, saved: true }, null, 2);
+      return JSON.stringify(
+        { workflowId, saved: true, name: usedName },
+        null,
+        2,
+      );
     } catch (e) {
       return `保存失败: ${(e as Error).message}`;
     }

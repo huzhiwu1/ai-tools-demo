@@ -9,6 +9,7 @@
  * - 提问卡片通过 pendingQuestion prop 渲染在列表末尾
  */
 
+import { isToolOutputFailed } from "../api/data-stream.js";
 import type { DataStreamEvent } from "../api/data-stream.js";
 
 /** useChat messages 的消息类型（宽松定义，兼容 role:"data" 消息） */
@@ -37,7 +38,7 @@ function ToolCard({ event }: { event: DataStreamEvent }) {
     );
   }
   if (event.type === "tool_end") {
-    const failed = (event.output ?? "").includes("失败");
+    const failed = isToolOutputFailed(event.output);
     return (
       <div
         className={`msg-tool-card ${failed ? "tool-failed" : "tool-done"}`}

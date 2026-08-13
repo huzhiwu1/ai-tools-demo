@@ -33,6 +33,7 @@ import { JsonPreview } from "./components/JsonPreview.js";
 import {
   parseDataStream,
   transformToDataProtocolStream,
+  isToolOutputFailed,
 } from "./api/data-stream.js";
 import type { DataStreamEvent } from "./api/data-stream.js";
 import { workflowApi } from "./api/workflow.js";
@@ -234,8 +235,8 @@ export default function App() {
 
         const name = event.name ?? "unknown";
         const output = event.output ?? "";
-        // 输出包含"失败"视为错误（与后端工具的失败文案约定一致）
-        const failed = output.includes("失败");
+        // 判断工具是否真正失败（靠输出格式 + 错误前缀，不靠 contains "失败"）
+        const failed = isToolOutputFailed(output);
         setToolCalls((prev) => {
           // 从后往前匹配最近的同名 running 记录
           for (let i = prev.length - 1; i >= 0; i--) {

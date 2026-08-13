@@ -36,8 +36,8 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const LOCK_TTL_MS = 15 * 60 * 1000; // 15 分钟
 const MAX_SAVE_RETRIES = 2;
 
-/** 请求体摘要最大长度（超出截断，避免大 schema 刷屏） */
-const SUMMARY_MAX_LEN = 200;
+/** 请求体/响应体日志最大长度（超出截断，避免大 schema 刷屏；create 等小接口可完整打印） */
+const LOG_MAX_LEN = 2000;
 
 export class CozeClient {
   private readonly baseUrl: string;
@@ -294,8 +294,8 @@ export class CozeClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-    // 请求前：debug 级别，记路径 + body 摘要（敏感字段已脱敏）
-    this.logger.debug(`[CozeAPI] -> ${path} body=${this.summarize(body)}`);
+    // 请求前：info 级别（默认可见），记路径 + 完整 body（敏感字段已脱敏）
+    this.logger.log(`[CozeAPI] -> ${path} body=${this.summarize(body)}`);
 
     try {
       const res = await fetch(`${this.baseUrl}${urlPrefix}${path}`, {
@@ -320,9 +320,9 @@ export class CozeClient {
         throw new Error(`CozeError[${json.code}]: ${json.msg}`);
       }
 
-      // 响应成功：info 级别，记路径 + 耗时 + code
+      // 响应成功：info 级别，记路径 + 耗时 + code + 返回数据（完整 JSON）
       this.logger.log(
-        `[CozeAPI] <- ${path} code=${json.code} ${Date.now() - start}ms`,
+        `[CozeAPI] <- ${path} code=${json.code} ${Date.now() - start}ms data=${this.summarize(json.data ?? {})}`,
       );
       return json;
     } catch (e) {
@@ -348,7 +348,7 @@ export class CozeClient {
   }
 
   /**
-   * 请求体摘要：转 JSON 字符串，敏感字段脱敏，超过 200 字符截断
+   * 请求/响应体摘要：转 JSON 字符串，敏感字段脱敏，超过 2000 字符截断
    *
    * 敏感字段（session_key / token / api_key 等）只保留前 8 位 + 长度，
    * 防止认证信息完整泄露到日志（脱敏铁律）。
@@ -364,8 +364,8 @@ export class CozeClient {
       }
       return value;
     });
-    return json.length > SUMMARY_MAX_LEN
-      ? `${json.slice(0, SUMMARY_MAX_LEN)}...(len=${json.length})`
+    return json.length > LOG_MAX_LEN
+      ? `${json.slice(0, LOG_MAX_LEN)}...(len=${json.length})`
       : json;
   }
 

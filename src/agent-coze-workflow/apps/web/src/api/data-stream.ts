@@ -224,3 +224,43 @@ export function transformToDataProtocolStream(
     },
   });
 }
+
+// ============================================
+// 工具输出状态判断
+// ============================================
+
+/**
+ * 判断工具输出是否为失败结果
+ *
+ * 后端约定：
+ * - 成功：返回 JSON 字符串（以 { 开头，如 {"workflow":...}）
+ * - 失败：返回 "xxx失败: <原因>" 错误文本
+ *
+ * 不能用 includes("失败")——业务 JSON 里可能正常包含"失败"字样
+ * （如需求描述"识别失败输出未知歌曲"）。
+ *
+ * @param output - 工具输出内容
+ * @returns true 表示工具执行失败
+ */
+export function isToolOutputFailed(output: unknown): boolean {
+  const text = typeof output === "string" ? output : String(output ?? "");
+  const trimmed = text.trim();
+
+  // 空输出不算失败（可能是正常空结果）
+  if (!trimmed) return false;
+
+  // JSON 开头 → 成功（工具约定成功返回 JSON）
+  if (trimmed.startsWith("{")) return false;
+
+  // 已知错误前缀（后端工具统一格式："xxx失败: "）
+  const errorPrefixes = [
+    "规划失败",
+    "生成失败",
+    "保存失败",
+    "批量验证失败",
+    "读取失败",
+    "试运行失败",
+    "工作流更新失败",
+  ];
+  return errorPrefixes.some((p) => trimmed.startsWith(p));
+}
