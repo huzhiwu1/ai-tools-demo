@@ -1,0 +1,258 @@
+# Qoder 任务：节点结构确定性生成（LLM 只填业务参数，不发明 schema）
+
+> 项目：`/Users/huzhiwu/workspace/ai-tools-demo/src/agent-coze-workflow`
+> 技术栈：NestJS 11 + LangGraph + pnpm workspace
+> **目标：彻底改变"LLM 发明节点结构"的现状——节点 schema（顺序/字段/输入映射/输出声明/分支引用）全部由代码确定性生成，LLM 只提供业务参数（模型、提示词文本、代码逻辑描述、阈值、数据）。**
+
+---
+
+## 一、问题清单（从真实运行日志确认）
+
+运行一个"音频识别歌词→匹配歌曲"的工作流，出现以下结构性错误：
+
+1. **节点顺序错误**：LLM 规划出 start→code→condition→llm→end（代码比对在 LLM 识别之前），LLM 反复"调整顺序"也改不对——**节点顺序不该由 LLM 决定，应由代码按 dependencies 拓扑排序**
+2. **inputMapping 为空**：LLM 节点、代码节点的输入映射为空，数据流没接上——**inputMapping 应由代码根据 edges 自动生成**
+3. **条件分支 targetNodeId 是 "TODO"**：condition 节点 branches 里的目标节点是占位符——**应由代码根据 edges 自动回填**
+4. **代码节点缺 outputVariables 声明**：平台 panic `interface conversion: interface {} is map[string]interface {}, not []interface {}`——**代码节点 outputs 未声明，平台无法推断输出类型**
+5. **update_workflow 重写代码时幻觉**：把歌词库改成了周杰伦的歌——**update_workflow 不应整体重写代码节点，只应修改业务参数**
+6. **generate_workflow 生成的代码节点仍是占位**：logicDescription 未传递到代码生成器
+
+**核心原则（写进代码注释和 prompt）：节点结构是代码的责任，业务内容是 LLM 的责任。LLM 永远不输出节点 JSON 结构，只输出参数。**
+
+---
+
+## 二、修复 1：generator 确定性组装节点结构（核心）
+
+### 文件：`apps/api/src/workflow-engine/generator.ts`
+
+### 1.1 节点顺序：按 dependencies 拓扑排序
+
+`buildWorkflow` 中，**不要按 plan.steps 的原始顺序生成节点**，改为拓扑排序：
+
+```ts
+/**
+ * 按 dependencies 拓扑排序 steps
+ * （LLM 输出的 order 可能错误，代码必须保证 start→...→end 的正确依赖顺序）
+ */
+function topoSortSteps(steps: PlanStep[]): PlanStep[] {
+  const result: PlanStep[] = [];
+  const visited = new Set<number>();
+  const orderMap = new Map(steps.map((s) => [s.order, s]));
+
+  const visit = (order: number): void => {
+    if (visited.has(order)) return;
+    visited.add(order);
+    const step = orderMap.get(order);
+    if (!step) return;
+    for (const dep of step.dependencies) visit(dep);
+    result.push(step);
+  };
+
+  for (const step of steps) visit(step.order);
+  return result;
+}
+```
+
+### 1.2 inputMapping：根据 edges 自动生成
+
+生成节点后，根据 edges（数据流）自动为每个下游节点填充 inputMapping：
+
+```ts
+/**
+ * 自动生成节点 inputMapping
+ *
+ * 规则：对于每条边 source→target，若 target 是 llm/code 节点，
+ * 把 source 节点的输出（如 start 的 input、llm 的 output）映射为
+ * target 节点的输入参数（如 user_input、recognized_lyrics）。
+ *
+ * 命名约定：
+ * - start 的输出 → 输入参数名 user_input
+ * - llm 的输出 → 输入参数名 recognized_lyrics / input
+ * - code 的输出 → 输入参数名 input
+ */
+function buildInputMapping(
+  nodes: CozeNode[],
+  edges: CozeEdge[],
+): Map<string, Record<string, string>> {
+  // 返回 targetNodeId → { 参数名: "sourceNodeId.outputName" }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const mapping = new Map<string, Record<string, string>>();
+
+  for (const edge of edges) {
+    const source = nodeById.get(edge.sourceNodeId);
+    const target = nodeById.get(edge.targetNodeId);
+    if (!source || !target) continue;
+    if (target.type !== "llm" && target.type !== "code") continue;
+
+    const sourceOutput = this.outputNameForNode(source); // start→"input", llm/code→"output"
+    const paramName = target.type === "llm" ? "user_input" : "input";
+
+    const existing = mapping.get(target.id) ?? {};
+    existing[paramName] = `${edge.sourceNodeId}.${sourceOutput}`;
+    mapping.set(target.id, existing);
+  }
+  return mapping;
+}
+```
+
+**重要**：converter 里已支持 `inputMapping` 格式 `"nodeId.outputName"` → ref 引用（`refInput`），所以 generator 只需把 inputMapping 填进节点即可，converter 自动转平台格式。
+
+### 1.3 condition 节点 branches 自动回填 targetNodeId
+
+condition 节点的 branches 不应有 "TODO"——生成完 edges 后，把每个 branch 的 targetNodeId 指向真实的后续节点：
+
+```ts
+/**
+ * 回填 condition 节点 branches 的 targetNodeId
+ *
+ * 规则：condition 节点有 N 个分支时，第 i 个分支指向 edges 中
+ * 从该 condition 出发的第 i 条边的 target（无出边则指向 end）。
+ */
+function fillConditionTargets(
+  nodes: CozeNode[],
+  edges: CozeEdge[],
+): void {
+  for (const node of nodes) {
+    if (node.type !== "condition") continue;
+    const outgoing = edges.filter((e) => e.sourceNodeId === node.id);
+    const branches = (node as ConditionNode).branches ?? [];
+    branches.forEach((b, i) => {
+      b.targetNodeId = outgoing[i]?.targetNodeId ?? "900001"; // 兜底 end
+    });
+  }
+}
+```
+
+### 1.4 所有节点必须有 outputs 声明
+
+**`packages/workflow-schema/src/types/index.ts`**：给 `CodeNode` 增加 `outputs` 字段：
+
+```ts
+export interface CodeNode extends CozeNodeBase {
+  type: "code";
+  /** 代码内容 */
+  code: string;
+  /** 运行时语言 */
+  language: "javascript" | "python";
+  /** 输入变量映射 */
+  inputMapping?: Record<string, string>;
+  /** 输出变量声明（平台要求，缺失会导致 SetOutputTypesForNodeSchema panic） */
+  outputs?: Array<{ type: "string" | "object" | "list" | "integer" | "number" | "boolean"; name: string; schema?: unknown }>;
+}
+```
+
+**`packages/workflow-schema/src/templates/index.ts`**：`createCodeNode` 默认带 outputs：
+
+```ts
+outputs: [{ type: "object", name: "output", schema: {} }],
+```
+
+**`apps/api/src/coze/schema-converter.ts`**：code 节点转换时，从节点 outputs 声明生成平台格式（已有 `data.outputs = [{ type: "object", name: "output", schema: {} }]`，改为读 `node.outputs`，缺失用默认）。
+
+---
+
+## 三、修复 2：代码生成器传参完整（不再占位）
+
+### 文件：`apps/api/src/workflow-engine/code-generator.ts` + `generator.ts`
+
+**问题**：`generateCode(logicDescription, inputs)` 的 `inputs` 一直没传对，导致生成占位代码。
+
+**改法**：generator 调 codeGenerator 时，传入真实输入：
+
+```ts
+case "code": {
+  const cfg = step.nodeConfig?.code;
+  // 从 inputMapping 取输入变量名
+  const inputNames = inputMapping.get(stepOrderToId.get(step.order) ?? "") 
+    ? Object.keys(inputMapping.get(...)!)
+    : ["input"];
+  let code: string;
+  if (this.codeGenerator && cfg?.logicDescription) {
+    code = await this.codeGenerator.generateCode(cfg.logicDescription, inputNames);
+  } else {
+    code = CodeGenerator.buildFallbackCode(inputNames);
+  }
+  return createCodeNode({
+    ...baseOverrides,
+    code,
+    language: "python",
+    outputs: [{ type: "object", name: "output", schema: {} }],
+  });
+}
+```
+
+**CodeGenerator 加强**（`code-generator.ts`）：生成 prompt 里显式传入**用户参考数据**（如歌词库内容），避免 LLM 幻觉：
+
+```ts
+async generateCode(
+  logicDescription: string,
+  inputs?: string[],
+  referenceData?: Record<string, string>,  // 用户上传的参考数据（歌词库等）
+): Promise<string> {
+  const dataHint = referenceData
+    ? `用户参考数据（必须原样写入代码常量，不得修改、不得替换）：\n${JSON.stringify(referenceData, null, 2)}`
+    : "";
+  // prompt 拼接 dataHint，并强调："参考数据必须原样使用，禁止编造或替换为其他内容"
+}
+```
+
+---
+
+## 四、修复 3：update_workflow 禁止整体重写代码（防幻觉）
+
+### 文件：`apps/api/src/agent/tools/update-workflow.tool.ts`
+
+**问题**：update_workflow 用 LLM 重写整个代码节点，导致歌词库被改成周杰伦。
+
+**改法**：update_workflow 改为**参数级修改**，不整体重写：
+
+1. **阈值修改**：保留现有 `replaceThreshold`（正则替换数字）
+2. **prompt 修改**：只改 LLM 节点的 userPrompt/systemPrompt 文本
+3. **数据常量修改**：只改代码里的 `SONG_LYRICS = {...}` 等常量块（用正则定位常量名替换）
+4. **代码逻辑重写**：**仅当 fixInstruction 明确要求"重写逻辑"时**才允许调 CodeGenerator，且必须传入原工作流的 referenceData（歌词库等），prompt 强调"保留原有参考数据，只改逻辑部分"
+5. **禁止**：不允许 LLM 凭空生成全新代码（无 referenceData 时不重写代码节点）
+
+**工具 description 更新**：明确"本工具只修改参数（阈值/prompt/数据），代码逻辑重写需要提供 referenceData"
+
+---
+
+## 五、修复 4：planner 输出顺序规范化
+
+### 文件：`apps/api/src/prompts/plan-prompt.ts` + `workflow-engine/planner.ts`
+
+**PLAN_PROMPT 增加硬约束**：
+
+```
+节点顺序必须符合数据流逻辑：start → (llm 识别/处理) → (code 计算/比对) → (condition 分支) → end。
+依赖关系（dependencies）必须正确：下游节点的 dependencies 必须包含其直接上游。
+禁止出现"代码节点在 LLM 节点之前处理 LLM 的输出"这类逻辑错误。
+```
+
+**planner 映射时**：如果 LLM 输出的 steps 顺序明显违反"start 第一、end 最后"，代码修正（start 排第一、end 排最后，其余按依赖拓扑排序）。
+
+---
+
+## 六、验收标准
+
+1. `pnpm typecheck` 全绿；`pnpm build` 全绿
+2. **确定性生成实测**：给 Agent 一个"音频识别歌词→匹配歌曲"需求，检查生成的工作流 JSON：
+   - 节点顺序正确：start→llm→code→condition→end（LLM 识别在代码比对之前）
+   - LLM 节点 inputMapping = `{ user_input: "startId.input" }`
+   - 代码节点 inputMapping = `{ input: "llmId.output" }`
+   - condition 节点 branches 的 targetNodeId 是真实节点 ID，**没有 "TODO"**
+   - 代码节点有 outputs 声明（不再是 panic 错误）
+   - 代码节点 code 是真实逻辑（不是占位）
+3. **保存后 test_run 不 panic**：保存到平台后试运行，不再报 `interface conversion: interface {} is map[string]interface {}, not []interface {}`
+4. **update_workflow 不幻觉**：给"把相似度阈值从0.8调到0.6"指令，只改阈值数字；歌词库数据不被替换
+5. 旧功能不回归：简单问答工作流仍正常
+
+---
+
+## 七、红线
+
+- ❌ **LLM 永远不输出节点 JSON 结构**（generate_workflow 工具输入只有 plan 参数，没有 workflow JSON 让 LLM 改）
+- ❌ 不整体重写代码节点（除非有 referenceData 且明确要求）
+- ❌ 不加新依赖
+- ❌ 不改平台 API 调用
+- ✅ 结构（顺序/映射/输出声明/分支引用）全部代码确定性生成
+- ✅ 业务内容（模型/prompt/逻辑描述/阈值/数据）由 LLM 提供参数
