@@ -156,7 +156,41 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 **实现**：基于 `WorkflowGenerator` 生成的 CozeWorkflow 结构，直接改对应节点的字段。改完返回完整 workflow + changes 列表。**本工具不调平台 API**（保存是 save_to_coze 的事）。
 
-### 6. 系统提示词更新（react-agent.service.ts 的 SYSTEM_PROMPT）
+### 6. interrupt 交互改造（合并输入框，方案 B）—— 附加任务
+
+**背景**：当前实现（Sprint C）里 AI 提问时弹独立回答卡片（chat-message-list.tsx 的 AnswerForm），卡片自带输入框，**没有上传文件按钮**；上传按钮只在底部主输入框（ChatInput）里。用户困惑该用哪个框，且需要传文件时无法在回答卡片里操作。
+
+**目标**：合并成一个输入框——AI 提问时，**底部主输入框切换为"回复 AI 的问题"模式**，用户始终只有一个输入框，上传按钮天然保留。
+
+**前端改动（apps/web/）：**
+
+- `App.tsx`：
+  - 新增状态 `replyMode: boolean`（是否处于回复 AI 问题模式）
+  - `handleDataEvent` 收到 `interrupt` 事件时：`setPendingQuestion({...})` + `setReplyMode(true)`
+  - `handleSend`（普通发送）时：`setReplyMode(false)`
+  - 提交回答：走现有 `handleAnswer(answer, fileIds?)`，完成后 `setReplyMode(false)`
+- `chat-message-list.tsx`：
+  - 提问卡片**只展示问题文本和 context**，不再渲染 AnswerForm 输入框
+  - 提示文案改为"请在下方输入框回复 AI 的问题"
+  - 删除 AnswerForm 组件（或保留但不再使用）
+- `chat-input.tsx`：
+  - 新增 prop：`mode: "normal" | "reply"`、`onAnswer: (text: string, fileIds: string[]) => void`、`pendingQuestionText?: string`
+  - reply 模式：placeholder 改为"回复 AI 的问题…（Ctrl+Enter 发送）"，输入框上方显示当前问题摘要（可滚动，最多 2 行截断）
+  - 提交逻辑：reply 模式调 `onAnswer(text, fileIds)`（文件引用同样拼接/传 fileIds），normal 模式调 `onSend(text)`
+  - **上传按钮两模式都保留**（天然满足"AI 询问时可传文件"）
+  - 发送按钮文案：reply 模式 "回复"，normal 模式 "发送"
+
+**后端改动（apps/api/）：**
+
+- `react-agent.controller.ts` 的 `POST /api/agent/chat/resume`：body 增加可选 `fileIds?: string[]`（本次回答附带的上传文件）
+- `react-agent.service.ts` 的 `handleResume`：接收 `fileIds` 参数，把文件引用信息拼进 resume 的 answer 文本（如 `answer + "\n\n[用户上传了文件]\n- xxx (fileId: ...)"`），再 `Command({ resume })`——这样 LLM 能感知到回答时带了文件
+- 文件的实际解析（读内容）由 parse_answer_sheet / parse_lyrics_library 负责，本任务只做到"传递 fileIds 引用"
+
+**验收（前端浏览器实测）**：
+- 发缺信息需求 → AI 提问 → 底部输入框变为"回复 AI 的问题"模式（有提示文案）→ 输入回答提交 → AI 继续执行 → 完成后输入框恢复普通模式
+- 回复模式下上传按钮可用，上传后提交，resume 请求体里带 fileIds
+
+### 7. 系统提示词更新（react-agent.service.ts 的 SYSTEM_PROMPT）
 
 更新「可用工具」列表为 9 个，并新增使用流程规则：
 
@@ -186,6 +220,9 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
    - 若 COZE_SESSION_KEY 过期，返回明确错误信息（不是 500）
 4. **Agent 全链路**（curl 或前端）：给 Agent 一条消息包含"需求 + 答案表路径 + 歌词库路径"，观察它自动走完 parse → plan → generate → save → batch_validate →（迭代）→ 交付
 5. 旧功能不回归：5 个旧工具仍正常
+6. **合并输入框验收**（前端浏览器实测）：
+   - 发缺信息需求 → AI 提问 → 底部输入框变为"回复 AI 的问题"模式（有提示文案）→ 输入回答提交 → AI 继续执行 → 完成后输入框恢复普通模式
+   - 回复模式下上传按钮仍可用，上传后提交，resume 请求体里带 fileIds
 
 ---
 
@@ -208,4 +245,5 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 3. 写 batch_validate（依赖 1，先串行跑通 3 个用例再全量）
 4. 写 update_workflow（基于规则修改）
 5. tools/index.ts 注册 4 个新工具 + SYSTEM_PROMPT 更新
-6. 全链路实测（用 test-data 两个文件 + 平台）
+6. **合并输入框改造**（前端）：replyMode 状态机 + chat-input 双模式 + resume 接口支持 fileIds
+7. 全链路实测（用 test-data 两个文件 + 平台）
