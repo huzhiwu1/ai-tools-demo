@@ -1,8 +1,23 @@
-# Qoder 任务：Sprint B — 验证闭环（答案表/歌词库解析 + 批量试运行 + 归因迭代）
+# Qoder 任务：Sprint B — 通用文件读取 + 验证闭环（批量试运行 + 归因迭代）
 
 > 项目：`/Users/huzhiwu/workspace/ai-tools-demo/src/agent-coze-workflow`
 > 技术栈：NestJS 11 + LangGraph createReactAgent + pnpm workspace
-> **目标：给 ReAct Agent 装上"验证闭环"——解析用户上传的答案表和歌词库 → 批量试运行工作流 → 对照答案表算准确率 → 错误归因 → 修改工作流 → 重新验证，直到 100% 或迭代 3 次封顶。这是系统"能保证工作流真的能用"的核心能力。**
+> **目标：给 ReAct Agent 装上"验证闭环"——用户上传任意文件（Excel/CSV/Markdown 等），Agent 只做通用读取，由 LLM 理解文件用途、判断信息是否完整、缺了就向用户提问，然后设计/生成/保存/试运行工作流，对照用户期望验证准确性，不达标就归因修改重新验证，直到通过或 3 次封顶。**
+
+---
+
+## 零、核心设计原则（最重要，先读三遍）
+
+**⚠️ 我们不知道用户上传的文件是干什么的。** 可能是答案表、歌词库、规则文档、参考数据……任何东西。系统不做任何业务假设：
+
+- ❌ 不预设"这是答案表，有 url/song 列"
+- ❌ 不预设"这是歌词库，用《歌名》解析"
+- ❌ 不预设"文件必须包含输入列和期望输出列"
+- ✅ 文件读取工具只做一件事：**把文件内容读成通用数据结构**（表格 → 行列数据；文本 → 文本内容）
+- ✅ 文件用途、列含义、数据怎么用 —— **全部由 LLM 根据用户需求判断**；判断不了就调 clarify_question 问用户
+- ✅ 验证闭环的"用例"由 LLM 根据文件内容和用户需求构造，不是代码写死
+
+> 为什么？—— 这是通用系统。今天用户传"唱歌测试集"做歌曲识别，明天可能传"订单明细"做数据处理、传"产品文档"做知识库。任何业务假设都会让系统在某天坏掉。
 
 ---
 
@@ -12,39 +27,22 @@
 - `apps/api/src/agent/tools/index.ts` — 工具注册列表（ALL_TOOLS），**新工具加到这里**
 - `apps/api/src/agent/tools/` — 已有 5 个工具文件，新工具同目录新建
 - `apps/api/src/mcp/cozeClient.ts` — CozeClient（testRun 已有，**缺执行结果查询，本任务补**）
-- `apps/api/src/agent/react-agent.controller.ts` — 已有 `POST /api/agent/upload`（Sprint C 加的，存文件到 uploads/ 目录，返回 fileId/path/name）
-- `test-data/singing-testset.xlsx` — **答案表基准**（19 条正例：url + song，空行忽略）
-- `test-data/song-lyrics.md` — **歌词库基准**（8 首：《映山红》《天边》《花非花》《花又落》《珊瑚颂》《在那遥远的地方》《画你》《绒花》）
+- `apps/api/src/agent/react-agent.controller.ts` — 已有 `POST /api/agent/upload`（存文件到 uploads/ 目录，返回 fileId/path/name）
+- `test-data/singing-testset.xlsx` — **测试用样本文件**（用于验证"通用读取"是否工作）
+- `test-data/song-lyrics.md` — **测试用样本文件**（同上）
 
-**答案表格式（已验证）：**
-```
-表头: url | song
-19 条有效行（url 非空），song 为期望歌曲名
-后续可能有空行（Excel 格式残留），解析时跳过 url 为空的行
-无负例（不做"非训练营"验证）
-```
-
-**歌词库格式（已验证）：**
-```
-# 《映山红》
-参考歌词：夜半三更哟盼天明，寒冬腊月呦盼春风，……
-# 《天边》
-参考歌词：天边有一对双星，……
-# 《珊瑚颂》
-一树红花照碧海，……（注意：有的带"参考歌词："前缀，有的没有，解析时统一去掉）
-```
+**注意**：`test-data/` 下的文件只是**测试读取功能的样本**，不是系统的业务假设。系统的业务理解 100% 由 LLM 现场判断。
 
 ---
 
 ## 二、目标
 
-ReAct Agent 新增 4 个工具，总数 5 → 9：
+ReAct Agent 新增 3 个工具，总数 5 → 8：
 
 | 工具 | 职责 |
 |---|---|
-| parse_table | 通用表格读取：xlsx/csv → 原始数据（列名+行），不做列映射 |
-| parse_lyrics_library | 解析 md 歌词库 → 歌曲字典（song_name → lyrics） |
-| batch_validate | 批量 test_run + 轮询结果 + 对照答案表 → 准确率 + 错误明细 |
+| read_file | **通用文件读取**：xlsx/csv → 行列数据；md/txt/json → 文本内容。零业务假设 |
+| batch_validate | 批量 test_run + 轮询结果 + 对照期望 → 准确率 + 错误明细 |
 | update_workflow | 根据归因结果修改工作流节点（调阈值/改代码/改 prompt） |
 
 并补强：CozeClient 增加「查询执行结果」能力（test_run 返回 execute_id 后轮询拿真实输出）。
@@ -59,7 +57,7 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 - **探测方法**：登录平台 → 打开一个跑过的工作流 → DevTools Network 面板 → 找执行详情/日志相关请求（关键词：execute、run、detail、log）
 - **兜底候选**（按优先级尝试）：
-  1. `POST /api/workflow_api/execute_detail` body `{execute_id}` 
+  1. `POST /api/workflow_api/execute_detail` body `{execute_id}`
   2. `POST /api/workflow_api/execute_info` body `{execute_id}`
   3. `POST /api/workflow_api/run_log` body `{execute_id}`
 - **实现**：CozeClient 加 `queryExecute(executeId: string)` 方法：
@@ -70,55 +68,42 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 **⚠️ 如果接口实在探测不到**：先让 batch_validate 只做"提交成功"验证（拿到 execute_id 即视为运行中），并在返回信息里注明"结果轮询待接口打通"，不要卡死整个闭环。但要优先尝试打通。
 
-### 2. 表格读取工具（parse_table）—— 通用版，不写死列名
-
-**⚠️ 设计原则：本工具只负责"把文件读成通用数据"，不做任何业务列映射。** 不同用户上传的表格表头/列数/形式都不一样（可能是 url/song，也可能是 音频链接/歌曲名/备注 或其他任意列），列映射由 LLM 理解 + clarify_question 确认，绝不在代码里写死。
+### 2. 通用文件读取工具（read_file）—— 核心，零业务假设
 
 ```
 输入: filePath（upload 返回的 path）
-输出: { tableName, columns: [列名...], rows: [ {列名: 值}, ... ], totalRows, skippedEmptyRows }
+输出: {
+  fileName, fileType,        // 如 xlsx / csv / md / txt / json
+  format: "table" | "text",  // 表格类 → table；文档类 → text
+  columns?: string[],        // format=table 时：表头数组
+  rows?: Array<Record<string, unknown>>, // format=table 时：行数据（列名→值）
+  content?: string,          // format=text 时：全文内容
+  totalRows?, skippedEmptyRows?
+}
 ```
 
 **解析实现要点：**
 - 装依赖：`pnpm --filter @coze-workflow/api add xlsx`（SheetJS，一个库同时支持 xlsx 和 csv）
-- 读文件 → 取第一个 sheet → 遍历行：
-  - 第 1 行作为表头（columns）
-  - **空行跳过**（整行所有单元格都为空的行，计入 skippedEmptyRows）——Excel 经常有格式残留空行
-  - 每行转成 `{ 列名: 单元格值 }` 对象（列名用原始表头字符串，不翻译不映射）
-  - 行内空单元格：值为 null（保留列结构，不删列）
+- **按扩展名分派**：
+  - `.xlsx` / `.xls` / `.csv` → 表格解析（读第一个 sheet）：第 1 行作表头，后续行转 `{列名: 值}` 对象；空行跳过（计入 skippedEmptyRows）；行内空单元格值为 null
+  - `.md` / `.txt` / `.json` / 其他 → 文本解析：`fs.readFileSync` 读全文，放 `content` 字段
+- **不做任何业务处理**：不翻译列名、不推断列含义、不提取"歌曲名"、不剥离"参考歌词"前缀——原样返回
 - 返回完整 JSON 字符串（LLM 可读）
-- **try/catch 兜底**：解析失败返回 "解析失败: xxx"（ReAct 工具铁律）
+- **try/catch 兜底**：解析失败返回 "读取失败: xxx"（ReAct 工具铁律）
+- **工具 description 必须写清楚**："返回文件原始内容。文件的具体用途、列的含义、数据如何参与工作流，由你（LLM）根据用户需求判断；如果无法判断，调用 clarify_question 向用户询问。"
 
-**LLM 侧的使用约定（写入工具 description）：**
-- description 里明确告诉 LLM："返回的是表格原始数据，你需要根据表头判断哪些列是工作流输入、哪些列是期望输出；判断不了时调用 clarify_question 向用户确认列含义。"
-- 例：看到 columns=[url, song] → LLM 推断 url 是输入、song 是期望输出；如果看到列名模糊（如 [A, B, C]）→ 必须 clarify_question 问用户
-
-**歌词库读取（parse_lyrics_library）同理**：md 格式相对标准（`# 《歌名》` + 歌词），保留正则解析；但若用户上传的歌词文件格式不同（如无书名号、表格形式），同样由 LLM 判断格式并适配，不确定就 clarify_question。
-
-### 3. 歌词库解析工具（parse_lyrics_library）
+### 3. 批量验证工具（batch_validate）—— 核心
 
 ```
-输入: filePath
-输出: { songs: [{ name, lyrics }], total }
-```
-
-**解析实现要点（正则，不需要库）：**
-- 按 `^#+\s*《(.+?)》` 匹配歌名标题行
-- 标题行到下一个标题行之间的文本 = 歌词
-- 歌词清洗：去掉行首"参考歌词："前缀、去除空白字符（`\s`）、换行合并
-- 输出 `[{ name: "映山红", lyrics: "夜半三更哟盼天明寒冬腊月呦盼春风..." }]`
-- **try/catch 兜底**
-
-### 4. 批量验证工具（batch_validate）—— 核心
-
-```
-输入: workflowId, cases（LLM 理解表结构后构造的用例列表：[{ input: {...}, expected }]）, 可选 concurrentLimit（默认 3）
+输入: workflowId, cases, 可选 concurrentLimit（默认 3）
+     cases 由 LLM 构造：[{ input: Record<string, unknown>, expected: string }]
+     说明：LLM 根据用户需求 + read_file 读到的文件内容，决定"哪些行/哪些数据是测试用例、期望值是什么"
 输出: {
   total, passed, failed,
   accuracy,                    // passed / total，百分比
   details: [{ input, expected, actual, match, error? }],
   failurePatterns: {           // 归因分组
-    recognitionFailed: number, // 输出为空/无法识别
+    emptyOutput: number,       // 输出为空/找不到
     mismatch: number,          // 输出了但不是期望结果
     executionError: number     // test_run/查询报错
   }
@@ -130,14 +115,14 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ```
 1. 遍历 cases（串行或小并发，默认串行优先，稳）
 2. 每个用例：
-   a. cozeClient.testRun(workflowId, case.input) → executeId   // input 是 LLM 构造的完整输入对象，如 { url: "..." }，不写死字段名
+   a. cozeClient.testRun(workflowId, case.input) → executeId
    b. 轮询 queryExecute(executeId)：每 2 秒查一次，最多 90 秒
       - 超时 → executionError，error="执行超时"
       - 查询报错 → executionError，error=错误信息
    c. 取输出中的结果字段（从 execute 结果里递归找非空字符串值）
    d. 比对：
       - actual === expected → passed
-      - actual 为空/找不到 → recognitionFailed
+      - actual 为空/找不到 → emptyOutput
       - actual !== expected → mismatch
 3. 汇总 accuracy = passed / total * 100（保留 1 位小数）
 4. 返回完整 JSON（含 details 和 failurePatterns）
@@ -146,9 +131,9 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 **轮询注意**：
 - 用 `setInterval` 或 `for` 循环 + `await sleep(2000)`，**不要阻塞事件循环**
 - 90 秒超时上限，超时标记 executionError 继续下一个用例
-- 每个用例最多耗时 ~2 分钟，19 个用例串行 ~38 分钟——**可以接受但提示 LLM 串行跑**（或并发 2-3 个，注意平台限流，健康食养项目踩过坑）
+- 用例多时提示 LLM 串行跑（或并发 2-3 个，注意平台限流，健康食养项目踩过坑）
 
-### 5. 工作流更新工具（update_workflow）
+### 4. 工作流更新工具（update_workflow）
 
 ```
 输入: workflow（当前工作流 JSON）, fixInstruction（LLM 归因后给出的修改指令）
@@ -156,15 +141,15 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ```
 
 **修改能力（按 fixInstruction 的关键词匹配规则优先，LLM 兜底）：**
-- "阈值" → 找代码节点里的相似度阈值常量，按指令调（如 0.8 → 0.6）
-- "匹配算法" → 重写代码节点的匹配逻辑（规则模板：字符重叠率/Jaccard 相似度）
-- "prompt"/"提示词" → 修改 LLM 节点的 userPrompt/systemPrompt（如补充"输出格式必须是歌名"）
-- "歌词库" → 更新代码节点里的歌词常量数据
+- "阈值" → 找代码节点里的相似度/判断阈值常量，按指令调（如 0.8 → 0.6）
+- "代码"/"逻辑" → 重写代码节点的业务逻辑（LLM 生成新代码）
+- "prompt"/"提示词" → 修改 LLM 节点的 userPrompt/systemPrompt
+- "数据"/"常量" → 更新代码节点里的数据常量（如把用户提供的参考数据写入节点）
 - 其他 → 返回错误提示让 LLM 明确指令
 
 **实现**：基于 `WorkflowGenerator` 生成的 CozeWorkflow 结构，直接改对应节点的字段。改完返回完整 workflow + changes 列表。**本工具不调平台 API**（保存是 save_to_coze 的事）。
 
-### 6. interrupt 交互改造（合并输入框，方案 B）—— 附加任务
+### 5. interrupt 交互改造（合并输入框，方案 B）—— 附加任务
 
 **背景**：当前实现（Sprint C）里 AI 提问时弹独立回答卡片（chat-message-list.tsx 的 AnswerForm），卡片自带输入框，**没有上传文件按钮**；上传按钮只在底部主输入框（ChatInput）里。用户困惑该用哪个框，且需要传文件时无法在回答卡片里操作。
 
@@ -192,28 +177,31 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 - `react-agent.controller.ts` 的 `POST /api/agent/chat/resume`：body 增加可选 `fileIds?: string[]`（本次回答附带的上传文件）
 - `react-agent.service.ts` 的 `handleResume`：接收 `fileIds` 参数，把文件引用信息拼进 resume 的 answer 文本（如 `answer + "\n\n[用户上传了文件]\n- xxx (fileId: ...)"`），再 `Command({ resume })`——这样 LLM 能感知到回答时带了文件
-- 文件的实际解析（读内容）由 parse_table / parse_lyrics_library 负责，本任务只做到"传递 fileIds 引用"
+- 文件的实际读取由 read_file 负责，本任务只做到"传递 fileIds 引用"
 
 **验收（前端浏览器实测）**：
 - 发缺信息需求 → AI 提问 → 底部输入框变为"回复 AI 的问题"模式（有提示文案）→ 输入回答提交 → AI 继续执行 → 完成后输入框恢复普通模式
 - 回复模式下上传按钮可用，上传后提交，resume 请求体里带 fileIds
 
-### 7. 系统提示词更新（react-agent.service.ts 的 SYSTEM_PROMPT）
+### 6. 系统提示词更新（react-agent.service.ts 的 SYSTEM_PROMPT）
 
-更新「可用工具」列表为 9 个，并新增使用流程规则：
+更新「可用工具」列表为 8 个，并新增使用流程规则：
 
 ```
-## 工作流构建+验证流程（当用户提供答案表/歌词库时）
-1. 先调用 parse_table 解析答案表（拿到原始数据），parse_lyrics_library 解析歌词库
-2. LLM 根据表头推断输入列/期望输出列，不确定时 clarify_question 向用户确认
-3. plan_workflow 设计工作流（歌词库作为代码节点常量或 prompt 上下文）
+## 文件与验证流程（当用户上传文件或要求验证时）
+1. 用户上传文件 → 调用 read_file 读取内容（通用读取，不做业务假设）
+2. 根据用户需求 + 文件内容，判断：
+   - 文件是干什么的？（数据源？期望结果？参考文档？）
+   - 信息是否完整？是否还缺关键信息（如判断标准、字段含义、输出格式）？
+   - 不确定 → 调用 clarify_question 向用户询问
+3. LLM 完全理解需求后，再 plan_workflow 设计工作流
 4. generate_workflow 生成 → 检查 validation
 5. save_to_coze 保存 → 拿 workflowId
-6. batch_validate 批量试运行 → 看 accuracy
+6. batch_validate 批量试运行（cases 由 LLM 根据文件内容构造）→ 看 accuracy
 7. 若 accuracy < 100% 且迭代次数 < 3：
    分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
 8. 迭代 3 次仍 < 100%：向用户说明情况，或 clarify_question 索取信息，用户确认后继续
-9. 准确率 100%：总结交付（含最终 workflowId 和 accuracy）
+9. 验证通过：总结交付（含最终 workflowId 和 accuracy）
 ```
 
 ---
@@ -221,16 +209,16 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ## 四、验收标准
 
 1. `pnpm typecheck` 全绿；`pnpm build` 全绿
-2. **解析单测**（用 test-data 两个文件实测）：
-   - parse_table 解析 `test-data/singing-testset.xlsx` → 返回原始数据（columns=[url,song]，19 行，空行跳过）
-   - LLM 正确推断 url=输入列、song=期望输出列（可用一个模拟的"表头模糊"场景验证它会 clarify_question）
-   - parse_lyrics_library 解析 `test-data/song-lyrics.md` → 8 首歌，歌词无"参考歌词："前缀
+2. **read_file 通用读取实测**（用 test-data 两个文件）：
+   - 读取 `test-data/singing-testset.xlsx` → format=table，columns=[url,song]，19 行有效数据，空行跳过
+   - 读取 `test-data/song-lyrics.md` → format=text，content 含原文（不剥离任何前缀）
 3. **批量验证实测**（可选，依赖平台认证）：
-   - 用已保存的工作流 + 19 条用例跑 batch_validate → 返回 accuracy + details + failurePatterns
+   - 用已保存的工作流 + LLM 构造的用例跑 batch_validate → 返回 accuracy + details + failurePatterns
    - 若 COZE_SESSION_KEY 过期，返回明确错误信息（不是 500）
-4. **Agent 全链路**（curl 或前端）：给 Agent 一条消息包含"需求 + 答案表路径 + 歌词库路径"，观察它自动走完 parse → plan → generate → save → batch_validate →（迭代）→ 交付
-5. 旧功能不回归：5 个旧工具仍正常
-6. **合并输入框验收**（前端浏览器实测）：
+4. **Agent 全链路**（curl 或前端）：给 Agent 一条消息包含"需求 + 文件路径"，观察它自动走完 read_file → 理解/提问 → plan → generate → save → batch_validate →（迭代）→ 交付
+5. **缺信息提问实测**：给 Agent 一个模糊需求 + 一个不明确用途的文件，观察它会调用 clarify_question 询问文件用途/列含义，而不是瞎猜
+6. 旧功能不回归：5 个旧工具仍正常
+7. **合并输入框验收**（前端浏览器实测）：
    - 发缺信息需求 → AI 提问 → 底部输入框变为"回复 AI 的问题"模式（有提示文案）→ 输入回答提交 → AI 继续执行 → 完成后输入框恢复普通模式
    - 回复模式下上传按钮仍可用，上传后提交，resume 请求体里带 fileIds
 
@@ -242,7 +230,8 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 - ❌ 不删除旧链路（agents/graph.ts）
 - ❌ 不加 UI 相关依赖
 - ❌ 不把凭证写进代码（COZE_* 从 .env 读）
-- ❌ 不在答案表里处理负例（当前无负例，song 空时 expected=""，验证逻辑按"有期望值才算通过"）
+- ❌ **不做任何业务假设**：read_file 里禁止出现"歌曲""歌词""答案""url/song""《》"等业务相关解析逻辑（test-data 文件名可以出现，因为那是测试样本）
+- ❌ batch_validate 不解析文件（文件理解是 LLM 的事），只接收 LLM 构造好的 cases
 - ✅ 新工具全部走 try/catch 返回错误字符串（ReAct 铁律）
 - ✅ 工具用模块级单例（参考 save.tool.ts 的写法）
 
@@ -251,9 +240,9 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ## 六、实现顺序建议
 
 1. CozeClient 加 queryExecute（先探测平台接口路径，探测不到用兜底候选 + 降级）
-2. 装 xlsx 依赖，写 parse_table + parse_lyrics_library（纯本地，先单独验证）
+2. 装 xlsx 依赖，写 read_file（通用读取，先单独验证两个样本文件）
 3. 写 batch_validate（依赖 1，先串行跑通 3 个用例再全量）
 4. 写 update_workflow（基于规则修改）
-5. tools/index.ts 注册 4 个新工具 + SYSTEM_PROMPT 更新
+5. tools/index.ts 注册 3 个新工具 + SYSTEM_PROMPT 更新
 6. **合并输入框改造**（前端）：replyMode 状态机 + chat-input 双模式 + resume 接口支持 fileIds
 7. 全链路实测（用 test-data 两个文件 + 平台）
