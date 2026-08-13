@@ -192,7 +192,68 @@ const UpdateInstructionSchema = z.object({
 
 ---
 
-## 五、验收标准
+## 五、修复 4：平台事实注入（新增 get_platform_facts 工具 + 代码 schema 更新）
+
+**背景**：平台事实已沉淀在 `docs/coze-platform/platform-facts.md`（25 模型 + 3 数据库 + 44 节点类型），但 LLM 看不到这个文件——它生成节点时仍可能猜模型（gpt-4o）、臆造数据源、选错节点类型。需要让 LLM 在生成前能查到平台真实能力，并让代码 schema 默认值与平台一致。
+
+### ① 新增工具 get_platform_facts（apps/api/src/agent/tools/platform-facts.tool.ts）
+
+```ts
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+
+/** 平台事实常量：与 docs/coze-platform/platform-facts.md 同步维护 */
+const PLATFORM_FACTS = {
+  models: [
+    // 完整 25 个模型：{ name: "Doubao-Seed-2.0-Lite", modelType: 201, audio: true, image: true, video: true },
+    // ... 数据来自 platform-facts.md 第一节
+  ],
+  databases: [
+    { name: "vim_add_new_test", resId: "7647092935296548864" },
+    { name: "lhq_test", resId: "7620643189891792896" },
+    { name: "test_table", resId: "7587978700876939264" },
+  ],
+  nodeTypes: [
+    // 完整 44 种节点：{ type: "3", name: "大模型", desc: "..." },
+    // ... 数据来自 platform-facts.md 第三节
+  ],
+};
+
+export const getPlatformFactsTool = tool(
+  async () => {
+    // 返回平台事实 JSON（LLM 生成节点时参考）
+    return JSON.stringify(PLATFORM_FACTS, null, 2);
+  },
+  {
+    name: "get_platform_facts",
+    description:
+      "获取 Coze 平台真实可用能力清单：模型列表（含 audio_understanding 能力标记）、数据库列表（res_id）、节点类型列表。" +
+      "生成工作流前建议先调用本工具确认可用的模型和数据源：LLM 节点模型必须从 models 列表选择（音频任务选 audio=true 的）；" +
+      "database 节点必须用 databases 里的 resId；节点类型从 nodeTypes 选择。",
+    schema: z.object({}),
+  },
+);
+```
+
+**要点：**
+- 数据写进代码常量（不运行时读文件），与 platform-facts.md 同步维护（文档是给人看的，常量是给 LLM 用的）
+- 注册到 `tools/index.ts` 的 ALL_TOOLS，工具总数 +1
+- SYSTEM_PROMPT 使用规则增加一条："生成工作流前先调 get_platform_facts 确认可用模型和数据源"
+
+### ② 更新代码 schema 默认值（与平台事实一致）
+
+- **`packages/workflow-schema/src/templates/index.ts` 的 createLLMNode**：
+  - 默认 `config.model` 从 `gpt-4o` 改为 `Doubao-Seed-2.0-Lite`（**这是 gpt-4o 错误模型的源头之一，必须改**）
+  - 注释标注："模型必须来自 docs/coze-platform/platform-facts.md，默认 Doubao-Seed-2.0-Lite（modelType=201）"
+- **`packages/workflow-schema/src/types/index.ts` 的 LLMNode.config.model**：注释补充可用模型范围说明
+- **`apps/api/src/coze/schema-converter.ts`**：
+  - LLM 节点 `modelType` 默认 201、`modleName` 默认 Doubao-Seed-2.0-Lite（确认现状已是；generator 传错会覆盖，修复 generator 后自然正确）
+  - 注释补充"权威依据见 platform-facts.md"
+- **`apps/api/src/prompts/plan-prompt.ts`**：PLAN_PROMPT 增加平台约束段（模型选择规则 + 数据库使用规则），与 get_platform_facts 返回一致
+
+---
+
+## 六、验收标准
 
 1. `pnpm typecheck` 全绿；`pnpm build` 全绿
 2. **命名规则**：跑一次完整流程，平台上的工作流名称是英文（字母开头 + 字母数字下划线），不再是中文
@@ -207,7 +268,7 @@ const UpdateInstructionSchema = z.object({
 
 ---
 
-## 六、红线
+## 七、红线
 
 - ❌ 不改平台 API 调用方式（coze.client.ts 的 create/save/test_run 不动）
 - ❌ 不引入外部模型名（gpt-4o/claude 等一律不用，平台模型只有 Doubao-Seed-2.0-Lite）
