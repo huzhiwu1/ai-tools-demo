@@ -83,6 +83,27 @@ export function ChatMessageList({
           return null;
         }
 
+        // 固化的提问卡片：AI 咨询过的问题（回答后仍保留在消息流）
+        const msgData = msg.data as
+          | { type?: string; question?: string; context?: string }
+          | undefined;
+        if (msgData?.type === "question") {
+          return (
+            <div key={msg.id} className="msg-row msg-ai">
+              <div className="question-card">
+                <div className="question-card-header">
+                  <span className="question-icon">🤔</span>
+                  <span>AI 需要确认</span>
+                </div>
+                <p className="question-text">{msgData.question}</p>
+                {msgData.context && (
+                  <p className="question-context">{msgData.context}</p>
+                )}
+              </div>
+            </div>
+          );
+        }
+
         const isLast = index === messages.length - 1;
         const streaming = isLast && msg.role === "assistant" && isLoading;
 

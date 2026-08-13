@@ -27,8 +27,6 @@ interface Props {
   /** 当前 AI 问题摘要（reply 模式显示在输入框上方） */
   pendingQuestionText?: string;
   loading: boolean;
-  /** 排队中的消息数（LLM 思考时发送的消息） */
-  queuedCount?: number;
 }
 
 /** 上传图标（SVG 矢量，替代 emoji 保证各平台渲染一致） */
@@ -60,7 +58,6 @@ export function ChatInput({
   mode = "normal",
   pendingQuestionText,
   loading,
-  queuedCount = 0,
 }: Props) {
   const isReply = mode === "reply";
   const [files, setFiles] = useState<UploadedFileInfo[]>([]);
@@ -217,7 +214,7 @@ export function ChatInput({
             className="btn btn-primary"
             disabled={!input.trim() && files.length === 0}
           >
-            {isReply ? "回复" : "发送"}
+            {isReply ? "回复" : loading ? "打断并发送" : "发送"}
           </button>
         </form>
       </div>
@@ -225,8 +222,8 @@ export function ChatInput({
       <p className="input-hint">
         {isReply
           ? "正在回复 AI 的问题，上传按钮仍可用于提供补充文件"
-          : loading && queuedCount > 0
-            ? `AI 思考中，已排队 ${queuedCount} 条消息，完成后自动发送`
+          : loading
+            ? "AI 思考中… 发送新消息将打断当前思考"
             : "支持拖拽上传文件，发送后文件引用会附加到消息中"}
       </p>
     </div>

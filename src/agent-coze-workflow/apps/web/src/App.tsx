@@ -112,6 +112,7 @@ export default function App() {
     append,
     setMessages,
     isLoading,
+    stop,
   } = useChat({
     api: "/api/agent/chat",
     body: { sessionId },
@@ -168,9 +169,8 @@ export default function App() {
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [resuming, setResuming] = useState(false);
 
-  // 发送队列：LLM 思考/工具运行时用户发送的消息先排队，当前回复结束后自动发出
-  const pendingQueueRef = useRef<string[]>([]);
-  const [queuedCount, setQueuedCount] = useState(0);
+  // 打断能力：resume 请求的 AbortController（发送新消息时中断正在进行的 resume）
+  const resumeAbortRef = useRef<AbortController | null>(null);
 
   // 工具调用序号（tool_start 时递增）与 data 数组已处理位置
   const toolIdRef = useRef(0);
@@ -277,12 +277,24 @@ export default function App() {
       }
 
       case "interrupt": {
-        setPendingQuestion({
-          question: event.question ?? "请补充信息",
-          context: event.context,
-        });
+        const question = event.question ?? "请补充信息";
+        const context = event.context;
+        setPendingQuestion({ question, context });
         // 底部输入框切换为回复模式
         setReplyMode(true);
+        // 把问题固化到消息流（回答后仍保留，不会消失）
+        // 渲染时通过 data.type==="question" 显示提问卡片
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            data: { type: "question", question, context: context ?? null },
+          },
+        ]);
+        // 分段边界：封存当前文本分段
+        currentAssistantIdRef.current = null;
         break;
       }
 
@@ -320,15 +332,25 @@ export default function App() {
 
   /** 发送用户消息（文本已含文件引用），清空上一轮状态 */
   function handleSend(text: string) {
-    // LLM 思考/工具运行中 → 先排队，等当前回复结束后自动发送
+    // LLM 思考/工具运行中 → 打断当前思考，立即发送新消息
     if (busy) {
-      pendingQueueRef.current.push(text);
-      setQueuedCount(pendingQueueRef.current.length);
-      setInput("");
-      return;
+      interruptCurrent();
     }
 
     sendNewMessage(text);
+  }
+
+  /** 打断当前 AI 思考/工具执行（useChat 流 + resume 请求都中断） */
+  function interruptCurrent() {
+    // 中断 useChat 当前流（AI SDK v3 的 stop）
+    try {
+      stop();
+    } catch {
+      // stop 内部异常忽略（可能已结束）
+    }
+    // 中断正在进行的 resume 请求
+    resumeAbortRef.current?.abort();
+    resumeAbortRef.current = null;
   }
 
   /** 真正发送一条消息（重置上一轮状态） */
@@ -348,15 +370,6 @@ export default function App() {
     currentAssistantIdRef.current = null;
     append({ role: "user", content: text });
   }
-
-  // busy 从 true → false 时，自动发送排队中的消息（链式：一条完成自动发下一条）
-  useEffect(() => {
-    if (!busy && pendingQueueRef.current.length > 0) {
-      const next = pendingQueueRef.current.shift()!;
-      setQueuedCount(pendingQueueRef.current.length);
-      sendNewMessage(next);
-    }
-  }, [busy]);
 
   /**
    * 提交 AI 提问的回答（resume 流程，方案 A）
@@ -383,11 +396,14 @@ export default function App() {
     ]);
 
     setResuming(true);
+    const controller = new AbortController();
+    resumeAbortRef.current = controller;
     try {
       const response = await fetch("/api/agent/chat/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, answer, fileIds }),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -405,10 +421,16 @@ export default function App() {
         onEvent: (event) => handleDataEvent(event),
       });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setGlobalError(msg);
+      // 主动打断（用户发送新消息）不算错误，不弹提示
+      if (!controller.signal.aborted) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setGlobalError(msg);
+      }
     } finally {
       setResuming(false);
+      if (resumeAbortRef.current === controller) {
+        resumeAbortRef.current = null;
+      }
     }
   }
 
@@ -472,7 +494,6 @@ export default function App() {
             mode={replyMode ? "reply" : "normal"}
             pendingQuestionText={pendingQuestion?.question}
             loading={busy}
-            queuedCount={queuedCount}
           />
         </section>
 
