@@ -151,23 +151,6 @@ export function ChatMessageList({
         );
       })}
 
-      {/* AI 提问卡片：渲染在消息流末尾 */}
-      {pendingQuestion && (
-        <div className="msg-row msg-ai">
-          <div className="question-card">
-            <div className="question-card-header">
-              <span className="question-icon">🤔</span>
-              <span>AI 需要确认</span>
-            </div>
-            <p className="question-text">{pendingQuestion.question}</p>
-            {pendingQuestion.context && (
-              <p className="question-context">{pendingQuestion.context}</p>
-            )}
-            <p className="question-hint">请在下方输入框回复 AI 的问题</p>
-          </div>
-        </div>
-      )}
-
       {/* LLM 思考中：没有流式文本、没有工具调用、没有提问卡片时显示 */}
       {isLoading &&
         !pendingQuestion &&
