@@ -156,6 +156,11 @@ export interface HttpNode extends CozeNodeBase {
   body?: Record<string, unknown>;
   /** 输入变量映射 */
   inputMapping?: Record<string, string>;
+  /**
+   * 输出变量声明（平台要求，HTTP 节点固定输出 body/statusCode/headers）
+   * 缺了这个会导致结束节点引用不到正确的输出名
+   */
+  outputs?: Array<{ type?: string; name?: string; schema?: unknown }>;
 }
 
 /** 数据库查询节点 */

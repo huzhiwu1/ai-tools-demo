@@ -664,16 +664,40 @@ export function convertToPlatformSchema(
       if (node.type === "http") {
         // HTTP 请求节点（type 45）：结构对照平台样本 161311（2026-08-14 实测）
         // apiInfo/body/headers/params/auth/setting + 标准 outputs body/statusCode/headers
+        //
+        // 变量引用：URL 中用 {{变量名}} 引用上游输出（如 {{city}}），
+        // 同时通过 inputParameters 映射变量的实际来源
         const http = node as {
           method?: string;
           url?: string;
           headers?: Record<string, string>;
           body?: Record<string, unknown>;
+          inputMapping?: Record<string, string>;
         };
+
+        // 从 inputMapping 生成 inputParameters（允许 HTTP 节点引用上游变量）
+        const inputParameters = Object.entries(http.inputMapping ?? {}).map(
+          ([name, refExpr]) => {
+            const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+            if (match) {
+              return refInput(name, platformId(match[1]), match[2]);
+            }
+            return literal(name, "string", refExpr);
+          },
+        );
+
+        // 将 URL 中的 {var} 转换为 {{var}}（平台使用双花括号做变量替换）
+        // 只有匹配 inputMapping 中的变量名才转换，避免误伤 URL 中的 JSON 语法
+        const knownVars = Object.keys(http.inputMapping ?? {});
+        let url = http.url ?? "";
+        for (const v of knownVars) {
+          url = url.replaceAll(`{${v}}`, `{{${v}}}`);
+        }
+
         data.inputs = {
           apiInfo: {
             method: http.method ?? "GET",
-            url: http.url ?? "",
+            url,
           },
           body: {
             bodyType: "EMPTY", // 平台默认大写 EMPTY
@@ -708,6 +732,8 @@ export function convertToPlatformSchema(
             timeout: 120, // 秒
             retryTimes: 3,
           },
+          // inputParameters 让平台知道 URL 中的 {{city}} 来自 start 节点的哪个输出
+          ...(inputParameters.length > 0 ? { inputParameters } : {}),
         };
         // 标准输出：body / statusCode / headers（平台样本实测，不是 response）
         data.outputs = [

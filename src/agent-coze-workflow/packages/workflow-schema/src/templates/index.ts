@@ -148,7 +148,10 @@ export function createConditionNode(
 /** 创建 HTTP 请求节点 */
 export function createHttpNode(
   overrides: Partial<
-    Pick<HttpNode, "title" | "desc" | "method" | "url" | "headers" | "body">
+    Pick<
+      HttpNode,
+      "title" | "desc" | "method" | "url" | "headers" | "body" | "outputs"
+    >
   > = {},
 ): HttpNode {
   return {
@@ -161,6 +164,12 @@ export function createHttpNode(
     headers: overrides.headers,
     body: overrides.body,
     inputMapping: {},
+    // 平台 HTTP 节点固定输出：body/statusCode/headers（schema-converter 同步）
+    outputs: overrides.outputs ?? [
+      { type: "string", name: "body" },
+      { type: "integer", name: "statusCode" },
+      { type: "string", name: "headers" },
+    ],
     _temp: {
       bounds: { x: 360, y: 80, width: 180, height: 90 },
       externalData: {},
