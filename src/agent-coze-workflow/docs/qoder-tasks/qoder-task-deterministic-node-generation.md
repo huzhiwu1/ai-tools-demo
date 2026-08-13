@@ -4,13 +4,14 @@
 > 技术栈：NestJS 11 + LangGraph + pnpm workspace
 > **目标：彻底改变"LLM 发明节点结构"的现状。职责边界（用户明确要求，写进代码注释）：**
 >
-> **LLM 只做两件事：**
+> **LLM 只做这些事（职责边界，用户明确要求）：**
 > 1. 从需求中梳理出需要用什么节点（节点类型序列）
 > 2. 梳理出节点怎么连接（依赖关系/边）
+> 3. **确定每个节点的数据契约**：变量名、输入结构（接收哪些参数）、输出结构（输出哪些字段/类型）、单处理还是批处理（support_batch）
 >
-> **其余一切由代码完成：** 节点 schema 构造、inputMapping 自动生成、outputVariables 声明、条件分支 targetNodeId 回填、代码节点代码生成、模型选择（平台事实匹配）、prompt 文本（模板化生成）。
+> **其余一切由代码完成：** 完整工作流 JSON 组装、inputMapping 自动生成、outputVariables 声明、条件分支 targetNodeId 回填、代码节点代码生成、模型选择（平台事实匹配）、prompt 文本（模板化生成）。
 >
-> **LLM 输出极简化：只输出 `{ steps: [{ nodeType, description, dependencies }] }`，不输出任何节点 JSON、不输出 nodeConfig 业务细节。**
+> **保存到 Coze 前必须校验工作流 JSON**（结构校验 + 平台兼容性校验），校验不过不保存。
 
 ---
 
@@ -254,53 +255,106 @@ async generateCode(
 
 ---
 
-## 六、修复 5：LLM 工具契约极简化（职责边界的落地，用户明确要求）
+## 六、修复 5：LLM 输出数据契约，代码组装 JSON（职责边界落地）
 
-**用户原则：LLM 只从需求中梳理出"用什么节点 + 怎么连接"，其他一切由代码完成。**
+**用户原则：LLM 从需求中梳理——用什么节点 + 怎么连接 + 每个节点的数据契约（变量名/输入结构/输出结构/单批处理）；完整工作流 JSON 由代码组装；保存前先校验。**
 
-### 6.1 plan_workflow 输出极简化（workflow-engine/planner.ts + PLAN_PROMPT）
+### 6.1 plan_workflow 输出契约（workflow-engine/planner.ts + PLAN_PROMPT）
 
-**当前问题**：PLAN_PROMPT 要求 LLM 输出 nodeConfig（llm.model / llm.userPrompt / code.logicDescription / condition.branches / database.connectionId 等）——这违反职责边界，LLM 自由发挥这些业务细节导致幻觉（周杰伦歌词库、错误模型、错误顺序）。
+**当前问题**：PLAN_PROMPT 要求 LLM 输出 nodeConfig（llm.model / llm.userPrompt / code.logicDescription / condition.branches / database.connectionId 等）——LLM 自由发挥这些业务细节导致幻觉（周杰伦歌词库、错误模型、错误顺序）。
 
-**改法**：LLM 输出**只保留**：
+**改法**：LLM 输出**结构化数据契约**（不是节点 JSON，是节点的"接口定义"）：
 
 ```ts
-// WorkflowPlan 的 steps 极简化：
+// WorkflowPlan 的 steps：
 interface PlanStep {
   order: number;
   description: string;        // 节点职责描述（给代码生成 prompt/逻辑用）
   nodeType: WorkflowNodeType; // 节点类型
   dependencies: number[];     // 连接关系
+  /** 数据契约（LLM 确定，代码按此组装节点） */
+  contract?: {
+    /** 输入变量：该节点接收哪些参数（名称 + 来源说明） */
+    inputs?: Array<{ name: string; source: string }>;
+    /** 输出变量：该节点输出哪些字段（名称 + 类型） */
+    outputs?: Array<{ name: string; type: "string" | "object" | "list" | "integer" | "number" | "boolean" }>;
+    /** 单处理还是批处理 */
+    batchMode?: "single" | "batch";
+  };
 }
-// ❌ 删除 nodeConfig 字段（llm/code/condition/database/http 的细节不再由 LLM 提供）
+// ❌ 删除 nodeConfig 里的模型名/prompt 全文/代码/阈值/分支条件等业务细节
 ```
 
-- **PlanStep.nodeConfig 整个移除**（或保留为可选但 LLM 不填，代码忽略）
-- **PLAN_PROMPT 重写**：只要求 LLM 输出节点类型序列 + 依赖关系 + 每步简短 description（一句话说明该节点做什么，如"用多模态模型识别音频中的歌词"），**禁止输出模型名、prompt 全文、代码、阈值、分支条件等业务细节**
+**PLAN_PROMPT 重写要求**：
+- 节点类型序列 + 依赖关系 + 每步简短 description
+- **每个节点的数据契约**：输入变量名（如 user_input / audio_url）、输出变量名+类型（如 result: string）、单批处理
+- **禁止输出**：模型名、prompt 全文、代码、阈值、分支条件、节点 JSON 结构
 
-### 6.2 代码根据 description 推导业务细节（generator + 模板）
+### 6.2 代码根据契约 + description 组装节点（generator + 模板）
 
-节点业务内容由代码基于 `description` + 平台事实生成：
+节点业务内容由代码基于 `contract` + `description` + 平台事实生成：
 
+- **变量名/输出结构**：直接用 contract.inputs / contract.outputs 填充节点的 inputParameters / outputs 声明
 - **模型选择**：根据节点 description 判断任务类型——包含"音频/视频/识别/理解"等词 → 从 platform-facts 选 audio_understanding=true 的模型（默认 Doubao-Seed-2.0-Lite）；纯文本 → 默认 Doubao-Seed-2.0-Lite。**代码规则匹配，不靠 LLM 选**
 - **prompt 生成**：用模板基于 description 生成（如 `你是一个多模态识别助手。任务：${description}。请输出 JSON 格式结果。`），不靠 LLM 写全文
 - **代码节点逻辑**：description 作为 logicDescription 传给 CodeGenerator，**参考数据（歌词库等）由代码从用户上传文件读取后传入**，LLM 生成代码时必须保留参考数据（修复 3 已约束）
 - **条件分支**：根据 description 中出现的"如果/否则/判断/分支"语义，用代码生成默认分支结构（如"匹配成功 → true 分支 / 未匹配 → false 分支"），targetNodeId 由代码回填（修复 1.3）
+- **批处理**：contract.batchMode === "batch" → 节点标记批处理相关字段；否则单处理
 
 ### 6.3 shared 包类型同步（packages/shared/src/types/index.ts）
 
-- `WorkflowPlan` / `PlanStep` 类型更新：移除 nodeConfig 或标记 deprecated
+- `WorkflowPlan` / `PlanStep` 类型更新：移除 nodeConfig，新增 contract（或标记 deprecated）
 - 前端/其他引用处同步（若有）
 
 ### 6.4 验收
 
-- 给 Agent 需求后，LLM 只输出节点类型 + 连接 + 描述（无模型名/prompt/代码/阈值）
+- 给 Agent 需求后，LLM 只输出节点类型 + 连接 + description + 数据契约（无模型名/prompt/代码/阈值）
 - 生成的工作流仍包含完整业务逻辑（模型/prompt/代码由代码填充）
 - 不再出现"LLM 把歌词库改成周杰伦"这类幻觉
 
 ---
 
-## 七、验收标准
+## 七、修复 6：保存前校验工作流 JSON（save_to_coze 前置）
+
+**用户要求：保存到 Coze 前，先校验工作流 JSON，校验不过不保存。**
+
+### 文件：apps/api/src/agent/tools/save.tool.ts + workflow-engine/validator 增强
+
+**当前问题**：generate_workflow 已做本地 `validateWorkflow`（结构校验），但 save_to_coze 直接保存，未做**平台兼容性校验**——导致结构对但平台执行失败（如代码节点缺 outputs、条件 targetNodeId 为 TODO、LLM 节点模型不存在）。
+
+**改法**：save_to_coze 保存前增加两层校验，任一不过直接返回错误不调平台 API：
+
+```ts
+// save_to_coze 工具内，convertToPlatformSchema 之前：
+// 1. 结构校验（现有 validateWorkflow）
+const validation = validateWorkflow(cozeWorkflow);
+if (!validation.valid) {
+  return `保存失败: 工作流结构校验未通过，请先修复:\n${validation.errors.map(e => "- " + e.message).join("\n")}`;
+}
+
+// 2. 平台兼容性校验（新增，针对已知平台坑）
+const platformIssues = checkPlatformCompatibility(cozeWorkflow);
+if (platformIssues.length > 0) {
+  return `保存失败: 平台兼容性校验未通过:\n${platformIssues.join("\n")}`;
+}
+```
+
+**`checkPlatformCompatibility(workflow)` 检查项**（写进新文件 `workflow-engine/platform-validator.ts`）：
+1. 所有节点有 outputs 声明（code/llm 节点必须有，否则平台 SetOutputTypesForNodeSchema panic）
+2. condition 节点 branches 无 "TODO" targetNodeId（必须指向真实节点）
+3. LLM 节点 model 在 platform-facts 模型列表内（防 gpt-4o 等不存在模型）
+4. database 节点 connection 非空（为空说明不该有 database 节点）
+5. 所有边引用的节点 ID 存在（防悬空引用）
+6. start/end 节点存在且唯一
+
+**验收**：
+- 给一个结构不完整的工作流调 save_to_coze → 返回校验错误，不调平台 API（日志无 CozeAPI 请求）
+- 合法工作流 → 正常保存
+
+
+---
+
+## 八、验收标准
 
 1. `pnpm typecheck` 全绿；`pnpm build` 全绿
 2. **确定性生成实测**：给 Agent 一个"音频识别歌词→匹配歌曲"需求，检查生成的工作流 JSON：
@@ -316,7 +370,7 @@ interface PlanStep {
 
 ---
 
-## 八、红线
+## 九、红线
 
 - ❌ **LLM 永远不输出节点 JSON 结构**（generate_workflow 工具输入只有 plan 参数，没有 workflow JSON 让 LLM 改）
 - ❌ 不整体重写代码节点（除非有 referenceData 且明确要求）
