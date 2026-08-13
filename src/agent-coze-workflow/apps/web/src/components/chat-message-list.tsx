@@ -59,14 +59,19 @@ function ToolCard({ event }: { event: DataStreamEvent }) {
   }
   if (event.type === "tool_end") {
     const failed = isToolOutputFailed(event.output);
+    const outputText =
+      typeof event.output === "string"
+        ? event.output
+        : String(event.output ?? "");
     return (
-      <div
-        className={`msg-tool-card ${failed ? "tool-failed" : "tool-done"}`}
-        title={event.output}
-      >
+      <div className={`msg-tool-card ${failed ? "tool-failed" : "tool-done"}`}>
         <span className="tool-icon">{failed ? "⚠️" : "✓"}</span>
         <span className="tool-name">{toolLabel(event.name ?? "unknown")}</span>
         <span className="tool-status">{failed ? "失败" : "完成"}</span>
+        {/* 失败时直接展示错误内容（不再只放在 title 悬停里） */}
+        {failed && outputText && (
+          <div className="tool-error-detail">{outputText}</div>
+        )}
       </div>
     );
   }

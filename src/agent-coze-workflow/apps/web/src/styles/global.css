@@ -741,6 +741,7 @@ body {
 .msg-tool-card {
   display: flex;
   align-items: center;
+
   gap: 8px;
   padding: 8px 12px;
   border-radius: 12px;
@@ -794,6 +795,27 @@ body {
 
 .tool-failed .tool-status {
   color: var(--color-danger);
+}
+
+/* 工具失败详情：直接展示错误内容，可换行，超高滚动 */
+.tool-error-detail {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 77, 79, 0.08);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-danger);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.msg-tool-card {
+  flex-wrap: wrap;
 }
 
 /* 空状态 */
