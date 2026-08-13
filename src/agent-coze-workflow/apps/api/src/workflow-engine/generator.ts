@@ -453,6 +453,13 @@ export class WorkflowGenerator {
         const cfg = step.nodeConfig?.llm;
         const contract = step.contract;
 
+        // 优先用 contract.outputs 作为输出声明（LLM 规划的数据契约）
+        const outputs = contract?.outputs?.map((o) => ({
+          type: o.type,
+          name: o.name,
+          schema: {},
+        }));
+
         // 当 contract 存在且无 nodeConfig 时，基于 description 代码式生成（LLM 不输出业务细节）
         if (contract && !cfg) {
           const desc = step.description;
@@ -468,6 +475,7 @@ export class WorkflowGenerator {
             ...baseOverrides,
             userPrompt,
             config: { model, temperature: 0.2, maxTokens: 4096 },
+            outputs,
           });
         }
 
@@ -481,6 +489,7 @@ export class WorkflowGenerator {
             temperature: 0.2,
             maxTokens: 4096,
           },
+          outputs,
         });
       }
       case "code": {

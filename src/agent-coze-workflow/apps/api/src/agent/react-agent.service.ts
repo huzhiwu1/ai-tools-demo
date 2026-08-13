@@ -87,7 +87,7 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
    - 信息是否完整？是否还缺关键信息（如判断标准、字段含义、输出格式）？
    - 不确定 → 调用 clarify_question 向用户询问
 3. 完全理解需求后，再 plan_workflow 设计工作流
-4. generate_workflow 生成 → 检查 validation
+4. generate_workflow 生成 → 检查 validation。⚠️ 若文件内容是需要内嵌到工作流的参考数据（如歌词库、歌曲列表、常量表），必须将文件内容作为 referenceData 参数传入 generate_workflow（格式：{歌名/键: 内容}），禁止编造或省略——否则代码节点会凭空生成错误数据
 5. save_to_coze 保存 → 拿 workflowId
 6. batch_validate 批量试运行（cases 由 LLM 根据文件内容构造）→ 看 accuracy
 7. 若 accuracy < 100%：分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate

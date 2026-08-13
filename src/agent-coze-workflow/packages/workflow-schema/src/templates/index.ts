@@ -67,7 +67,10 @@ export function createEndNode(outputs?: EndNode["outputVariables"]): EndNode {
  */
 export function createLLMNode(
   overrides: Partial<
-    Pick<LLMNode, "title" | "desc" | "userPrompt" | "systemPrompt" | "config">
+    Pick<
+      LLMNode,
+      "title" | "desc" | "userPrompt" | "systemPrompt" | "config" | "outputs"
+    >
   > = {},
 ): LLMNode {
   return {
@@ -84,6 +87,10 @@ export function createLLMNode(
     userPrompt: overrides.userPrompt ?? "{{input}}",
     systemPrompt: overrides.systemPrompt,
     inputMapping: {},
+    // 平台要求 LLM 节点必须有 outputs 声明，缺失导致保存失败
+    outputs: overrides.outputs ?? [
+      { type: "string", name: "output", schema: {} },
+    ],
     _temp: {
       bounds: { x: 360, y: 80, width: 180, height: 90 },
       externalData: {},
