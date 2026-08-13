@@ -95,11 +95,23 @@ export class WorkflowPlanner {
         : "";
     const description = input.goal + constraintsSuffix;
 
-    // steps：按建议顺序构建
+    // steps：按 LLM 输出的 contracts 顺序构建（非固定模板）
+    // LLM 的 contracts 数组已经隐含了执行顺序（如：llm→code→condition）
     const steps: PlanStep[] = [];
     let order = 0;
 
-    // 准备数据契约索引：按 database→code→condition→llm 顺序
+    // 1. start — 接收用户输入
+    order++;
+    steps.push({
+      order,
+      description: "接收用户输入",
+      nodeType: "start",
+      dependencies: [],
+    });
+    const startOrder = order;
+
+    // 收集所有需要的节点类型（按 LLM 规划的 contracts 顺序）
+    // contracts 顺序 = 实际执行顺序（如 llm→code→condition）
     const contracts = input.contracts ?? [];
     let contractIndex = 0;
 
@@ -118,81 +130,70 @@ export class WorkflowPlanner {
       return undefined;
     };
 
-    // 1. start — 接收用户输入
-    order++;
-    steps.push({
-      order,
-      description: "接收用户输入",
-      nodeType: "start",
-      dependencies: [],
-    });
-    const startOrder = order;
+    // 构建可选节点列表（按 LLM 规划的 contracts 顺序）
+    // 注意：LLM 的 nodeConfig 中的字段顺序（llm/code/condition/database）
+    // 反映的是 LLM 期望的执行顺序，但 contracts 更准确
+    // 这里我们按 contracts 顺序 + nodeConfig 字段匹配来构建
+    const orderedTypes: string[] = [];
+    const typeMap: Record<string, string> = {
+      llm: "llm",
+      code: "code",
+      condition: "condition",
+      database: "database_query",
+    };
 
-    // 2. database_query — 查询数据（条件性）
-    if (input.needDatabaseNode) {
-      order++;
-      steps.push({
-        order,
-        description: "查询数据库获取相关数据",
-        nodeType: "database_query",
-        dependencies: [startOrder],
-        contract: nextContract(),
-        nodeConfig: input.nodeConfig?.database
-          ? { database: input.nodeConfig.database }
-          : undefined,
-      });
+    // 用 contracts 数量决定类型顺序（比固定模板灵活）
+    // 当 LLM 输出 3 个 contracts 且 needCodeNode+needBranch+llm 时：
+    // contracts 顺序 = llm→code→condition
+    // 但我们需要确定哪个 contract 对应哪个类型
+    // 方案：用 nodeConfig 的键顺序匹配 contracts 顺序
+    const configKeys = Object.keys(input.nodeConfig ?? {});
+    if (configKeys.length > 0) {
+      // 用 nodeConfig 的键顺序决定类型顺序
+      for (const key of configKeys) {
+        if (typeMap[key]) {
+          orderedTypes.push(typeMap[key]);
+        }
+      }
+    } else {
+      // 兜底：按布尔标志决定（旧逻辑）
+      if (input.needDatabaseNode) orderedTypes.push("database_query");
+      if (input.needCodeNode) orderedTypes.push("code");
+      if (input.needBranch) orderedTypes.push("condition");
+      orderedTypes.push("llm");
     }
 
-    // 3. code — 数据处理（条件性）
-    if (input.needCodeNode) {
+    // 按 orderedTypes 创建步骤，依赖链为串联
+    let prevOrder = startOrder;
+    for (const nodeType of orderedTypes) {
       order++;
+
+      // 从 nodeConfig 取对应配置
+      const configKey = Object.keys(typeMap).find(
+        (k) => typeMap[k] === nodeType,
+      );
+      const cfg = configKey
+        ? input.nodeConfig?.[configKey as keyof typeof input.nodeConfig]
+        : undefined;
+
       steps.push({
         order,
-        description: "执行代码逻辑处理数据",
-        nodeType: "code",
-        dependencies: [order - 1],
+        description: this.defaultDescForType(nodeType),
+        nodeType: nodeType as WorkflowNodeType,
+        dependencies: [prevOrder],
         contract: nextContract(),
-        nodeConfig: input.nodeConfig?.code
-          ? { code: input.nodeConfig.code }
-          : undefined,
+        nodeConfig: cfg ? ({ [configKey!]: cfg } as any) : undefined,
       });
+      prevOrder = order;
     }
 
-    // 4. condition — 条件分支（条件性）
-    if (input.needBranch) {
-      order++;
-      steps.push({
-        order,
-        description: "根据条件进行分支判断",
-        nodeType: "condition",
-        dependencies: [order - 1],
-        contract: nextContract(),
-        nodeConfig: input.nodeConfig?.condition
-          ? { condition: input.nodeConfig.condition }
-          : undefined,
-      });
-    }
-
-    // 5. llm — 核心处理（必须）
-    order++;
-    steps.push({
-      order,
-      description: "使用大模型进行核心推理",
-      nodeType: "llm",
-      dependencies: [order - 1],
-      contract: nextContract(),
-      nodeConfig: input.nodeConfig?.llm
-        ? { llm: input.nodeConfig.llm }
-        : undefined,
-    });
-
-    // 6. end — 返回结果
+    // end — 返回结果
     order++;
     steps.push({
       order,
       description: "返回最终结果",
       nodeType: "end",
-      dependencies: [order - 1],
+      dependencies: [prevOrder],
     });
 
     // modules：steps 里 nodeType 去重
@@ -227,5 +228,21 @@ export class WorkflowPlanner {
       modules,
       estimatedComplexity,
     };
+  }
+
+  /**
+   * 根据节点类型返回默认描述（当 LLM 未提供具体描述时使用）
+   */
+  private defaultDescForType(type: string): string {
+    const descs: Record<string, string> = {
+      llm: "使用大模型进行核心推理",
+      code: "执行代码逻辑处理数据",
+      condition: "根据条件进行分支判断",
+      database_query: "查询数据库获取相关数据",
+      http: "发送 HTTP 请求",
+      text: "文本处理",
+      merge: "变量聚合",
+    };
+    return descs[type] ?? `执行 ${type} 处理`;
   }
 }

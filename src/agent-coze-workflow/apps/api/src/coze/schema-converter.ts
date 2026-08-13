@@ -64,6 +64,19 @@ function nodeColor(type: CozeNode["type"]): string {
 }
 
 /**
+ * 模型名 → modelType 映射（由调用方动态传入，见 save.tool.ts）
+ *
+ * 不在 converter 内硬编码模型表：模型列表可能变更，
+ * 应由 get_model_list 接口动态拉取（CozeClient.listModels）。
+ * 查不到时默认 201（Doubao-Seed-2.0-Lite）。
+ */
+function modelTypeFor(modelName: string | undefined, map?: Record<string, number>): number {
+  if (!modelName) return 201;
+  if (map && map[modelName]) return map[modelName];
+  return 201;
+}
+
+/**
  * 构造平台字面量输入项（llmParam 等用）
  *
  * rawMeta.type：1=string 2=integer 3=boolean 4=float
@@ -115,9 +128,13 @@ function refInput(
  * 将 CozeWorkflow 转为平台内部 schema JSON 字符串
  *
  * @param workflow - 项目的 CozeWorkflow（含 nodes / edges）
+ * @param modelTypeMap - 模型名 → modelType 映射（动态拉取自 get_model_list，可省略）
  * @returns 平台 save 接口所需的 schema JSON 字符串
  */
-export function convertToPlatformSchema(workflow: CozeWorkflow): string {
+export function convertToPlatformSchema(
+  workflow: CozeWorkflow,
+  modelTypeMap?: Record<string, number>,
+): string {
   // ID 重映射：平台约定 start=100001, end=900001
   const idMap = new Map<string, string>();
   for (const node of workflow.nodes) {
@@ -228,7 +245,11 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
         data.inputs = {
           inputParameters,
           llmParam: [
-            literal("modelType", "integer", "201"),
+            literal(
+              "modelType",
+              "integer",
+              String(modelTypeFor(llm.config?.model, modelTypeMap)),
+            ),
             literal(
               "modleName",
               "string",
@@ -337,9 +358,31 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
       if (node.type === "condition") {
         // 选择器节点（type 8）：branches → 平台条件结构
         // 平台条件：logic 2=AND；operator 11=布尔为真
+        //
+        // 关键：left 引用必须指向上游节点的输出（不是写死的 start 100001）！
+        // 上游 = edges 中指向本 condition 节点的 source 节点。
         const condition = node as {
           branches?: Array<{ expression?: string }>;
         };
+
+        // 找上游节点：edges 里 targetNodeId === 本节点 的 source
+        const upstreamEdge = workflow.edges.find(
+          (e) => e.targetNodeId === node.id,
+        );
+        const upstreamNode = upstreamEdge
+          ? workflow.nodes.find((n) => n.id === upstreamEdge.sourceNodeId)
+          : undefined;
+        // 上游输出名：取第一个 outputs 声明的 name（start 为 "input"）
+        const upstreamOutputName =
+          upstreamNode?.type === "start"
+            ? "input"
+            : (upstreamNode as unknown as {
+                outputs?: Array<{ name?: string }>;
+              })?.outputs?.[0]?.name ?? "output";
+        const upstreamPlatformId = upstreamNode
+          ? (idMap.get(upstreamNode.id) ?? upstreamNode.id)
+          : "100001";
+
         data.inputs = {
           branches: (condition.branches ?? []).map((branch) => ({
             condition: {
@@ -354,8 +397,8 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
                         type: "ref",
                         content: {
                           source: "block-output",
-                          blockID: "100001",
-                          name: "input",
+                          blockID: upstreamPlatformId,
+                          name: upstreamOutputName,
                         },
                       },
                     },

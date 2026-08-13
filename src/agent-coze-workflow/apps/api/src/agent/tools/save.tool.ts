@@ -99,7 +99,23 @@ export const saveToCozeTool = tool(
         return `保存失败: 平台兼容性校验未通过:\n${compatResult.errors.join("\n")}`;
       }
 
-      const schemaJson = convertToPlatformSchema(cozeWorkflow);
+      // 动态拉取模型列表，构建 模型名 → modelType 映射（不硬编码，模型可能变更）
+      let modelTypeMap: Record<string, number> | undefined;
+      try {
+        const models = await cozeClient.listModels();
+        if (models.length > 0) {
+          modelTypeMap = Object.fromEntries(
+            models.map((m) => [m.name, m.modelType]),
+          );
+        }
+      } catch {
+        // 拉取失败不阻塞保存：converter 内部查不到时默认 201
+      }
+
+      const schemaJson = convertToPlatformSchema(
+        cozeWorkflow,
+        modelTypeMap,
+      );
       // 创建时遇"名称已存在"自动加后缀重试（_2/_3/_4）
       const { workflowId, usedName } = await createWorkflowWithRetry(
         cozeWorkflow.meta.name,

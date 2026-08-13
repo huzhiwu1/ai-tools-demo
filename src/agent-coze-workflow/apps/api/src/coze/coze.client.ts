@@ -265,9 +265,12 @@ export class CozeClient {
       model_list: Array<{
         model_name: string;
         model_type: number;
-        audio_understanding: boolean;
-        image_input: boolean;
-        video_input: boolean;
+        // 能力标记在 model_ability 对象里（实测 2026-08-14）
+        model_ability?: {
+          audio_understanding?: boolean;
+          image_understanding?: boolean;
+          video_understanding?: boolean;
+        };
       }>;
     }>(
       "bot/get_model_list",
@@ -281,9 +284,9 @@ export class CozeClient {
     return (res.data.model_list ?? []).map((m) => ({
       name: m.model_name,
       modelType: m.model_type,
-      audio: m.audio_understanding ?? false,
-      image: m.image_input ?? false,
-      video: m.video_input ?? false,
+      audio: m.model_ability?.audio_understanding ?? false,
+      image: m.model_ability?.image_understanding ?? false,
+      video: m.model_ability?.video_understanding ?? false,
     }));
   }
 

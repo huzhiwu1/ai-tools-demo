@@ -23,8 +23,7 @@
  * 3. 按 dependencies 创建 edges
  * 4. buildInputMapping — 自动生成所有节点的 inputMapping
  * 5. 第 2 遍遍历 code 节点：用真实 inputNames + logicDescription 生成代码
- * 6. fillConditionTargets — 回填 branches 的 targetNodeId
- * 7. fillConditionEdges — 为条件节点补齐 N 条分支边（每条边带 sourcePort）
+ * 6. createConditionEdges — 为条件节点创建所有分支边 + else 边（带正确的 sourcePortID）
  *
  * 关键细节：
  * - LLM 生成代码失败时降级为可运行模板（CodeGenerator.buildFallbackCode）
@@ -149,79 +148,75 @@ function buildInputMapping(
 }
 
 /**
- * 回填 condition 节点 branches 的 targetNodeId
- *
- * 规则：condition 节点有 N 个分支时，第 i 个分支指向 edges 中
- * 从该 condition 出发的第 i 条边的 target（无出边则指向 end "900001"）。
- *
- * 关键：生成该函数必须在 edges 全部创建完毕后调用。
- */
-function fillConditionTargets(nodes: CozeNode[], edges: CozeEdge[]): void {
-  for (const node of nodes) {
-    if (node.type !== "condition") continue;
-    const outgoing = edges.filter((e) => e.sourceNodeId === node.id);
-    const branches =
-      (node as CozeNode & { branches?: Array<{ targetNodeId?: string }> })
-        .branches ?? [];
-    for (let i = 0; i < branches.length; i++) {
-      branches[i].targetNodeId = outgoing[i]?.targetNodeId ?? "900001"; // 兜底 end
-    }
-  }
-}
-
-/**
  * 确定条件节点第 index 个分支的端口名
  *
- * 平台选择器端口命名规则（validate_tree 报错实测）：
- * - 2 分支：true, false
- * - 3 分支：true, true_1, false
- * - 4 分支：true, true_1, true_2, false
- * - N 分支：true, true_1, ..., true_(N-2), false
+ * 端口命名规则（validate_tree 报错实测 + platform 源码 branch_schema.go 确认）：
+ * - 条件分支：true（第1个），true_1（第2个），true_2（第3个），...
+ * - 否则/else：false（自动生成，需连到 end 节点）
+ * - 异常分支：branch_error（一般不使用）
+ *
+ * 参考：https://github.com/coze-dev/coze-studio/blob/main/backend/domain/workflow/internal/schema/branch_schema.go
  */
-function determinePortName(index: number, total: number): string {
-  if (total === 2) {
-    return index === 0 ? "true" : "false";
-  }
+function conditionBranchPort(index: number): string {
   if (index === 0) return "true";
-  if (index === total - 1) return "false";
   return `true_${index}`;
 }
 
 /**
- * 为条件节点补齐 N 条分支边（每条边对应一个端口）
+ * 为条件节点创建所有分支边 + else 边
  *
- * 问题：条件节点有 N 个分支，但依赖树只生成 K 条出边（K < N 时
- * N-K 个端口未连接，平台 validate_tree 会报 "port not connected"）。
+ * 问题：依赖树只生成 1 条边（condition → end），但平台要求每个分支
+ * 都有自己的边（带 sourcePortID），否则 validate_tree 报端口未连接。
  *
- * 规则（必须在 fillConditionTargets 之后调用，branches 已回填 target）：
- * - 已有边补 sourcePort（依赖树生成的边没有端口信息）
- * - 已有边数 < 分支数：补充缺失的边，指向 branches[i].targetNodeId
+ * 规则：
+ * - 为每个条件分支创建一条边，端口为 "true", "true_1", "true_2", ...
+ * - 为 else/default 创建一条边，端口为 "false"，指向 end 节点
+ * - 所有边汇聚到同一个 end 节点（平台只允许一个 end）
  *
- * 注：已有边数 > 分支数（多个下游依赖同一 condition 分支）属罕见场景，
- * 此时多余边不带 sourcePort，交由 validate_tree 暴露。
+ * 区别于 fillConditionTargets(旧)：旧函数只在 branches 上设置 targetNodeId
+ * 但不创建边。新函数直接创建带端口的边，让 validate_tree 通过。
+ *
+ * @param endNodeId - 所有分支汇聚的 end 节点 ID
  */
-function fillConditionEdges(nodes: CozeNode[], edges: CozeEdge[]): void {
+function createConditionEdges(
+  nodes: CozeNode[],
+  edges: CozeEdge[],
+  endNodeId: string,
+): void {
   for (const node of nodes) {
     if (node.type !== "condition") continue;
     const branches =
       (node as CozeNode & { branches?: Array<{ targetNodeId?: string }> })
         .branches ?? [];
-    const outgoing = edges.filter((e) => e.sourceNodeId === node.id);
 
-    // 已有边补 sourcePort（依赖树生成的边没有端口，平台要求每条边带 sourcePortID）
-    for (let i = 0; i < outgoing.length && i < branches.length; i++) {
-      outgoing[i].sourcePort = determinePortName(i, branches.length);
+    // 删除旧的依赖树边（condition → end），因为我们要重新创建
+    const oldEdges = edges.filter((e) => e.sourceNodeId === node.id);
+    for (const old of oldEdges) {
+      const idx = edges.indexOf(old);
+      if (idx >= 0) edges.splice(idx, 1);
     }
 
-    // 已有边数 < 分支数：补充缺失的边，每条边对应一个分支
-    for (let i = outgoing.length; i < branches.length; i++) {
+    // 为每个条件分支创建一条边
+    for (let i = 0; i < branches.length; i++) {
+      const target = branches[i].targetNodeId;
+      // targetNodeId 可能是 "TODO" 占位符，视为未设置，汇聚到 end
+      const resolvedTarget =
+        target && target !== "TODO" ? target : endNodeId;
       edges.push({
         id: generateId(),
         sourceNodeId: node.id,
-        targetNodeId: branches[i].targetNodeId ?? "900001", // 兜底 end
-        sourcePort: determinePortName(i, branches.length),
+        targetNodeId: resolvedTarget,
+        sourcePort: conditionBranchPort(i),
       });
     }
+
+    // 为 else/default 创建一条边，指向 end
+    edges.push({
+      id: generateId(),
+      sourceNodeId: node.id,
+      targetNodeId: endNodeId,
+      sourcePort: "false",
+    });
   }
 }
 
@@ -324,7 +319,7 @@ export class WorkflowGenerator {
    * - 生成 edges
    * - buildInputMapping + 填充 inputMapping
    * - 第 2 遍：为 code 节点用真实 inputNames 重新生成代码
-   * - fillConditionTargets（回填 branches targetNodeId）
+   * - createConditionEdges（为条件节点创建所有分支边 + else 边）
    */
   private async buildWorkflow(
     plan: WorkflowPlan,
@@ -411,11 +406,10 @@ export class WorkflowGenerator {
       (node as unknown as Record<string, unknown>).language = "python";
     }
 
-    // 回填 condition 节点 branches 的 targetNodeId（没有 TODO）
-    fillConditionTargets(cozeNodes, edges);
-
-    // 为条件节点补齐 N 条分支边（每条边对应一个端口，避免 validate_tree 报端口未连接）
-    fillConditionEdges(cozeNodes, edges);
+    // 为条件节点创建所有分支边 + else 边（带正确的 sourcePortID，避免 validate_tree 报端口未连接）
+    const endNode = cozeNodes.find((n) => n.type === "end");
+    const endNodeId = endNode?.id ?? "900001";
+    createConditionEdges(cozeNodes, edges, endNodeId);
 
     return {
       meta: {
@@ -438,7 +432,7 @@ export class WorkflowGenerator {
    * code 节点在第 2 遍用真实 inputNames + CodeGenerator 重新生成代码，
    * 第 1 遍仅创建骨架（code 用兜底占位），确保 orderToId 可映射。
    *
-   * condition 节点 branches 的 targetNodeId 由 fillConditionTargets 回填。
+   * condition 节点 branches 的 targetNodeId 由 createConditionEdges 回填。
    */
   private async createNodeForStep(
     step: PlanStep,
