@@ -141,10 +141,47 @@ event: error           → 异常（data: { message }）
 
 ### 5. 其余 4 个工具（薄封装，复用现有逻辑）
 
-- `plan_workflow({ requirement })` → `new WorkflowPlanner(...)` 注入方式：**工具文件里直接 new**（和 NestJS DI 解耦，简单可靠），从 .env 读 key；输出 `plan`（WorkflowPlan）
-- `generate_workflow({ plan })` → `new WorkflowGenerator().generateWorkflow(plan)`，输出 workflow；**返回前先跑 `validateWorkflow(workflow)`**，若 invalid 把 errors 附在输出里（`{ workflow, validation }`）
-- `save_to_coze({ workflow })` → `new CozeClient(config)` + `convertToPlatformSchema(workflow)` → `createWorkflow` + `saveWorkflow`，输出 `{ workflowId, saved: true }`（复用 mcp/cozeClient.ts 的 CozeClient，从 .env 读 COZE_* 配置）
+**⚠️ 所有工具使用模块级单例，不要在工具函数内 new！**（避免每次调用重建 ChatOpenAI/CozeClient 连接池）
+
+```ts
+// ✅ 推荐：模块顶层创建单例（文件加载时执行，晚于 main.ts 的 dotenv.config，env 已就绪）
+const planner = new WorkflowPlanner();          // 内部 new DeepSeekClient()，无状态，可安全共享
+const generator = new WorkflowGenerator();      // 无状态
+const cozeClient = new CozeClient({             // 内部管理锁状态，save 前自动 ensureLock
+  baseUrl: process.env.COZE_API_BASE_URL ?? "",
+  sessionKey: process.env.COZE_SESSION_KEY ?? "",
+  spaceId: process.env.COZE_SPACE_ID ?? "",
+});
+
+// ❌ 不要：const workflowId = await new CozeClient(config).createWorkflow(...)
+```
+
+- `plan_workflow({ requirement })` → `planner.plan(...)`，输出 `plan`（WorkflowPlan）
+- `generate_workflow({ plan })` → `generator.generateWorkflow(plan)`，输出 workflow；**返回前先跑校验**，`validateWorkflow` 必须从 `@coze-workflow/workflow-schema` 导入（**不要从 apps/api/src/validator/ 导入**，那是 TODO 空壳）：`import { validateWorkflow } from "@coze-workflow/workflow-schema";`；若 invalid 把 errors 附在输出里（`{ workflow, validation }`）
+- `save_to_coze({ workflow })` → `convertToPlatformSchema(workflow)`（从 `../mcp/schema-converter` 导入）→ `cozeClient.createWorkflow` + `saveWorkflow`，输出 `{ workflowId, saved: true }`
 - `test_run_workflow({ workflowId, input })` → `cozeClient.testRun(workflowId, input)`，输出 `{ executeId }`
+
+**⚠️ 所有工具函数必须 try/catch，错误以友好字符串返回给 LLM（不要抛异常）**：
+
+```ts
+export const saveToCozeTool = tool(
+  async ({ workflow }) => {
+    try {
+      const schemaJson = convertToPlatformSchema(workflow as unknown as CozeWorkflow);
+      const workflowId = await cozeClient.createWorkflow(
+        workflow.meta.name,
+        workflow.meta.description,
+      );
+      await cozeClient.saveWorkflow(workflowId, schemaJson);
+      return `工作流已保存到 Coze 平台，workflowId: ${workflowId}`;
+    } catch (e) {
+      // 返回错误文本而非抛异常：LLM 能看到错误并决定下一步（重试/换方案/告知用户）
+      return `保存失败: ${(e as Error).message}`;
+    }
+  },
+  { name: "save_to_coze", description: "...", schema: z.object({ ... }) },
+);
+```
 
 **工具 schema 用 zod 定义**，description 写清楚（Agent 靠 description 决定何时调用，写详细！）。
 
@@ -177,6 +214,7 @@ interface Session {
    预期：依次看到 `event: tool_start`(plan_workflow) → `event: tool_end` → `event: message` → `event: done`
 4. **澄清测试**：发消息 `"帮我做一个判断音频是否训练营歌曲的工作流"`（故意缺歌曲库/输出格式信息）
    预期：Agent 调用 clarify_question → SSE 收到 `event: interrupt` 带问题 → 调 resume 接口带回答 → 继续执行直到 done
+   **⚠️ interrupt 实测确认**：createReactAgent 遇到 interrupt() 时 streamEvents 正常结束流（不抛异常），interrupt 值通过 `graph.getState(config)` 读取（next 数组 / interrupt 字段）——**实现时务必实测验证这个行为**，若与预期不符（如流抛异常或拿不到 interrupt 值），调整事件发送逻辑并记录实际行为
 5. **全链路测试**：连续对话让 Agent 完成 plan → generate → save_to_coze，返回真实 workflowId（Coze 平台能看到新工作流）
 6. 现有功能不回归：`POST /workflow/run`（旧链路）仍正常
 
