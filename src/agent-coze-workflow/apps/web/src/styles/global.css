@@ -717,6 +717,26 @@ body {
   color: var(--color-text-secondary, #999);
 }
 
+/* 思考内容（DeepSeek reasoning_content 流式显示） */
+.thinking-label {
+  font-size: 12px;
+  color: var(--color-text-secondary, #999);
+  margin-bottom: 6px;
+}
+
+.thinking-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary, #888);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  border-left: 2px solid var(--color-border, #eee);
+  padding-left: 10px;
+  margin-bottom: 4px;
+}
+
 /* 工具调用卡片（消息流内） */
 .msg-tool-card {
   display: flex;

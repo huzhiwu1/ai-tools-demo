@@ -24,6 +24,26 @@ interface Props {
   messages: ChatMessage[];
   isLoading: boolean;
   pendingQuestion: { question: string; context?: string } | null;
+  /** 当前 LLM 思考内容（reasoning_delta 累积），思考气泡内流式显示 */
+  reasoningText?: string;
+}
+
+/** 工具名 → 中文显示名（让用户看懂 AI 正在做什么） */
+const TOOL_LABELS: Record<string, string> = {
+  clarify_question: "询问补充信息",
+  read_file: "读取文件",
+  plan_workflow: "规划工作流",
+  generate_workflow: "生成工作流",
+  save_to_coze: "保存到平台",
+  test_run_workflow: "试运行工作流",
+  batch_validate: "批量验证",
+  update_workflow: "更新工作流",
+  rename_workflow: "重命名工作流",
+};
+
+/** 工具名 → 中文显示名（未知工具回退原名） */
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] ?? name;
 }
 
 /** 工具卡片：按 data 事件类型渲染 */
@@ -32,7 +52,7 @@ function ToolCard({ event }: { event: DataStreamEvent }) {
     return (
       <div className="msg-tool-card tool-running">
         <span className="tool-icon">🔧</span>
-        <span className="tool-name">{event.name ?? "unknown"}</span>
+        <span className="tool-name">{toolLabel(event.name ?? "unknown")}</span>
         <span className="tool-status">运行中…</span>
       </div>
     );
@@ -45,7 +65,7 @@ function ToolCard({ event }: { event: DataStreamEvent }) {
         title={event.output}
       >
         <span className="tool-icon">{failed ? "⚠️" : "✓"}</span>
-        <span className="tool-name">{event.name ?? "unknown"}</span>
+        <span className="tool-name">{toolLabel(event.name ?? "unknown")}</span>
         <span className="tool-status">{failed ? "失败" : "完成"}</span>
       </div>
     );
@@ -65,6 +85,7 @@ export function ChatMessageList({
   messages,
   isLoading,
   pendingQuestion,
+  reasoningText = "",
 }: Props) {
   return (
     <div className="chat-messages">
@@ -160,12 +181,22 @@ export function ChatMessageList({
             <div className="msg-bubble thinking-bubble">
               <div className="msg-avatar">AI</div>
               <div className="msg-content">
-                <span className="thinking-dots">
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="dot" />
-                </span>
-                <span className="thinking-text">思考中</span>
+                {reasoningText ? (
+                  <>
+                    <div className="thinking-label">🧠 思考中</div>
+                    <div className="thinking-content">{reasoningText}</div>
+                    <span className="cursor-blink" />
+                  </>
+                ) : (
+                  <>
+                    <span className="thinking-dots">
+                      <span className="dot" />
+                      <span className="dot" />
+                      <span className="dot" />
+                    </span>
+                    <span className="thinking-text">思考中</span>
+                  </>
+                )}
               </div>
             </div>
           </div>

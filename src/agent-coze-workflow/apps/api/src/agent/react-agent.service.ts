@@ -104,11 +104,18 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 // ============================================
 
 /** 共享 LLM 实例：ChatOpenAI 内部有连接池，无需每个会话 new */
+// 优先用 dachensky 网关（LLM_*，支持思考+工具调用），fallback 官方 DeepSeek（DEEPSEEK_*）
 const llm = new ChatOpenAI({
-  model: process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
-  apiKey: process.env.DEEPSEEK_API_KEY,
+  model:
+    process.env.LLM_MODEL ??
+    process.env.DEEPSEEK_MODEL ??
+    "deepseek-chat",
+  apiKey: process.env.LLM_API_KEY ?? process.env.DEEPSEEK_API_KEY,
   configuration: {
-    baseURL: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1",
+    baseURL:
+      process.env.LLM_BASE_URL ??
+      process.env.DEEPSEEK_BASE_URL ??
+      "https://api.deepseek.com/v1",
   },
   temperature: 0.2,
 });
@@ -327,7 +334,22 @@ export class ReactAgentService {
         switch (event.event) {
           case "on_chat_model_stream": {
             // LLM 文本增量
-            const chunk = event.data?.chunk;
+            const chunk = event.data?.chunk as
+              | ({
+                  content?: unknown;
+                  additional_kwargs?: Record<string, unknown>;
+                } & Record<string, unknown>)
+              | undefined;
+
+            // DeepSeek 思考内容（reasoning_content，流式增量）
+            // 单独输出 reasoning_delta 事件，前端在思考气泡里流式展示
+            const reasoning = chunk?.additional_kwargs?.reasoning_content;
+            if (typeof reasoning === "string" && reasoning.length > 0) {
+              res.write(
+                `d:${JSON.stringify({ type: "reasoning_delta", content: reasoning })}\n`,
+              );
+            }
+
             if (chunk?.content) {
               const content =
                 typeof chunk.content === "string"

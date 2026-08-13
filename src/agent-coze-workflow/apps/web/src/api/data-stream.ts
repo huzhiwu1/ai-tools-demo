@@ -30,7 +30,8 @@ export interface DataStreamEvent {
     | "interrupt"
     | "done"
     | "error"
-    | "text_delta";
+    | "text_delta"
+    | "reasoning_delta";
   sessionId?: string;
   name?: string;
   input?: unknown;
@@ -39,7 +40,7 @@ export interface DataStreamEvent {
   context?: string;
   final?: string;
   message?: string;
-  content?: string; // text_delta 用, LLM 文本增量
+  content?: string; // text_delta / reasoning_delta 用, LLM 增量内容
 }
 
 /** parseDataStream 的事件处理器 */

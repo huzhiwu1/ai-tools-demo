@@ -172,6 +172,9 @@ export default function App() {
   // 打断能力：resume 请求的 AbortController（发送新消息时中断正在进行的 resume）
   const resumeAbortRef = useRef<AbortController | null>(null);
 
+  /** 当前 LLM 思考内容（reasoning_delta 累积，正式输出/工具调用时清空） */
+  const [reasoningText, setReasoningText] = useState("");
+
   // 工具调用序号（tool_start 时递增）与 data 数组已处理位置
   const toolIdRef = useRef(0);
   const processedDataCount = useRef(0);
@@ -203,6 +206,9 @@ export default function App() {
         const content = event.content ?? "";
         if (!content) break;
 
+        // 正式输出开始 → 思考结束，清空思考内容
+        setReasoningText("");
+
         setMessages((prev) => {
           // 没有开放分段 → 新建一条 assistant 消息
           if (!currentAssistantIdRef.current) {
@@ -220,9 +226,19 @@ export default function App() {
         break;
       }
 
+      case "reasoning_delta": {
+        // LLM 思考内容增量（DeepSeek reasoning_content）
+        const content = event.content ?? "";
+        if (!content) break;
+        setReasoningText((prev) => prev + content);
+        break;
+      }
+
       case "tool_start": {
         // 分段边界：封存当前文本分段，后续文本进新气泡
         currentAssistantIdRef.current = null;
+        // 工具调用前的思考已完成，清空（下一个思考段落重新累积）
+        setReasoningText("");
 
         const name = event.name ?? "unknown";
         toolIdRef.current += 1;
@@ -280,6 +296,7 @@ export default function App() {
         const question = event.question ?? "请补充信息";
         const context = event.context;
         setPendingQuestion({ question, context });
+        setReasoningText("");
         // 底部输入框切换为回复模式
         setReplyMode(true);
         // 把问题固化到消息流（回答后仍保留，不会消失）
@@ -301,6 +318,7 @@ export default function App() {
       case "done": {
         // 一次对话完成，关闭当前分段
         currentAssistantIdRef.current = null;
+        setReasoningText("");
         break;
       }
 
@@ -366,6 +384,7 @@ export default function App() {
     setToolCalls([]);
     processedDataCount.current = 0;
     setData(undefined);
+    setReasoningText("");
     // 发新消息时重置分段状态
     currentAssistantIdRef.current = null;
     append({ role: "user", content: text });
@@ -484,6 +503,7 @@ export default function App() {
             messages={messages as ChatMessage[]}
             isLoading={busy}
             pendingQuestion={pendingQuestion}
+            reasoningText={reasoningText}
           />
 
           <ChatInput
