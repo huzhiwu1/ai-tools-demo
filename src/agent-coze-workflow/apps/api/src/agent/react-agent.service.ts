@@ -111,10 +111,7 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 /** 共享 LLM 实例：ChatOpenAI 内部有连接池，无需每个会话 new */
 // 优先用 dachensky 网关（LLM_*，支持思考+工具调用），fallback 官方 DeepSeek（DEEPSEEK_*）
 const llm = new ChatOpenAI({
-  model:
-    process.env.LLM_MODEL ??
-    process.env.DEEPSEEK_MODEL ??
-    "deepseek-chat",
+  model: process.env.LLM_MODEL ?? process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
   apiKey: process.env.LLM_API_KEY ?? process.env.DEEPSEEK_API_KEY,
   configuration: {
     baseURL:
@@ -179,6 +176,16 @@ export class ReactAgentService {
       const newId = sessionStore.create(graph, sessionId);
       session = sessionStore.get(newId)!;
       sessionId = newId;
+    }
+
+    // 1.5 打断残留检测：上次流被用户打断（脏 checkpoint），重建 graph
+    // 对话记忆由 session.messages 保留，AI 仍记得之前的对话
+    if (session.graphDirty) {
+      session.graph = this.createGraph();
+      session.graphDirty = false;
+      this.logger.log(
+        `[Agent] 检测到中断残留，已重建 graph (session=${sessionId})`,
+      );
     }
 
     // 2. 添加用户消息到历史
@@ -333,6 +340,9 @@ export class ReactAgentService {
       for await (const event of stream) {
         // 客户端断开时停止迭代
         if (res.destroyed) {
+          // 客户端断开（用户打断）：graph 执行中途放弃，checkpoint 留下脏状态
+          // 标记会话，下次 chat 时重建 graph 清空 checkpoint，避免上下文混乱
+          session.graphDirty = true;
           break;
         }
 

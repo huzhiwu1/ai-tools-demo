@@ -27,6 +27,11 @@ export interface Session {
   graph: CompiledStateGraph<any, any, any, any, any>;
   /** 对话历史（简化格式，供日志和恢复使用） */
   messages: Array<{ role: "user" | "assistant"; content: string }>;
+  /**
+   * 脏标记：上次流因客户端打断（「打断并发送」）而中止，
+   * checkpoint 残留半截状态，下次 chat 时需重建 graph 清空 checkpoint
+   */
+  graphDirty?: boolean;
   /** 创建时间戳 */
   createdAt: number;
 }
