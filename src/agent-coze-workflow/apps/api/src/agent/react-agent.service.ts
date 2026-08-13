@@ -35,6 +35,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { ALL_TOOLS } from "./tools";
 import { sessionStore } from "./session.store";
 import type { Session } from "./session.store";
+import { uploadPathStore } from "./upload-store";
 
 /**
  * SSE 响应最小接口（避免引入 @types/express 依赖）
@@ -72,7 +73,7 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 - 工具调用失败时，将错误信息告知用户
 
 ## 文件与验证流程（当用户上传文件或要求验证时）
-1. 用户上传文件 → 调用 read_file 读取内容（通用读取，不做业务假设）
+1. 用户上传文件 → 消息里会附「本地路径」，用 read_file 读该路径（通用读取，不做业务假设）
 2. 根据用户需求 + 文件内容，判断：
    - 文件是干什么的？（数据源？期望结果？参考文档？）
    - 信息是否完整？是否还缺关键信息（如判断标准、字段含义、输出格式）？
@@ -217,10 +218,24 @@ export class ReactAgentService {
       configurable: { thread_id: sessionId },
     };
 
-    // 若有 fileIds，拼入 answer 文本让 LLM 感知
-    const resumeText = fileIds?.length
-      ? `${answer}\n\n[用户上传了文件]\n${fileIds.map((id) => `- (fileId: ${id})`).join("\n")}`
-      : answer;
+    // 若有 fileIds，还原文件名与磁盘路径拼入 answer 文本让 LLM 感知文件并
+    // 用 read_file 直接读取；纯文件上传时不以空文本开头
+    const fileRefs = fileIds?.length
+      ? `[用户上传了文件]\n${fileIds
+          .map((id) => {
+            const record = uploadPathStore.get(id);
+            if (!record) {
+              return `- (fileId: ${id})`;
+            }
+            return `- ${record.name} (fileId: ${id}, 本地路径: ${record.path})`;
+          })
+          .join("\n")}`
+      : "";
+    const resumeText = answer
+      ? fileRefs
+        ? `${answer}\n\n${fileRefs}`
+        : answer
+      : fileRefs || answer;
 
     // 使用 Command API 恢复执行
     const command = new Command({ resume: resumeText });

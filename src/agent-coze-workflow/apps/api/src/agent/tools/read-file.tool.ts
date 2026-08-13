@@ -42,7 +42,15 @@ function isTableFile(filePath: string): boolean {
  * 空行跳过（计入 skippedEmptyRows），行内空单元格值为 null。
  */
 function parseTable(filePath: string): object {
-  const workbook = XLSX.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  // CSV 是纯文本：先按 UTF-8 读入再交给 SheetJS 解析，避免 readFile
+  // 按 latin1 读导致中文乱码（同时剥离 BOM）；xlsx/xls 是二进制格式，必须用 readFile
+  const workbook =
+    ext === ".csv"
+      ? XLSX.read(fs.readFileSync(filePath, "utf-8").replace(/^\uFEFF/, ""), {
+          type: "string",
+        })
+      : XLSX.readFile(filePath);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
 

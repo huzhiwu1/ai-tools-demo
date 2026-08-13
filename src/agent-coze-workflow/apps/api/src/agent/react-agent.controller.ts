@@ -29,6 +29,7 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ReactAgentService } from "./react-agent.service";
+import { uploadPathStore } from "./upload-store";
 
 /**
  * multer 上传文件最小接口（避免引入 @types/express 依赖）
@@ -44,6 +45,22 @@ interface UploadedFileInfo {
 
 /** 上传目录：apps/api/uploads/（dev 下 process.cwd() 为 apps/api，gitignore 已忽略） */
 const uploadDir = path.resolve(process.cwd(), "uploads");
+
+/**
+ * 修复 multipart 文件名乱码
+ *
+ * 浏览器按 UTF-8 发送 filename，但 busboy（multer 底层）默认按 latin1
+ * 解码 multipart 头，中文文件名会变乱码。此处把 latin1 字节序列转回 UTF-8。
+ * 纯 ASCII 文件名转换前后不变，天然兼容；
+ * 若转换结果包含替换字符 U+FFFD，说明原值并非被错误解码，保留原值。
+ *
+ * @param name - multer 解析出的原始文件名（可能乱码）
+ * @returns 还原后的 UTF-8 文件名
+ */
+function fixFilenameEncoding(name: string): string {
+  const decoded = Buffer.from(name, "latin1").toString("utf8");
+  return decoded.includes("\uFFFD") ? name : decoded;
+}
 
 // FileInterceptor 的 dest 要求目录已存在，启动时创建
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -101,7 +118,11 @@ export class ReactAgentController {
       return;
     }
 
-    if (!answer || typeof answer !== "string") {
+    // 纯文件上传（无文字）时 fileIds 必须有值；两者都缺则报错
+    if (
+      (!answer || typeof answer !== "string") &&
+      (!Array.isArray(fileIds) || fileIds.length === 0)
+    ) {
       res.setHeader("Content-Type", "text/event-stream");
       res.write(
         `d:${JSON.stringify({ type: "error", message: "answer 参数不能为空" })}\n`,
@@ -131,12 +152,27 @@ export class ReactAgentController {
       throw new BadRequestException("file 字段不能为空");
     }
 
+    const fileId = crypto.randomUUID();
+    // 还原中文文件名并仅取 basename（防止路径穿越）；read_file 依赖扩展名分派解析
+    const safeName = path.basename(fixFilenameEncoding(file.originalname));
+    // 以 fileId 为前缀重命名，避免重名覆盖，保留原始扩展名
+    let finalPath = path.join(uploadDir, `${fileId}_${safeName}`);
+    try {
+      fs.renameSync(file.path, finalPath);
+    } catch {
+      // 重命名失败时退回 multer 生成的随机路径（不影响上传流程）
+      finalPath = file.path;
+    }
+
+    // 登记 fileId → { 磁盘路径, 文件名 }，resume 时供 LLM 感知文件并定位
+    uploadPathStore.set(fileId, { path: finalPath, name: safeName });
+
     return {
-      fileId: crypto.randomUUID(),
-      name: file.originalname,
+      fileId,
+      name: safeName,
       size: file.size,
       mimeType: file.mimetype,
-      path: file.path,
+      path: finalPath,
     };
   }
 }

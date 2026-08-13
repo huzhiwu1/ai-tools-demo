@@ -96,26 +96,27 @@ export function ChatInput({
     }
   }
 
-  /** 发送：拼接文件引用 + 清空输入与文件列表 */
+  /** 发送：拼接文件引用 + 清空输入与文件列表（支持纯文件上传，无文字也可发送） */
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text || loading) return;
+    const hasFiles = files.length > 0;
+    // 文字和文件都为空时无内容可发
+    if ((!text && !hasFiles) || loading) return;
 
     const fileIds = files.map((f) => f.fileId);
-    const fileNote =
-      files.length > 0
-        ? `\n\n[用户上传了文件]\n${files
-            .map((f) => `- ${f.name} (fileId: ${f.fileId})`)
-            .join("\n")}`
-        : "";
+    const fileBlock = hasFiles
+      ? `[用户上传了文件]\n${files
+          .map((f) => `- ${f.name} (fileId: ${f.fileId}, 本地路径: ${f.path})`)
+          .join("\n")}`
+      : "";
 
     if (isReply && onAnswer) {
       // reply 模式：调用 onAnswer，文件引用由后端拼接
       onAnswer(text, fileIds);
     } else {
-      // normal 模式：文件引用拼到消息文本中
-      onSend(text + fileNote);
+      // normal 模式：文件引用拼到消息文本中；纯文件上传时消息只有文件引用
+      onSend(text ? (fileBlock ? `${text}\n\n${fileBlock}` : text) : fileBlock);
     }
     setFiles([]);
   }
@@ -210,7 +211,7 @@ export function ChatInput({
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={loading || !input.trim()}
+            disabled={loading || (!input.trim() && files.length === 0)}
           >
             {loading ? "思考中…" : isReply ? "回复" : "发送"}
           </button>

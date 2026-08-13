@@ -316,7 +316,8 @@ export default function App() {
     const assistantId = crypto.randomUUID();
     setMessages((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), role: "user", content: answer },
+      // 纯文件上传（无文字回答）时显示兜底文案
+      { id: crypto.randomUUID(), role: "user", content: answer || "[仅上传文件]" },
       { id: assistantId, role: "assistant", content: "" },
     ]);
 
