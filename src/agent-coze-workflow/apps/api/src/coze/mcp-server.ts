@@ -27,7 +27,7 @@ import * as fs from "fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { CozeClient } from "./cozeClient";
+import { CozeClient } from "./coze.client";
 import { convertToPlatformSchema } from "./schema-converter";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
 

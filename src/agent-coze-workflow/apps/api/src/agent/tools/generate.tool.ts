@@ -16,7 +16,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { WorkflowPlan } from "@coze-workflow/shared";
 import { validateWorkflow } from "@coze-workflow/workflow-schema";
-import { WorkflowGenerator } from "../../agents/workflow-generator";
+import { WorkflowGenerator } from "../../workflow-engine/generator";
 
 /** 模块级单例：generator 纯代码映射，无外部依赖 */
 const generator = new WorkflowGenerator();

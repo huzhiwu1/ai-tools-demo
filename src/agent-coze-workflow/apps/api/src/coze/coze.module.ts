@@ -1,18 +1,18 @@
 /**
- * McpModule —— MCP 客户端模块
+ * CozeModule —— Coze 平台接入模块
  *
  * 职责：
  * - 封装 Coze 平台 API 调用
  * - 通过 useFactory 从 process.env 读取配置创建 CozeClient 实例
- * - 导出 CozeClient 供其他模块（WorkflowModule）注入使用
+ * - 导出 CozeClient 供其他模块（LegacyModule）注入使用
  *
  * 依赖链：
- * McpModule  exports CozeClient
- *   → WorkflowModule imports McpModule
+ * CozeModule  exports CozeClient
+ *   → LegacyModule imports CozeModule
  *      → WorkflowService 构造器注入 CozeClient
  */
 import { Module } from "@nestjs/common";
-import { CozeClient } from "./cozeClient";
+import { CozeClient } from "./coze.client";
 
 @Module({
   imports: [],
@@ -31,4 +31,4 @@ import { CozeClient } from "./cozeClient";
   ],
   exports: [CozeClient],
 })
-export class McpModule {}
+export class CozeModule {}

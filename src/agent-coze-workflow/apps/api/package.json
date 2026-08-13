@@ -1,37 +1,37 @@
 {
-    "name": "@coze-workflow/api",
-    "version": "0.0.1",
-    "private": true,
-    "scripts": {
-        "dev": "nest start --watch",
-        "start:dev": "nest start --watch",
-        "build": "nest build",
-        "start": "node dist/main.js",
-        "mcp": "tsx src/mcp/mcp-server.ts",
-        "typecheck": "tsc --noEmit",
-        "lint": "echo 'lint ok'",
-        "test": "echo 'test ok'"
-    },
-    "dependencies": {
-        "@coze-workflow/shared": "workspace:*",
-        "@coze-workflow/workflow-schema": "workspace:*",
-        "@langchain/core": "^1.2.5",
-        "@langchain/langgraph": "^1.4.9",
-        "@langchain/openai": "^1.5.6",
-        "@modelcontextprotocol/sdk": "^1.30.0",
-        "@nestjs/common": "^11.0.0",
-        "@nestjs/core": "^11.0.0",
-        "@nestjs/platform-express": "^11.0.0",
-        "dotenv": "^17.4.2",
-        "reflect-metadata": "^0.2.2",
-        "rxjs": "^7.8.1",
-        "xlsx": "^0.18.5",
-        "zod": "^4.4.3"
-    },
-    "devDependencies": {
-        "@nestjs/cli": "^11.0.0",
-        "@types/node": "^22.0.0",
-        "tsx": "^4.19.0",
-        "typescript": "^5.5.0"
-    }
+  "name": "@coze-workflow/api",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "start:dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "mcp": "tsx src/coze/mcp-server.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'lint ok'",
+    "test": "echo 'test ok'"
+  },
+  "dependencies": {
+    "@coze-workflow/shared": "workspace:*",
+    "@coze-workflow/workflow-schema": "workspace:*",
+    "@langchain/core": "^1.2.5",
+    "@langchain/langgraph": "^1.4.9",
+    "@langchain/openai": "^1.5.6",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "dotenv": "^17.4.2",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "xlsx": "^0.18.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
 }

@@ -30,17 +30,26 @@ import * as path from "path";
 dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 import { NestFactory } from "@nestjs/core";
+import { Logger } from "@nestjs/common";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
+  // 日志级别控制：LOG_LEVEL=debug 时全量输出（含 debug/verbose），否则只输出 log/warn/error
+  const logLevel = process.env.LOG_LEVEL ?? "info";
+  Logger.overrideLogger(
+    logLevel === "debug"
+      ? ["log", "warn", "error", "debug", "verbose"]
+      : ["log", "warn", "error"],
+  );
+
   const app = await NestFactory.create(AppModule);
   app.enableCors();
 
   const port = process.env.API_PORT ?? 3000;
   await app.listen(port);
-  console.log(`[API] 加载 .env:`, !!process.env.DEEPSEEK_API_KEY);
-  console.log(`[API] NestJS 服务已启动: http://localhost:${port}`);
-  console.log(`[API] 健康检查: http://localhost:${port}/health`);
+  Logger.log(`[API] 加载 .env: ${!!process.env.DEEPSEEK_API_KEY}`, "Bootstrap");
+  Logger.log(`[API] NestJS 服务已启动: http://localhost:${port}`, "Bootstrap");
+  Logger.log(`[API] 健康检查: http://localhost:${port}/health`, "Bootstrap");
 }
 
 bootstrap();

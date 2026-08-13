@@ -19,7 +19,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
-import { convertToPlatformSchema } from "../../mcp/schema-converter";
+import { convertToPlatformSchema } from "../../coze/schema-converter";
 import { cozeClient } from "./coze-client";
 
 export const saveToCozeTool = tool(

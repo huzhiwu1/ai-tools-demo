@@ -17,6 +17,7 @@
  */
 import { ChatOpenAI } from "@langchain/openai";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
+import { Logger } from "@nestjs/common";
 import type { z } from "zod";
 
 export interface DeepSeekConfig {
@@ -26,7 +27,10 @@ export interface DeepSeekConfig {
 }
 
 export class DeepSeekClient {
-  private model: ChatOpenAI;
+  private readonly model: ChatOpenAI;
+  /** 模型名提升为类字段，供日志打印 */
+  private readonly modelName: string;
+  private readonly logger = new Logger("DeepSeekClient");
 
   constructor(config?: DeepSeekConfig) {
     const apiKey = config?.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
@@ -39,9 +43,12 @@ export class DeepSeekClient {
       config?.model ?? process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
 
     if (!apiKey) {
-      console.warn("[DeepSeekClient] DEEPSEEK_API_KEY 未设置，LLM 调用将失败");
+      this.logger.warn(
+        "[DeepSeekClient] DEEPSEEK_API_KEY 未设置，LLM 调用将失败",
+      );
     }
 
+    this.modelName = modelName;
     this.model = new ChatOpenAI({
       apiKey,
       configuration: { baseURL },
@@ -68,15 +75,34 @@ export class DeepSeekClient {
     systemPrompt: string,
     userPrompt: string,
   ): Promise<z.infer<T>> {
-    // 使用 function_calling 模式：DeepSeek 不支持 response_format json_object，
-    // 但支持 tool calling，LangChain 会将 zod schema 映射为 function 参数定义
-    const structuredModel = this.model.withStructuredOutput(schema, {
-      method: "functionCalling",
-    });
-    const result = await structuredModel.invoke([
-      new SystemMessage(systemPrompt),
-      new HumanMessage(userPrompt),
-    ]);
-    return result as z.infer<T>;
+    const start = Date.now();
+    // 调用前：debug 级别，记 model + 两端 prompt 前 100 字符（不打印完整 prompt）
+    this.logger.debug(
+      `[DeepSeek] -> ${this.modelName} system=${systemPrompt.slice(0, 100)} user=${userPrompt.slice(0, 100)}`,
+    );
+
+    try {
+      // 使用 function_calling 模式：DeepSeek 不支持 response_format json_object，
+      // 但支持 tool calling，LangChain 会将 zod schema 映射为 function 参数定义
+      const structuredModel = this.model.withStructuredOutput(schema, {
+        method: "functionCalling",
+      });
+      const result = await structuredModel.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
+      // 调用成功：info 级别，记耗时 + 模型
+      // （structured output 返回值不含 token usage，取不到就不打，不强求）
+      this.logger.log(
+        `[DeepSeek] chatStructured ok ${Date.now() - start}ms model=${this.modelName}`,
+      );
+      return result as z.infer<T>;
+    } catch (e) {
+      // 调用失败：error 级别，记耗时 + 错误消息
+      this.logger.error(
+        `[DeepSeek] chatStructured ✗ ${Date.now() - start}ms ${(e as Error).message}`,
+      );
+      throw e;
+    }
   }
 }

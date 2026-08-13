@@ -12,7 +12,7 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { WorkflowPlanner } from "../../agents/workflow-planner";
+import { WorkflowPlanner } from "../../workflow-engine/planner";
 import { DeepSeekClient } from "../../llm/deepseek.client";
 
 /** 模块级单例：planner 内部持有 DeepSeekClient，无状态，可安全跨会话共享 */

@@ -28,6 +28,7 @@ import type {
   TestRunData,
   ExecuteDetailData,
 } from "./types";
+import { Logger } from "@nestjs/common";
 
 /** 已知错误码 */
 const ERR_NOT_LATEST = 777777759; // commit 过期 / 没拿锁
@@ -35,12 +36,18 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const LOCK_TTL_MS = 15 * 60 * 1000; // 15 分钟
 const MAX_SAVE_RETRIES = 2;
 
+/** 请求体摘要最大长度（超出截断，避免大 schema 刷屏） */
+const SUMMARY_MAX_LEN = 200;
+
 export class CozeClient {
   private readonly baseUrl: string;
   private readonly sessionKey: string;
   private readonly spaceId: string;
   /** 编辑锁过期时间戳（ms），0 表示无锁 */
   private lockExpireAt = 0;
+
+  /** 日志器：CozeClient 是普通类（不依赖 DI），直接用上下文名 new Logger */
+  private readonly logger = new Logger("CozeClient");
 
   constructor(config: CozeClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
@@ -244,8 +251,12 @@ export class CozeClient {
     path: string,
     body: unknown,
   ): Promise<CozeApiResponse<T>> {
+    const start = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    // 请求前：debug 级别，记路径 + body 摘要（敏感字段已脱敏）
+    this.logger.debug(`[CozeAPI] -> ${path} body=${this.summarize(body)}`);
 
     try {
       const res = await fetch(`${this.baseUrl}/api/workflow_api/${path}`, {
@@ -263,24 +274,60 @@ export class CozeClient {
       const json = (await res.json()) as CozeApiResponse<T>;
 
       if (json.code !== 0) {
+        // 业务失败：warn 级别，记 code + msg
+        this.logger.warn(
+          `[CozeAPI] !! ${path} code=${json.code} msg=${json.msg} ${Date.now() - start}ms`,
+        );
         throw new Error(`CozeError[${json.code}]: ${json.msg}`);
       }
 
+      // 响应成功：info 级别，记路径 + 耗时 + code
+      this.logger.log(
+        `[CozeAPI] <- ${path} code=${json.code} ${Date.now() - start}ms`,
+      );
       return json;
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
+        // 网络超时：error 级别
+        this.logger.error(
+          `[CozeAPI] ✗ ${path} 请求超时 ${Date.now() - start}ms`,
+        );
         throw new Error(`CozeError: 请求超时 (${path})`);
       }
-      // 已经是 CozeError 格式的直接抛
+      // 已经是 CozeError 格式的直接抛（warn 日志已在业务失败分支打过）
       if (e instanceof Error && e.message.startsWith("CozeError")) {
         throw e;
       }
+      // 网络异常：error 级别，记路径 + 错误
+      this.logger.error(`[CozeAPI] ✗ ${path} ${(e as Error).message}`);
       throw new Error(
         `CozeError: 网络异常 (${path}) - ${(e as Error).message}`,
       );
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * 请求体摘要：转 JSON 字符串，敏感字段脱敏，超过 200 字符截断
+   *
+   * 敏感字段（session_key / token / api_key 等）只保留前 8 位 + 长度，
+   * 防止认证信息完整泄露到日志（脱敏铁律）。
+   */
+  private summarize(body: unknown): string {
+    const json = JSON.stringify(body, (key, value) => {
+      if (
+        key &&
+        /session_key|api_?key|token|secret|password/i.test(key) &&
+        typeof value === "string"
+      ) {
+        return `${value.slice(0, 8)}...(len=${value.length})`;
+      }
+      return value;
+    });
+    return json.length > SUMMARY_MAX_LEN
+      ? `${json.slice(0, SUMMARY_MAX_LEN)}...(len=${json.length})`
+      : json;
   }
 
   /**

@@ -32,6 +32,7 @@ import {
 } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { Logger } from "@nestjs/common";
 import { ALL_TOOLS } from "./tools";
 import { sessionStore } from "./session.store";
 import type { Session } from "./session.store";
@@ -111,6 +112,8 @@ const llm = new ChatOpenAI({
 // ============================================
 
 export class ReactAgentService {
+  private readonly logger = new Logger("Agent");
+
   /**
    * 创建新的 graph 实例（每个会话独立）
    *
@@ -142,6 +145,11 @@ export class ReactAgentService {
     message: string,
     res: SSEResponse,
   ): Promise<void> {
+    // 入口日志：info 级别，记 session + 消息前 100 字符
+    this.logger.log(
+      `[Agent] chat session=${sessionId ?? "new"} msg=${message.slice(0, 100)}`,
+    );
+
     // 1. 获取或创建会话
     let session = sessionId ? sessionStore.get(sessionId) : undefined;
 
@@ -202,6 +210,11 @@ export class ReactAgentService {
     fileIds: string[] | undefined,
     res: SSEResponse,
   ): Promise<void> {
+    // 入口日志：info 级别，记 session + 回答前 100 字符
+    this.logger.log(
+      `[Agent] resume session=${sessionId} answer=${(answer ?? "").slice(0, 100)}`,
+    );
+
     const session = sessionStore.get(sessionId);
     if (!session) {
       this.setSSEHeaders(res);
@@ -330,6 +343,7 @@ export class ReactAgentService {
             // 工具开始
             const toolName = event.name ?? "unknown";
             const toolInput = event.data?.input ?? {};
+            this.logger.debug(`[Agent] tool_start ${toolName}`);
             res.write(
               `d:${JSON.stringify({ type: "tool_start", name: toolName, input: toolInput })}\n`,
             );
@@ -340,8 +354,12 @@ export class ReactAgentService {
             // 工具结束
             const toolName = event.name ?? "unknown";
             const output = event.data?.output;
+            const toolContent = this.extractToolContent(output);
+            this.logger.debug(
+              `[Agent] tool_end ${toolName} ${toolContent.slice(0, 200)}`,
+            );
             res.write(
-              `d:${JSON.stringify({ type: "tool_end", name: toolName, output: this.extractToolContent(output) })}\n`,
+              `d:${JSON.stringify({ type: "tool_end", name: toolName, output: toolContent })}\n`,
             );
             break;
           }
@@ -351,6 +369,7 @@ export class ReactAgentService {
       complete = true;
     } catch (e) {
       // 流异常
+      this.logger.error(`[Agent] ✗ ${(e as Error).message}`);
       res.write(
         `d:${JSON.stringify({ type: "error", message: (e as Error).message })}\n`,
       );
@@ -378,6 +397,9 @@ export class ReactAgentService {
 
       if (interruptData) {
         // 处于 interrupt 状态，推送问题给前端
+        this.logger.log(
+          `[Agent] interrupt: ${interruptData.question.slice(0, 100)}`,
+        );
         res.write(
           `d:${JSON.stringify({ type: "interrupt", ...interruptData, sessionId })}\n`,
         );
@@ -386,6 +408,7 @@ export class ReactAgentService {
       }
 
       // 无 interrupt，提取最终消息
+      this.logger.log("[Agent] done");
       const finalContent = this.extractFinalContent(stateValues);
       if (session) {
         session.messages.push({ role: "assistant", content: finalContent });

@@ -26,6 +26,7 @@ import {
   UploadedFile,
   UseInterceptors,
   BadRequestException,
+  Logger,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ReactAgentService } from "./react-agent.service";
@@ -67,6 +68,8 @@ fs.mkdirSync(uploadDir, { recursive: true });
 
 @Controller("api/agent")
 export class ReactAgentController {
+  private readonly logger = new Logger("HTTP");
+
   constructor(private readonly agentService: ReactAgentService) {}
 
   /**
@@ -81,6 +84,11 @@ export class ReactAgentController {
     @Res() res: any,
   ): Promise<void> {
     const { sessionId, message } = body;
+
+    // 入口日志：info 级别，记 session + 消息长度（message 未校验前可能为空，需防御）
+    this.logger.log(
+      `[HTTP] POST /api/agent/chat session=${sessionId ?? "new"} msgLen=${message?.length ?? 0}`,
+    );
 
     // 基本参数校验
     if (!message || typeof message !== "string") {
@@ -107,6 +115,9 @@ export class ReactAgentController {
     @Res() res: any,
   ): Promise<void> {
     const { sessionId, answer, fileIds } = body;
+
+    // 入口日志：info 级别，记 session
+    this.logger.log(`[HTTP] POST /api/agent/chat/resume session=${sessionId}`);
 
     // 基本参数校验
     if (!sessionId) {
@@ -151,6 +162,11 @@ export class ReactAgentController {
     if (!file) {
       throw new BadRequestException("file 字段不能为空");
     }
+
+    // 入口日志：info 级别，记文件名 + 大小
+    this.logger.log(
+      `[HTTP] POST /api/agent/upload name=${file.originalname} size=${file.size}`,
+    );
 
     const fileId = crypto.randomUUID();
     // 还原中文文件名并仅取 basename（防止路径穿越）；read_file 依赖扩展名分派解析

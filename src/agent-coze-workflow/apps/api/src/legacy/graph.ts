@@ -23,8 +23,8 @@ import type {
 } from "@coze-workflow/shared";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
 import { validateWorkflow } from "@coze-workflow/workflow-schema";
-import type { WorkflowPlanner } from "./workflow-planner";
-import type { WorkflowGenerator } from "./workflow-generator";
+import type { WorkflowPlanner } from "../workflow-engine/planner";
+import type { WorkflowGenerator } from "../workflow-engine/generator";
 import type { WorkflowRepairer } from "./workflow-repairer";
 
 // ============================================

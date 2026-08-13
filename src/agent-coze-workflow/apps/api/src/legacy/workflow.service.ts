@@ -6,7 +6,7 @@
  * - 供 WorkflowController 调用
  * - 后续接 Agent 模块时替换为真实逻辑
  */
-import { Injectable, Inject } from "@nestjs/common";
+import { Injectable, Inject, Logger } from "@nestjs/common";
 import { createApiResponse, generateId } from "@coze-workflow/shared";
 import type {
   WorkflowPlan,
@@ -22,10 +22,10 @@ import {
   createLLMNode,
   createEndNode,
 } from "@coze-workflow/workflow-schema";
-import { WorkflowPlanner } from "../agents/workflow-planner";
-import type { WorkflowAgentStateType } from "../agents/graph";
-import { CozeClient } from "../mcp/cozeClient";
-import { convertToPlatformSchema } from "../mcp/schema-converter";
+import { WorkflowPlanner } from "../workflow-engine/planner";
+import type { WorkflowAgentStateType } from "./graph";
+import { CozeClient } from "../coze/coze.client";
+import { convertToPlatformSchema } from "../coze/schema-converter";
 
 /** LangGraph 编译后的图类型（StateGraph 编译产物） */
 interface CompiledGraph {
@@ -36,6 +36,8 @@ interface CompiledGraph {
 
 @Injectable()
 export class WorkflowService {
+  private readonly logger = new Logger("WorkflowService");
+
   constructor(
     private readonly planner: WorkflowPlanner,
     @Inject("WORKFLOW_GRAPH") private readonly graph: CompiledGraph,
@@ -58,7 +60,7 @@ export class WorkflowService {
       return createApiResponse(plan);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn("[WorkflowPlanner] LLM 规划失败，降级 mock:", msg);
+      this.logger.warn("[WorkflowPlanner] LLM 规划失败，降级 mock:", msg);
     }
 
     // 降级分支：返回 mock 计划
@@ -227,7 +229,10 @@ export class WorkflowService {
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn("[WorkflowService] CozeClient 创建失败，降级 mock:", msg);
+      this.logger.warn(
+        "[WorkflowService] CozeClient 创建失败，降级 mock:",
+        msg,
+      );
     }
 
     // 降级分支：返回 mock 结果
@@ -259,7 +264,10 @@ export class WorkflowService {
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn("[WorkflowService] CozeClient 保存失败，降级 mock:", msg);
+      this.logger.warn(
+        "[WorkflowService] CozeClient 保存失败，降级 mock:",
+        msg,
+      );
     }
 
     // 降级分支：返回 mock 结果
@@ -297,7 +305,10 @@ export class WorkflowService {
       return createApiResponse(result);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn("[WorkflowService] CozeClient 试运行失败，降级 mock:", msg);
+      this.logger.warn(
+        "[WorkflowService] CozeClient 试运行失败，降级 mock:",
+        msg,
+      );
     }
 
     // 降级分支：返回 mock 结果
@@ -372,7 +383,7 @@ export class WorkflowService {
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error("[WorkflowGraph] 执行异常:", msg);
+      this.logger.error("[WorkflowGraph] 执行异常:", msg);
       return createApiResponse({
         ...initialState,
         errors: [`图执行异常: ${msg}`],
