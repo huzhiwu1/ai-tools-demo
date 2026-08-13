@@ -146,6 +146,32 @@ export interface DatabaseQueryNode extends CozeNodeBase {
   inputMapping?: Record<string, string>;
 }
 
+/** 文本处理节点（平台 type=15，concat 拼接等） */
+export interface TextNode extends CozeNodeBase {
+  type: "text";
+  /** 处理方法：concat 拼接等 */
+  method: "concat";
+  /** 拼接参数（模板语法 {{String1}} 引用 inputParameters） */
+  concatParams?: Array<{
+    name: string;
+    value: string;
+  }>;
+  /** 输入变量映射 */
+  inputMapping?: Record<string, string>;
+}
+
+/** 变量聚合节点（平台 type=32，多分支输出聚合） */
+export interface MergeNode extends CozeNodeBase {
+  type: "merge";
+  /** 聚合分组：group name → 上游变量引用 */
+  mergeGroups?: Array<{
+    name: string;
+    variables: string[];
+  }>;
+  /** 输入变量映射 */
+  inputMapping?: Record<string, string>;
+}
+
 /** 结束节点 */
 export interface EndNode extends CozeNodeBase {
   type: "end";
@@ -165,6 +191,8 @@ export type CozeNode =
   | ConditionNode
   | HttpNode
   | DatabaseQueryNode
+  | TextNode
+  | MergeNode
   | EndNode;
 
 /** 工作流连线 */

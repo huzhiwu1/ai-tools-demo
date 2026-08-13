@@ -14,6 +14,8 @@ export const NODE_TYPES = [
   "condition",
   "http",
   "database_query",
+  "text",
+  "merge",
   "end",
 ] as const;
 

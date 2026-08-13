@@ -31,6 +31,8 @@ import {
   createConditionNode,
   createHttpNode,
   createDatabaseQueryNode,
+  createTextNode,
+  createMergeNode,
 } from "@coze-workflow/workflow-schema";
 
 export class WorkflowGenerator {
@@ -186,6 +188,10 @@ export class WorkflowGenerator {
         return createHttpNode(baseOverrides);
       case "database_query":
         return createDatabaseQueryNode(baseOverrides);
+      case "text":
+        return createTextNode(baseOverrides);
+      case "merge":
+        return createMergeNode(baseOverrides);
       default:
         // 未知类型降级为 LLM 节点
         return createLLMNode({ title: step.nodeType, desc: step.description });
@@ -204,6 +210,8 @@ export class WorkflowGenerator {
       condition: "条件判断",
       http: "HTTP 请求",
       database_query: "数据库查询",
+      text: "文本处理",
+      merge: "变量聚合",
     };
     return labels[type] ?? type;
   }

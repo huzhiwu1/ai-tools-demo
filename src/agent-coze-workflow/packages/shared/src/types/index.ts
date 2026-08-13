@@ -97,7 +97,9 @@ export type WorkflowNodeType =
   | "code"
   | "condition"
   | "http"
-  | "database_query";
+  | "database_query"
+  | "text"
+  | "merge";
 
 /** 工作流节点（中间态，供前端展示和编辑） */
 export interface WorkflowNode {

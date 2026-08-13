@@ -16,6 +16,8 @@ import type {
   ConditionNode,
   HttpNode,
   DatabaseQueryNode,
+  TextNode,
+  MergeNode,
 } from "../types/index";
 
 // ============================================
@@ -163,6 +165,51 @@ export function createDatabaseQueryNode(
     query: overrides.query ?? "SELECT 1",
     connection: overrides.connection ?? "default",
     params: overrides.params ?? [],
+    inputMapping: {},
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
+  };
+}
+
+/** 创建文本处理节点（平台 type=15） */
+export function createTextNode(
+  overrides: Partial<
+    Pick<TextNode, "title" | "desc" | "method" | "concatParams">
+  > = {}
+): TextNode {
+  return {
+    id: generateId(),
+    type: "text",
+    title: overrides.title ?? "文本处理",
+    desc: overrides.desc ?? "拼接/处理文本内容",
+    method: overrides.method ?? "concat",
+    concatParams: overrides.concatParams ?? [
+      { name: "String1", value: "{{String1}}" },
+    ],
+    inputMapping: {},
+    _temp: {
+      bounds: { x: 360, y: 80, width: 180, height: 90 },
+      externalData: {},
+    },
+  };
+}
+
+/** 创建变量聚合节点（平台 type=32） */
+export function createMergeNode(
+  overrides: Partial<
+    Pick<MergeNode, "title" | "desc" | "mergeGroups">
+  > = {}
+): MergeNode {
+  return {
+    id: generateId(),
+    type: "merge",
+    title: overrides.title ?? "变量聚合",
+    desc: overrides.desc ?? "聚合多个分支的输出变量",
+    mergeGroups: overrides.mergeGroups ?? [
+      { name: "Group1", variables: [] },
+    ],
     inputMapping: {},
     _temp: {
       bounds: { x: 360, y: 80, width: 180, height: 90 },

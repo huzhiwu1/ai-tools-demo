@@ -1,0 +1,3683 @@
+{
+ "type": "coze-workflow-clipboard-data",
+ "source": {
+  "workflowId": "7670907071004409856",
+  "flowMode": 0,
+  "spaceId": "7594778999100801024",
+  "isDouyin": false,
+  "host": "coze.dachensky.com"
+ },
+ "json": {
+  "nodes": [
+   {
+    "id": "182549",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 586.4694479964642,
+      "y": -713.4724311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "无图处理",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "images",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "string"
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "100001",
+           "name": "examination_report"
+          },
+          "rawMeta": {
+           "type": 99
+          }
+         }
+        }
+       }
+      ],
+      "code": "async def main(args: Args) -> Output:\n    params = args.params\n    images = params.get('images', [])\n    \n    # 如果列表有内容，原封不动输出；如果为空列表，输出空数组（与 list 输出声明一致，防类型不匹配）\n    if images and len(images) > 0:\n        result = images\n    else:\n        result = None\n    \n    ret: Output = {\n        \"result\": result\n    }\n    \n    return ret",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "list",
+       "name": "result",
+       "schema": {
+        "type": "string"
+       }
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 406.46944799646417,
+      "y": -713.4724311047598,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "141264",
+    "type": "3",
+    "meta": {
+     "position": {
+      "x": 1046.4694479964642,
+      "y": -750.4724311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "输出是否接待",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "mainColor": "#5C62FF",
+      "subTitle": "大模型"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "ques_info",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "100001",
+           "name": "questionnaireData"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "images",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "string",
+          "assistType": 2
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "182549",
+           "name": "result"
+          },
+          "rawMeta": {
+           "type": 104,
+           "isVision": true
+          }
+         }
+        }
+       }
+      ],
+      "llmParam": [
+       {
+        "name": "temperature",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.2",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "maxTokens",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "512",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "topP",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.7",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "responseFormat",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "2",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "modleName",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "Doubao-Seed-1.8",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "modelType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "180",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "generationDiversity",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "balance",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "supportThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "enableThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "apiType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "1",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "prompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "学生体检报告：{{images}}\n学生问卷信息：{{ques_info}}",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "enableChatHistory",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "chatHistoryRound",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "3",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "systemPrompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "# 角色：\n你是一名专业的金牌诊断师，非常擅长根据用户的体检报告以及问卷信息，诊断学生是否需要进行接待，一遍后续动作。\n\n## 目标：\n我会给你提供``不接待学生范围``，你需要根据学生上传的体检报告、信息调查问卷，基于``不接待学生范围``，判断学生是否处于``不接待学生范围``中，并按照规则输出相应内容\n\n##  不接待学生范围\n### 年龄维度\n#### 不接待：\n13 周岁及以下（含 13 岁）；85 周岁及以上（含 85 岁）\n#### 原因：\n13 岁以下生长发育关键期，营养方案适配性不足；85 岁以上多伴随基础病，身体耐受度低\n#### 特殊可接待：\n85 岁以上问卷情况好且评估胃肠功能可接待\n#### 风险：\n青少年营养失衡；老年人加重基础病、跌倒意外\n------------------------------------------------------------------------------\n### 心血管系统\n#### 不接待：\n恶性高血压（血压≥180/120mmHg 经医用后）；主动脉夹层 A 型术后心功能不全（LVEF＜50%）；脑梗 / 脑中风病史＜2 年；持续性 / 症状性房颤（影响正常生活）\n#### 原因：\n血压失控、心功能差、神经功能未稳定、易形成血栓\n#### 特殊可接待：\n一次性腔隙脑梗可接待\n#### 风险：\n心脑血管意外、心衰、血栓脱落引发脑梗 / 肺栓塞\n------------------------------------------------------------------------------\n### 内分泌系统\n#### 不接待：\n糖尿病足患者；甲状腺结节 5A 级及以上（含 5A）\n#### 原因：\n糖尿病足需外科治疗；5A 结节恶变风险高\n#### 特殊可接待：\n甲状腺癌术后 3 - 6 个月且吞咽无问题可接待\n#### 风险：\n糖尿病足感染扩散；甲状腺结节延误诊治\n------------------------------------------------------------------------------\n### 消化与肝肾系统\n#### 不接待：\n肝硬化 / 肝功能衰竭；慢性肾衰竭 3 期及以上；尿毒症；器官移植术后；萎缩性胃炎肠上皮化生；肠癌（结直肠癌 + 过度消瘦 + BMI＜18.5，三者同时满足）\n#### 原因：\n肝肾功能失代偿；需透析 / 抗排异治疗；胃粘膜修复未稳定\n#### 特殊可接待：\n肝硬化初期且蛋白代谢指标正常可接待；尿毒症未透析可接待；肠癌术后 6 个月以上恢复食负可接待\n#### 风险：\n肝性脑病、高钾血症；透析不充分多器官损伤；移植器官排异\n------------------------------------------------------------------------------\n### 呼吸系统\n#### 不接待：\n慢阻肺（COPD）急性发作期；肺心病患者\n#### 原因：\n呼吸功能严重受损，活动易诱发心衰\n#### 风险：\n呼吸衰竭、急性心衰\n------------------------------------------------------------------------------\n### 血液与免疫系统\n#### 不接待：\n白血病；再生障碍性贫血\n#### 原因：\n需专业医疗干预（化疗、骨髓移植）\n#### 风险：\n病情进展、大出血、重症感染\n------------------------------------------------------------------------------\n### 外科与肿瘤史\n#### 不接待：\n恶性肿瘤术后 3 年内；胃窦粘膜切除术后＜3 年；胰腺 & 肠癌晚期\n#### 原因：\n肿瘤康复关键期；胃粘膜未稳定\n#### 风险：\n肿瘤转移；胃粘膜损伤加重\n------------------------------------------------------------------------------\n### 特殊情况\n#### 不接待：\n孕妇；精神分裂症患者；脑萎患者；帕金森病（症状严重 / 需手术 / 日常活动受限）\n#### 原因：\n影响胎儿发育；认知 / 配合度差；脑组织不可逆损伤\n#### 风险：\n胎儿畸形、流产；情绪暴力 / 自伤；生活无法自理；跌倒骨折\n\n## 限制：\n- 特别注意，要特别关注用户的调查信息问卷，如“家族遗传史”、“服用药物”等，要理解精准到位，不要无中生有，不要臆想服用药物等。\n- 学生本人的自身病史与家族病史无关，不可由于家族病史（比如信息问卷显示家族成员高血压）而默认学生也有相应疾病，不可随意臆想学生有高血压！学生的病史最重要是参考信息问卷中的``基础疾病``，以``基础疾病``为准，不可臆想，不可无中生有。\n- **学生的所有病症以体检报告和问卷信息为准，对于没有提到的病症一律默认是没有，不可出现类似【是否患有高血压】这样的情况，没出现就是没有。**\n- 特别注意，当学生的信息问卷中，``基础疾病``的一项填的是``其他``时，则默认无问题，忽略此项。\n\n## 输出格式：\n按照以下json格式输出，确保输出内容可以被python的json.loads()解析：\n{\n    \"is_reception\": bool类型，表示是否接待，true代表接待，false代表不接待\n    \"reason\": str类型，接待or不接待的原因\n}\n\n## 输出示例：\n### 示例一：\n{\n    \"is_reception\": false\n    \"reason\": \"同学患有白血病，不接待。\"\n}\n### 示例二：\n{\n    \"is_reception\": false\n    \"reason\": \"同学是糖尿病足患者，不接待。\"\n}\n### 示例三：\n{\n    \"is_reception\": true\n    \"reason\": \"同学不在不接待范围内，可接待\"\n}\n",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "settingOnError": {
+       "switch": true,
+       "dataOnErr": "{\n    \"is_reception\": false,\n    \"reason\": \"\",\n    \"reasoning_content\": \"\"\n}",
+       "processType": 3,
+       "timeoutMs": 120000,
+       "singleTimeoutMs": 0,
+       "retryTimes": 1,
+       "ext": {
+        "backupLLmParam": "{\"temperature\":1,\"maxTokens\":16384,\"topP\":0.95,\"responseFormat\":2,\"modelName\":\"Doubao-Seed-2.0-lite\",\"modelType\":201,\"generationDiversity\":\"default_val\"}"
+       }
+      }
+     },
+     "outputs": [
+      {
+       "type": "boolean",
+       "name": "is_reception"
+      },
+      {
+       "type": "string",
+       "name": "reason"
+      },
+      {
+       "type": "string",
+       "name": "reasoning_content"
+      },
+      {
+       "type": "object",
+       "name": "errorBody",
+       "schema": [
+        {
+         "type": "string",
+         "name": "errorMessage",
+         "readonly": true
+        },
+        {
+         "type": "string",
+         "name": "errorCode",
+         "readonly": true
+        }
+       ],
+       "readonly": true
+      },
+      {
+       "type": "boolean",
+       "name": "isSuccess",
+       "readonly": true
+      }
+     ],
+     "version": "3"
+    },
+    "_temp": {
+     "bounds": {
+      "x": 866.4694479964642,
+      "y": -750.4724311047598,
+      "width": 360,
+      "height": 188.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "title": "大模型",
+      "mainColor": "#5C62FF"
+     }
+    }
+   },
+   {
+    "id": "169974",
+    "type": "8",
+    "meta": {
+     "position": {
+      "x": 1506.4694479964642,
+      "y": -791.6474311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "判断是否接待",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+      "description": "连接多个下游分支，若设定的条件成立则仅运行对应的分支，若均不成立则只运行“否则”分支",
+      "mainColor": "#00B2B2",
+      "subTitle": "选择器"
+     },
+     "inputs": {
+      "branches": [
+       {
+        "condition": {
+         "logic": 2,
+         "conditions": [
+          {
+           "operator": 11,
+           "left": {
+            "input": {
+             "type": "boolean",
+             "value": {
+              "type": "ref",
+              "content": {
+               "source": "block-output",
+               "blockID": "141264",
+               "name": "is_reception"
+              }
+             }
+            }
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "_temp": {
+     "bounds": {
+      "x": 1326.4694479964642,
+      "y": -791.6474311047598,
+      "width": 360,
+      "height": 140.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+      "description": "连接多个下游分支，若设定的条件成立则仅运行对应的分支，若均不成立则只运行“否则”分支",
+      "title": "选择器",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "1930343",
+    "type": "3",
+    "meta": {
+     "position": {
+      "x": 1966.4694479964642,
+      "y": -464.7724311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "体检报告解读生成",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "mainColor": "#5C62FF",
+      "subTitle": "大模型"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "ques_info",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "100001",
+           "name": "questionnaireData"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "images",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "string",
+          "assistType": 2
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "182549",
+           "name": "result"
+          },
+          "rawMeta": {
+           "type": 104,
+           "isVision": true
+          }
+         }
+        }
+       }
+      ],
+      "llmParam": [
+       {
+        "name": "temperature",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.3",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "maxTokens",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "4096",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "topP",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.7",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "responseFormat",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "2",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "modleName",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "Doubao-Seed-1.8",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "modelType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "180",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "generationDiversity",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "default_val",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "supportThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "enableThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "apiType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "1",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "prompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "学生体检报告：{{images}}\n学生问卷信息：{{ques_info}}",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "enableChatHistory",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "chatHistoryRound",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "3",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "systemPrompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "# 角色：\n你是一名专业的金牌营养师，非常擅长分析学生的体检报告，并输出规范的分析报告。\n\n## 目标：\n你需要根据学生上传的体检报告、信息调查问卷，输出学生的分析报告结果。\n\n## 限制：\n- 思考过程以及回复都需要用中文，不要使用其他语言。\n- 你输出的分析报告是面向同学的，所以你的整个思考过程以及回复中都不要用到“用户”这个字眼，若需要使用，则将“用户”替换成“同学”。\n- 输出的分析报告中，不要出现任何指导用药或者药物关联饮食的建议或情况，包括用药配合，任何药物关联饮食都不要出现\n- 特别注意，要特别关注用户的调查信息问卷，如“家族遗传史”、“服用药物”等，要理解精准到位，不要无中生有，不要臆想服用药物等。\n- 学生本人的自身病史与家族病史无关，不可由于家族病史（比如信息问卷显示家族成员高血压）而默认学生也有相应疾病，不可随意臆想学生有高血压！学生的病史最重要是参考信息问卷中的``基础疾病``，以``基础疾病``为准，不可臆想，不可无中生有。\n- **学生的所有病症以体检报告和问卷信息为准，对于没有提到的病症一律默认是没有，不可出现类似【是否患有高血压】这样的情况，没出现就是没有。**\n- 特别注意，当学生的信息问卷中，``基础疾病``的一项填的是``其他``时，则默认无问题，忽略此项。\n- **体检分析报告中不要出现任何【思考内容】，包括（亚麻籽油、深海鱼？用户无高尿酸，可用深海鱼如三文鱼？但用户饮食中每周肉鱼或虾 2 - 3 次，需要注意脂肪摄入，所以优质蛋白以低脂禽畜、豆类为主，深海鱼适量）等，你是一个真实营养师，不要有任何ai化和思考的内容**；\n- 分析报告中不要有类似“分析报告”之类的大标题，输出结构要工整，不要在分析报告中出现任何食材建议或者食材清单（如示例食谱等），同时不要输出除了以下大点以外的标题或者内容；\n- - 输出的分析报告需要分别以以下大点为标题，标题格式跟文本内容不要修改：\n ### **核心健康问题**\n ### **潜在风险因素**\n ### **饮食及健康建议**\n\n## 特殊要求\n- 体检分析报告中严禁出现任何疾病名称，包括【高血压】、【糖尿病】、【高尿酸】等相关疾病名称，这是红线，严禁出现！\n- 根据用户体检报告，分析其中相关指标的升高、降低即可能得成因即可，并放在标题【核心健康问题】中，示例：\n1. 目前（甘油三脂/总胆固醇/低密度脂蛋白升高）水平过高。其成因通常是多方面的，常见是由于不健康的饮食，缺乏活动，超重/肥胖等，血液中过多的脂类会沉积在受损的动脉血管壁内，形成脂质斑块（粥样硬化斑块），使动脉管壁变硬、管腔变窄。\n2. 目前（糖化血红蛋白升高或空腹/餐后血糖升高）提示近期的血糖波动较高。血糖波动较高多数与体重超重肥胖导致胰岛素抵抗、高糖分饮食饮食相关，建议后续持续复查空腹血糖和餐后两小时血糖。\n- 根据用户体检报告及问卷信息，分析学生生活中的运动饮食饮水的风险，并放在【潜在风险因素】中，示例：\n1. 日常饮食应注意低脂低胆固醇饮食，避免食用动物油脂、肥肉等食物。\n2. 日常应避免饮用高糖分饮料、限制如粥粉面饭、包子饼等精细主食的摄入，可用部分粗粮代替避免血糖波动升高。\n- 根据用户体检报告及问卷信息，分析健康的饮食建议，并放在【饮食及健康建议】中。\n\n## 反面示例\n1. 输出的分析报告中，不要出现任何指导用药或者药物关联饮食的建议或情况，包括用药配合，任何药物关联饮食都不要出现！反面示例如下：\n### 示例一：\n阿司匹林：避免饮酒，空腹服用时注意胃黏膜保护，可搭配护胃食物如山药、南瓜。\n硝苯地平控释片加噻嗪片：避免葡萄柚汁，以免影响药效。\n### 示例二：\n瑞舒伐他汀建议晚间随餐服用，与富含膳食纤维的食物(如藜麦、燕麦)间隔1-2 小时，避免影响药物吸收。\n### 示例三：\n用药配合：避免食用可能影响药物代谢的食物（如葡萄柚，若服用硝苯地平需注意，因硝苯地平为钙通道阻滞剂，葡萄柚可能增强其作用），若有疑问咨询医生或药师。\n以上示例均为反面案例，类似以上示例等建议不要出现在分析报告中。\n\n## 特殊说明：\n1. **甲状腺结节 TI-RADS 3级以上患者需要减少或者不要含碘食物的摄入，例如海带、海草、海鱼虾等含碘食物，不要出现海产，所有海产都删除或者替换成别的食材**；\n2. 胆石症（胆管结石、胆囊结石）者应控制用油量\n3. 糖尿病同学不可以喝粥，首选全谷物、杂豆类和薯芋类作为主食。\n4. **高尿酸人群需要禁食鱼虾蟹类、菌菇类等高嘌呤食物**\n5. 糖尿病人群需要尽量吃干不吃稀（也就是不安排粥类），如果同时还有胃肠不好的情况，就吃杂粮软饭\n6. 体检分析报告中不要出现**山竹、菠萝蜜、芒果、柚子**这些热带水果。\n7.  高尿酸学员海鲜类规避：三文鱼、金枪鱼、鲳鱼、大黄鱼、青花鱼、多宝鱼、鲳鱼、海鲈鱼、鳕鱼、带鱼、鲫鱼、鲈鱼、虾仁、桂鱼、裙带菜、海带、海蜇；替换成：清蒸鸡腿肉、清蒸鸡胸肉、彩椒炒牛肉、菜蔬羊肉煲、萝卜炖瘦肉、清蒸鸽子肉、清蒸鸭脯 \n8.  禁止出现用户已声明的禁忌，绝对避开用户声明的过敏原\n9. 尿酸判断标准：\n女性正常尿酸＜350mmol/L；\n男性正常尿酸＜420mmol/L；\n\n## 输出规范\n按照以下json格式输出，确保输出内容可以被python的json.loads()解析：\n{\n   \"core_health_issues\": \" ### **核心健康问题**：分析报告-指标的升高降低，及可能的成因\",\n    \"risk_factors\": \" ### **潜在风险因素**：分析报告和问卷-生活中的运动饮食饮水的风险提示\",\n    \"adjustment\": \"### **饮食及健康建议**：健康饮食建议\",\n}\n\n## 输出示例\n{\n   \"core_health_issues\": \" ### **核心健康问题**：\\n xxxx\",\n    \"risk_factors\": \" ### **潜在风险因素**：\\n xxxx\",\n    \"adjustment\": \"### **饮食及健康建议**：\\n xxxx\",\n}\n",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "settingOnError": {
+       "switch": true,
+       "dataOnErr": "{\n    \"core_health_issues\": \"\",\n    \"risk_factors\": \"\",\n    \"adjustment\": \"\",\n    \"reasoning_content\": \"\"\n}",
+       "processType": 3,
+       "timeoutMs": 180000,
+       "singleTimeoutMs": 0,
+       "retryTimes": 1,
+       "ext": {
+        "backupLLmParam": "{\"temperature\":1,\"maxTokens\":16384,\"topP\":0.95,\"responseFormat\":2,\"modelName\":\"Doubao-Seed-2.0-lite\",\"modelType\":201,\"generationDiversity\":\"default_val\"}"
+       }
+      }
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "core_health_issues"
+      },
+      {
+       "type": "string",
+       "name": "risk_factors"
+      },
+      {
+       "type": "string",
+       "name": "adjustment"
+      },
+      {
+       "type": "string",
+       "name": "reasoning_content"
+      },
+      {
+       "type": "object",
+       "name": "errorBody",
+       "schema": [
+        {
+         "type": "string",
+         "name": "errorMessage",
+         "readonly": true
+        },
+        {
+         "type": "string",
+         "name": "errorCode",
+         "readonly": true
+        }
+       ],
+       "readonly": true
+      },
+      {
+       "type": "boolean",
+       "name": "isSuccess",
+       "readonly": true
+      }
+     ],
+     "version": "3"
+    },
+    "_temp": {
+     "bounds": {
+      "x": 1786.4694479964642,
+      "y": -464.7724311047598,
+      "width": 360,
+      "height": 188.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "title": "大模型",
+      "mainColor": "#5C62FF"
+     }
+    }
+   },
+   {
+    "id": "105094",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 2426.469447996464,
+      "y": -499.44743110475997
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "解析体检报告分析",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "core_health_issues",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "1930343",
+           "name": "core_health_issues"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "risk_factors",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "1930343",
+           "name": "risk_factors"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "adjustment",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "1930343",
+           "name": "adjustment"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "code": "import re\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    core_health_issues = params['core_health_issues']    # 核心健康问题\n    risk_factors = params['risk_factors']     # 潜在风险因素\n    adjustment = params['adjustment']      # 饮食及健康建议\n\n    def norm(s):\n        if not s:\n            return \"\"\n        return str(s).replace(\"\\\\n\", \"\\n\").strip()\n\n    RECIPE_NOTE = \"\"\"### **食谱说明**\n1、每日确保20+种食材，融合粗细搭配、低钠高纤原则，并融入地中海饮食元素\n2、油盐控制：全天用油≤25g（含亚麻籽油），盐＜4g（使用限盐勺）  \n3、 主食搭配：每餐以粗粮为主，可根据肠道适应情况，适当增加精致米面 \n4、 烹饪方式：蒸/煮/炖/凉拌为主，禁用煎炸，酱油替换为柠檬汁+香菇粉，或直接用魔法盐（盐30克+干香菇5克+干虾皮5克）\n5、 备餐技巧：周末集中做好杂粮饭，每份75克分装盒冷冻  \n     每日15分钟备餐：蔬菜洗净切配冷藏，肉类按份分装  \n6、 外食替代方案：如遇聚餐，需提前联系班主任，班主任根据“211餐盘法”提供个性化应急配餐\n7、高尿酸人群：禁用浓肉汤\n8、隐形糖控制：所有奶制品/豆浆均为无糖\"\"\"\n    DISCLAIMER = \"\"\"#### **以上解读与建议不能替代执业医师的诊疗意见不作为治疗手段，建议在医生和营养师指导下逐步调整饮食结构，以医院治疗为主，饮食为辅，定期监测。**\n #### **祝您健康！**\"\"\"\n\n    # 拼接 report（保留原标题，供正则解析 + 下游 200101/200104A/B 兼容）\n    report = \"\"\n    for i in (core_health_issues, risk_factors, adjustment):\n        if i:\n            report += norm(i) + \"\\n\\n\"\n    report += \"### **食谱说明**\\n\" + RECIPE_NOTE + \"\\n\\n\" + DISCLAIMER + \"\\n==========================================================================\"\n\n    # 照旧版 103783：从 report 文本正则提取 4 段，content 为纯内容\n    items = parse_report_analysis(report)\n\n    ret: Output = {\n        \"report\": report,\n        \"reportAnalysis\": {\"items\": items},\n    }\n    return ret\n\n\ndef parse_report_analysis(text: str) -> list:\n    \"\"\"从 report 文本中提取章节，格式与旧版 103783 完全一致\"\"\"\n    result = []\n\n    section_patterns = [\n        (r'### \\*\\*核心健康问题\\*\\*[：:]?', '核心健康问题'),\n        (r'### \\*\\*潜在风险因素\\*\\*[：:]?', '潜在风险因素'),\n        (r'### \\*\\*饮食及健康建议\\*\\*[：:]?', '饮食及健康建议'),\n        (r'### \\*\\*食谱说明\\*\\*', '食谱说明'),\n    ]\n\n    sections_found = []\n    for pattern, title in section_patterns:\n        match = re.search(pattern, text)\n        if match:\n            sections_found.append({\n                'title': title,\n                'match_start': match.start(),\n                'match_end': match.end(),\n            })\n\n    sections_found.sort(key=lambda x: x['match_start'])\n\n    for i, section in enumerate(sections_found):\n        start = section['match_end']\n        if i + 1 < len(sections_found):\n            end = sections_found[i + 1]['match_start']\n        else:\n            remaining_text = text[start:]\n            separator_match = re.search(r'\\n=+\\n*$', remaining_text)\n            if separator_match:\n                end = start + separator_match.start()\n            else:\n                end = len(text)\n\n        content = text[start:end].strip()\n        content = re.sub(r'^[：:]\\s*', '', content)\n        content = content.strip()\n\n        if content:\n            result.append({\n                'title': section['title'],\n                'content': content\n            })\n\n    return result\n",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "report"
+      },
+      {
+       "type": "object",
+       "name": "reportAnalysis",
+       "schema": []
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 2246.469447996464,
+      "y": -499.44743110475997,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "127375",
+    "type": "15",
+    "meta": {
+     "position": {
+      "x": 6566.469447996465,
+      "y": -778.6474311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "error_msg：不接待输出",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-StrConcat-v2.jpg",
+      "description": "用于处理多个字符串类型变量的格式",
+      "mainColor": "#3071F2",
+      "subTitle": "文本处理"
+     },
+     "inputs": {
+      "method": "concat",
+      "inputParameters": [
+       {
+        "name": "String1",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "141264",
+           "name": "reason"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "concatParams": [
+       {
+        "name": "concatResult",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "{{String1}}",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "arrayItemConcatChar",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "，",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "allArrayItemConcatChars",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": [
+           {
+            "type": "string",
+            "name": "label",
+            "required": true
+           },
+           {
+            "type": "string",
+            "name": "value",
+            "required": true
+           },
+           {
+            "type": "boolean",
+            "name": "isDefault",
+            "required": true
+           }
+          ]
+         },
+         "value": {
+          "type": "literal",
+          "content": [
+           {
+            "label": "换行",
+            "value": "\n",
+            "isDefault": true
+           },
+           {
+            "label": "制表符",
+            "value": "\t",
+            "isDefault": true
+           },
+           {
+            "label": "句号",
+            "value": "。",
+            "isDefault": true
+           },
+           {
+            "label": "逗号",
+            "value": "，",
+            "isDefault": true
+           },
+           {
+            "label": "分号",
+            "value": "；",
+            "isDefault": true
+           },
+           {
+            "label": "空格",
+            "value": " ",
+            "isDefault": true
+           }
+          ]
+         }
+        }
+       }
+      ]
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "output",
+       "required": true
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 6386.469447996465,
+      "y": -778.6474311047598,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-StrConcat-v2.jpg",
+      "description": "用于处理多个字符串类型变量的格式",
+      "title": "文本处理",
+      "mainColor": "#3071F2"
+     }
+    }
+   },
+   {
+    "id": "1287269",
+    "type": "15",
+    "meta": {
+     "position": {
+      "x": 3520.4155682293604,
+      "y": -656.3477362115036
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "error_msg：模型超时",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-StrConcat-v2.jpg",
+      "description": "用于处理多个字符串类型变量的格式",
+      "mainColor": "#3071F2",
+      "subTitle": "文本处理"
+     },
+     "inputs": {
+      "method": "concat",
+      "inputParameters": [],
+      "concatParams": [
+       {
+        "name": "concatResult",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "模型节点超时",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "arrayItemConcatChar",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "，",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "allArrayItemConcatChars",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": [
+           {
+            "type": "string",
+            "name": "label",
+            "required": true
+           },
+           {
+            "type": "string",
+            "name": "value",
+            "required": true
+           },
+           {
+            "type": "boolean",
+            "name": "isDefault",
+            "required": true
+           }
+          ]
+         },
+         "value": {
+          "type": "literal",
+          "content": [
+           {
+            "label": "换行",
+            "value": "\n",
+            "isDefault": true
+           },
+           {
+            "label": "制表符",
+            "value": "\t",
+            "isDefault": true
+           },
+           {
+            "label": "句号",
+            "value": "。",
+            "isDefault": true
+           },
+           {
+            "label": "逗号",
+            "value": "，",
+            "isDefault": true
+           },
+           {
+            "label": "分号",
+            "value": "；",
+            "isDefault": true
+           },
+           {
+            "label": "空格",
+            "value": " ",
+            "isDefault": true
+           }
+          ]
+         }
+        }
+       }
+      ]
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "output",
+       "required": true
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 3340.4155682293604,
+      "y": -656.3477362115036,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-StrConcat-v2.jpg",
+      "description": "用于处理多个字符串类型变量的格式",
+      "title": "文本处理",
+      "mainColor": "#3071F2"
+     }
+    }
+   },
+   {
+    "id": "1428331",
+    "type": "15",
+    "meta": {
+     "position": {
+      "x": 6566.469447996465,
+      "y": -446.2724311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "error_msg：生成失败",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-StrConcat-v2.jpg",
+      "description": "用于处理多个字符串类型变量的格式",
+      "mainColor": "#3071F2",
+      "subTitle": "文本处理"
+     },
+     "inputs": {
+      "method": "concat",
+      "inputParameters": [
+       {
+        "name": "String2",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200108",
+           "name": "failed_days"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "String3",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200108",
+           "name": "errors"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "concatParams": [
+       {
+        "name": "concatResult",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "食谱生成失败（失败天数：{{String2}}）",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "arrayItemConcatChar",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "，",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "allArrayItemConcatChars",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": [
+           {
+            "type": "string",
+            "name": "label",
+            "required": true
+           },
+           {
+            "type": "string",
+            "name": "value",
+            "required": true
+           },
+           {
+            "type": "boolean",
+            "name": "isDefault",
+            "required": true
+           }
+          ]
+         },
+         "value": {
+          "type": "literal",
+          "content": [
+           {
+            "label": "换行",
+            "value": "\n",
+            "isDefault": true
+           },
+           {
+            "label": "制表符",
+            "value": "\t",
+            "isDefault": true
+           },
+           {
+            "label": "句号",
+            "value": "。",
+            "isDefault": true
+           },
+           {
+            "label": "逗号",
+            "value": "，",
+            "isDefault": true
+           },
+           {
+            "label": "分号",
+            "value": "；",
+            "isDefault": true
+           },
+           {
+            "label": "空格",
+            "value": " ",
+            "isDefault": true
+           }
+          ]
+         }
+        }
+       }
+      ]
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "output",
+       "required": true
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 6386.469447996465,
+      "y": -446.2724311047598,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-StrConcat-v2.jpg",
+      "description": "用于处理多个字符串类型变量的格式",
+      "title": "文本处理",
+      "mainColor": "#3071F2"
+     }
+    }
+   },
+   {
+    "id": "102441",
+    "type": "32",
+    "meta": {
+     "position": {
+      "x": 7026.469447996465,
+      "y": -518.94743110476
+     }
+    },
+    "data": {
+     "inputs": {
+      "mergeGroups": [
+       {
+        "name": "Group1",
+        "variables": [
+         {
+          "type": "string",
+          "value": {
+           "type": "ref",
+           "content": {
+            "source": "block-output",
+            "blockID": "1428331",
+            "name": "output"
+           },
+           "rawMeta": {
+            "type": 1
+           }
+          }
+         },
+         {
+          "type": "string",
+          "value": {
+           "type": "ref",
+           "content": {
+            "source": "block-output",
+            "blockID": "1287269",
+            "name": "output"
+           },
+           "rawMeta": {
+            "type": 1
+           }
+          }
+         },
+         {
+          "type": "string",
+          "value": {
+           "type": "ref",
+           "content": {
+            "source": "block-output",
+            "blockID": "127375",
+            "name": "output"
+           },
+           "rawMeta": {
+            "type": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "Group1"
+      }
+     ],
+     "nodeMeta": {
+      "title": "error_msg",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/VariableMerge-icon.jpg",
+      "description": "对多个分支的输出进行聚合处理",
+      "mainColor": "#00B2B2",
+      "subTitle": "变量聚合"
+     }
+    },
+    "_temp": {
+     "bounds": {
+      "x": 6846.469447996465,
+      "y": -518.94743110476,
+      "width": 360,
+      "height": 116.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/VariableMerge-icon.jpg",
+      "description": "对多个分支的输出进行聚合处理",
+      "title": "变量聚合",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200101",
+    "type": "3",
+    "meta": {
+     "position": {
+      "x": 2886.469447996464,
+      "y": -525.44743110476
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "问卷信息结构化",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "mainColor": "#5C62FF",
+      "subTitle": "大模型"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "questionnaireData",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "100001",
+           "name": "questionnaireData"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "reportSummary",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "105094",
+           "name": "report"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "llmParam": [
+       {
+        "name": "temperature",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.3",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "maxTokens",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "2048",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "topP",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.95",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "responseFormat",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "2",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "modleName",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "Qwen3.7-Plus",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "modelType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "260",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "generationDiversity",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "default_val",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "supportThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "enableThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "prompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "问卷原文：\n{{questionnaireData}}\n\n体检报告摘要：\n{{reportSummary}}\n\n请严格输出以下结构：\n{\n  \"height_cm\": null,\n  \"weight_kg\": null,\n  \"bmi\": null,\n  \"city\": \"\",\n  \"province\": \"\",\n  \"gastrointestinal_flags\": [],\n  \"weight_loss_flags\": [],\n  \"chronic_conditions\": [],\n  \"allergies\": [],\n  \"food_taboo\": [],\n  \"eating_scene\": \"\",\n  \"medication_info\": \"\",\n  \"report_flags\": []\n}",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "enableChatHistory",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "chatHistoryRound",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "3",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "systemPrompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "你是健康食养信息结构化助手。\n请把用户问卷和体检报告摘要转换为固定 JSON。\n只提取事实，不进行诊断，不补充不存在的信息。\n未知字段使用空字符串、null 或空数组。\n只输出 JSON，不要输出 Markdown，不要输出解释。",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "settingOnError": {
+       "switch": true,
+       "dataOnErr": "{\n  \"profile_json\": {},\n  \"reasoning_content\": \"\"\n}",
+       "processType": 1,
+       "timeoutMs": 120000,
+       "singleTimeoutMs": 0,
+       "retryTimes": 1,
+       "ext": {
+        "backupLLmParam": "{\"temperature\":1,\"maxTokens\":16384,\"topP\":0.95,\"responseFormat\":2,\"modelName\":\"Doubao-Seed-2.0-lite\",\"modelType\":201,\"generationDiversity\":\"default_val\"}"
+       }
+      }
+     },
+     "outputs": [
+      {
+       "type": "object",
+       "name": "profile_json",
+       "schema": []
+      },
+      {
+       "type": "string",
+       "name": "reasoning_content"
+      },
+      {
+       "type": "object",
+       "name": "errorBody",
+       "schema": [
+        {
+         "type": "string",
+         "name": "errorMessage",
+         "readonly": true
+        },
+        {
+         "type": "string",
+         "name": "errorCode",
+         "readonly": true
+        }
+       ],
+       "readonly": true
+      },
+      {
+       "type": "boolean",
+       "name": "isSuccess",
+       "readonly": true
+      }
+     ],
+     "version": "3"
+    },
+    "_temp": {
+     "bounds": {
+      "x": 2706.469447996464,
+      "y": -525.44743110476,
+      "width": 360,
+      "height": 166.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "title": "大模型",
+      "mainColor": "#5C62FF"
+     }
+    }
+   },
+   {
+    "id": "200102",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 3346.4694479964646,
+      "y": -33.22243110476006
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "食谱套系路由",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "profile_json",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200101",
+           "name": "profile_json"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       }
+      ],
+      "code": "import json\nfrom datetime import datetime\n\n\ndef num(v, default=0.0):\n    try:\n        return float(v)\n    except Exception:\n        return default\n\n\ndef contains_any(values, keywords):\n    text = \" \".join([str(x) for x in (values or [])]).lower()\n    return any(k.lower() in text for k in keywords)\n\n\ndef get_season(month):\n    if month in (3, 4, 5):\n        return \"spring\"\n    if month in (6, 7, 8):\n        return \"summer\"\n    if month in (9, 10, 11):\n        return \"autumn\"\n    return \"winter\"\n\n\ndef get_region(province, city):\n    south_cities = {\"苏州\", \"无锡\", \"常州\", \"镇江\", \"南京\", \"南通\", \"黄山\"}\n    north_cities = {\"徐州\", \"连云港\", \"宿迁\", \"盐城\", \"淮安\", \"阜阳\"}\n\n    if city in south_cities:\n        return \"south\"\n    if city in north_cities:\n        return \"north\"\n\n    south_provinces = {\n        \"上海\", \"浙江\", \"福建\", \"江西\", \"湖南\", \"广东\",\n        \"广西\", \"海南\", \"云南\", \"贵州\", \"四川\", \"重庆\", \"安徽\"\n    }\n    return \"south\" if province in south_provinces else \"north\"\n\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    profile = params.get(\"profile_json\") or {}\n\n    # 兼容：profile_json 可能是 JSON 字符串，也可能是对象\n    if isinstance(profile, str):\n        try:\n            profile = json.loads(profile)\n        except Exception:\n            profile = {}\n    if not isinstance(profile, dict):\n        profile = {}\n\n    bmi = num(profile.get(\"bmi\"))\n    city = str(profile.get(\"city\") or \"\")\n    province = str(profile.get(\"province\") or \"\")\n\n    gut_keywords = [\n        \"长期腹泻\", \"腹泻\", \"腹胀\", \"消化不良\", \"肠胃较差\",\n        \"胃肠功能差\", \"营养不良\", \"低蛋白\", \"体重持续下降\",\n        \"明显消瘦\", \"进食困难\"\n    ]\n\n    gut_flags = profile.get(\"gastrointestinal_flags\") or []\n    weight_flags = profile.get(\"weight_loss_flags\") or []\n    chronic = profile.get(\"chronic_conditions\") or []\n    report_flags = profile.get(\"report_flags\") or []\n\n    gain_hit = (\n        (0 < bmi < 18.5)\n        or contains_any(gut_flags, gut_keywords)\n        or contains_any(weight_flags, gut_keywords)\n        or contains_any(report_flags, gut_keywords)\n        or contains_any(chronic, [\"营养不良\", \"低蛋白\", \"消瘦\"])\n    )\n\n    if gain_hit:\n        recipe_set_id = \"gut_gain\"\n        recipe_set_name = \"肠道较差人群·增重版\"\n        region = \"\"\n        season = \"\"\n        route_reason = \"命中BMI偏低、消瘦、肠胃异常或营养不良条件，优先使用增重版。\"\n    else:\n        month = datetime.now().month\n        season = get_season(month)\n        region = get_region(province, city)\n        recipe_set_id = f\"{season}_{region}\"\n        recipe_set_name = f\"{season}版·{region}\"\n        route_reason = f\"未命中增重条件，城市{city or '未填写'}按区域规则归类，当前为{month}月。\"\n\n    tags = []\n    chronic_text = \" \".join([str(x) for x in chronic])\n    allergy_text = \" \".join([str(x) for x in (profile.get(\"allergies\") or [])])\n    taboo_text = \" \".join([str(x) for x in (profile.get(\"food_taboo\") or [])])\n\n    if \"高血压\" in chronic_text:\n        tags.append(\"low_salt\")\n    if \"糖尿病\" in chronic_text:\n        tags.append(\"low_sugar\")\n    if \"高血脂\" in chronic_text:\n        tags.append(\"low_fat\")\n    if \"高尿酸\" in chronic_text:\n        tags.append(\"low_purine\")\n    if any(x in allergy_text for x in [\"鱼\", \"虾\", \"海鲜\"]):\n        tags.append(\"replace_seafood\")\n    if taboo_text:\n        tags.append(\"respect_food_taboo\")\n\n    return {\n        \"recipe_set_id\": recipe_set_id,\n        \"recipe_set_name\": recipe_set_name,\n        \"region\": region,\n        \"season\": season,\n        \"route_reason\": route_reason,\n        \"micro_adjustment_tags\": \",\".join(tags),\n        \"rule_version\": \"v1\"\n    }",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "recipe_set_id"
+      },
+      {
+       "type": "string",
+       "name": "recipe_set_name"
+      },
+      {
+       "type": "string",
+       "name": "region"
+      },
+      {
+       "type": "string",
+       "name": "season"
+      },
+      {
+       "type": "string",
+       "name": "route_reason"
+      },
+      {
+       "type": "string",
+       "name": "micro_adjustment_tags"
+      },
+      {
+       "type": "string",
+       "name": "rule_version"
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 3166.4694479964646,
+      "y": -33.22243110476006,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200104A",
+    "type": "3",
+    "meta": {
+     "position": {
+      "x": 4726.469447996465,
+      "y": -459.2724311047598
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "生成28天单日食谱",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "mainColor": "#5C62FF",
+      "subTitle": "大模型"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "profile_json",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200101",
+           "name": "profile_json"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       },
+       {
+        "name": "report_json",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "105094",
+           "name": "report"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "recipe_set_id",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200102",
+           "name": "recipe_set_id"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "micro_adjustment_tags",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200102",
+           "name": "micro_adjustment_tags"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "item1",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200104A",
+           "name": "item1"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       }
+      ],
+      "llmParam": [
+       {
+        "name": "temperature",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.3",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "maxTokens",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "4096",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "topP",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.7",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "responseFormat",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "2",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "modleName",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "Doubao-Seed-1.8",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "modelType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "180",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "generationDiversity",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "default_val",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "supportThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "enableThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "apiType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "1",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "prompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "当天基础食谱：\n{{item1}}\n\n用户结构化信息：\n{{profile_json}}\n\n体检报告摘要：\n{{report_json}}\n\n当前套系：\n{{recipe_set_id}}\n\n微调标签：\n{{micro_adjustment_tags}}\n\n请严格输出以下 JSON（只输出一个 JSON 对象，不要输出数组、Markdown 围栏或解释文字）：\n{\n  \"day_no\": 1,\n  \"dayLabel\": \"Day1（周一）\",\n  \"meals\": {\n    \"MORNING\": \"\",\n    \"BREAKFAST\": \"\",\n    \"LUNCH\": \"\",\n    \"DINNER\": \"\"\n  },\n  \"usedIngredients\": [],\n  \"adjustmentNotes\": []\n}\n\n要求：\n1. day_no 和 dayLabel 必须根据当天基础食谱中的实际日期生成，不要固定输出 Day1。当前是第几个批处理项就生成第几天。\n2. MORNING、BREAKFAST、LUNCH、DINNER 必须有内容。\n3. 每个食材尽量保留克数或数量。\n4. 只输出 JSON，不要 Markdown 代码块、不要解释。\n5. 不要输出除上述字段以外的任何内容。\n6. 字段名必须与示例完全一致（usedIngredients 的 I 大写、adjustmentNotes 的 N 大写），不要改名或增删字段。\n7. 所有字符串值使用双引号，JSON 必须可被 json.loads 解析。",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "enableChatHistory",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "chatHistoryRound",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "3",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "systemPrompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "你是一名专业营养师，负责把一天的基础食谱改造成适合当前用户的单日食谱。\n\n必须保留基础食谱中的餐次和克数；可以根据用户慢病、过敏和忌口进行必要替换。\n糖尿病：减少粥、糯米、糖和高糖水果。\n高血压：减少盐、腌制品和高钠调味料。\n高血脂：减少肥肉、油炸和高油烹饪。\n高尿酸：避免浓肉汤，控制高嘌呤食物。\n鱼虾或海鲜过敏：替换为鸡胸肉、瘦牛肉、豆腐或鸡蛋。\n不得新增用户明确禁忌食材。\n只输出 JSON，不要输出解释、Markdown 标题或代码围栏。",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "batch": {
+       "batchEnable": true,
+       "batchSize": 28,
+       "concurrentSize": 8,
+       "inputLists": [
+        {
+         "name": "item1",
+         "input": {
+          "type": "list",
+          "schema": {
+           "type": "object",
+           "schema": []
+          },
+          "value": {
+           "type": "ref",
+           "content": {
+            "source": "block-output",
+            "blockID": "200201",
+            "name": "outputList"
+           },
+           "rawMeta": {
+            "type": 103
+           }
+          }
+         }
+        }
+       ]
+      },
+      "settingOnError": {
+       "switch": true,
+       "dataOnErr": "{\n    \"day_recipe_json\": \"{\\\"day_no\\\": 1, \\\"dayLabel\\\": \\\"DayN（默认兜底）\\\", \\\"meals\\\": {\\\"MORNING\\\": \\\"温水200ml\\\", \\\"BREAKFAST\\\": \\\"生成失败，请重新生成\\\", \\\"LUNCH\\\": \\\"生成失败，请重新生成\\\", \\\"DINNER\\\": \\\"生成失败，请重新生成\\\"}, \\\"usedIngredients\\\": [], \\\"adjustmentNotes\\\": [\\\"该日食谱由兜底数据填充，请重新生成或手动调整\\\"]}\",\n    \"reasoning_content\": \"该日 LLM 生成失败，已使用默认兜底食谱\",\n    \"outputList\": [\n        {}\n    ]\n}",
+       "processType": 1,
+       "timeoutMs": 600000,
+       "singleTimeoutMs": 90000,
+       "retryTimes": 1,
+       "ext": {
+        "backupLLmParam": "{\"temperature\":1,\"maxTokens\":4096,\"topP\":0.95,\"responseFormat\":2,\"modelName\":\"Doubao-Seed-2.0-pro\",\"modelType\":200,\"generationDiversity\":\"default_val\"}"
+       }
+      }
+     },
+     "outputs": [
+      {
+       "type": "list",
+       "name": "outputList",
+       "schema": {
+        "type": "object",
+        "schema": [
+         {
+          "type": "integer",
+          "name": "day_no"
+         },
+         {
+          "type": "string",
+          "name": "dayLabel"
+         },
+         {
+          "type": "object",
+          "name": "meals",
+          "schema": [
+           {
+            "type": "string",
+            "name": "MORNING"
+           },
+           {
+            "type": "string",
+            "name": "BREAKFAST"
+           },
+           {
+            "type": "string",
+            "name": "LUNCH"
+           },
+           {
+            "type": "string",
+            "name": "DINNER"
+           }
+          ]
+         },
+         {
+          "type": "list",
+          "name": "usedIngredients",
+          "schema": {
+           "type": "string"
+          }
+         },
+         {
+          "type": "list",
+          "name": "adjustmentNotes",
+          "schema": {
+           "type": "string"
+          }
+         },
+         {
+          "type": "object",
+          "name": "errorBody",
+          "schema": [
+           {
+            "type": "string",
+            "name": "errorMessage",
+            "readonly": true
+           },
+           {
+            "type": "string",
+            "name": "errorCode",
+            "readonly": true
+           }
+          ],
+          "readonly": true
+         },
+         {
+          "type": "boolean",
+          "name": "isSuccess",
+          "readonly": true
+         }
+        ]
+       }
+      }
+     ],
+     "version": "3"
+    },
+    "_temp": {
+     "bounds": {
+      "x": 4546.469447996465,
+      "y": -459.2724311047598,
+      "width": 360,
+      "height": 166.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "title": "大模型",
+      "mainColor": "#5C62FF"
+     }
+    }
+   },
+   {
+    "id": "200105",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 5646.469447996465,
+      "y": 79.6275688952403
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "校验单日食谱",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "outputList",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": [
+           {
+            "type": "integer",
+            "name": "day_no"
+           },
+           {
+            "type": "string",
+            "name": "dayLabel"
+           },
+           {
+            "type": "object",
+            "name": "meals",
+            "schema": [
+             {
+              "type": "string",
+              "name": "MORNING"
+             },
+             {
+              "type": "string",
+              "name": "BREAKFAST"
+             },
+             {
+              "type": "string",
+              "name": "LUNCH"
+             },
+             {
+              "type": "string",
+              "name": "DINNER"
+             }
+            ]
+           },
+           {
+            "type": "list",
+            "name": "usedIngredients",
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "type": "list",
+            "name": "adjustmentNotes",
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "type": "object",
+            "name": "errorBody",
+            "schema": [
+             {
+              "type": "string",
+              "name": "errorMessage",
+              "readonly": true
+             },
+             {
+              "type": "string",
+              "name": "errorCode",
+              "readonly": true
+             }
+            ],
+            "readonly": true
+           },
+           {
+            "type": "boolean",
+            "name": "isSuccess",
+            "readonly": true
+           }
+          ]
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200104A",
+           "name": "outputList"
+          },
+          "rawMeta": {
+           "type": 103
+          }
+         }
+        }
+       }
+      ],
+      "code": "import json\nimport re\n\nREQUIRED_MEALS = [\"MORNING\", \"BREAKFAST\", \"LUNCH\", \"DINNER\"]\n\n\ndef normalize_day_no(day_no, fallback):\n    \"\"\"把各种 day_no 写法规范化为整数\"\"\"\n    if isinstance(day_no, int):\n        return day_no\n    if isinstance(day_no, float):\n        return int(day_no)\n    try:\n        return int(str(day_no).strip())\n    except (TypeError, ValueError):\n        pass\n    m = re.search(r\"\\d+\", str(day_no))\n    if m:\n        return int(m.group())\n    return fallback\n\n\ndef parse_day_recipe_json(raw):\n    \"\"\"清洗并解析 LLM 输出的 day_recipe_json，兼容 Markdown 围栏和多余文本\"\"\"\n    if not isinstance(raw, str):\n        return raw\n    text = raw.strip()\n    if text.startswith(\"```\"):\n        text = text.strip(\"`\")\n        if text.lower().startswith(\"json\"):\n            text = text[4:]\n        text = text.strip()\n    start = text.find(\"{\")\n    end = text.rfind(\"}\")\n    if start >= 0 and end > start:\n        text = text[start:end + 1]\n    try:\n        return json.loads(text)\n    except Exception:\n        # 尝试修复被截断的 JSON\n        fixed = fix_truncated_recipe_json(text)\n        if fixed is not None:\n            return fixed\n        raise\n\n\ndef fix_truncated_recipe_json(text):\n    \"\"\"修复 LLM 输出的被截断食谱 JSON\"\"\"\n    text = text.strip()\n\n    # 场景 1：截断在 DINNER 字段或更后面，已有完整 MORNING/BREAKFAST/LUNCH/DINNER\n    # 找到 DINNER 字段的结束位置，然后补全后续结构\n    dinner_match = re.search(r'\"DINNER\"\\s*:\\s*\"([^\"]*)\"', text)\n    if dinner_match:\n        dinner_end = dinner_match.end()\n        fixed = text[:dinner_end] + ', \"usedIngredients\": [], \"adjustmentNotes\": []}'\n        try:\n            return json.loads(fixed)\n        except Exception:\n            pass\n\n    # 场景 2：截断在某个字符串值中间，尝试用更通用的方式补全 meals 后结构\n    # 找到 meals 对象中最后一个完整的 \"key\": \"value\"\n    last_match = None\n    for pattern in [r'\"([A-Z]+)\"\\s*:\\s*\"([^\"]*)\"', r'\"([A-Z]+)\"\\s*:\\s*\\[([^\\]]*)\\]']:\n        for m in re.finditer(pattern, text):\n            last_match = m\n    if last_match and last_match.end() < len(text):\n        fixed = text[:last_match.end()] + ', \"usedIngredients\": [], \"adjustmentNotes\": []}'\n        try:\n            return json.loads(fixed)\n        except Exception:\n            pass\n\n    return None\n\n\ndef extract_raw_from_item(item):\n    \"\"\"从上游 item 中提取食谱 raw，兼容包装结构和直接对象\"\"\"\n    if not isinstance(item, dict):\n        return item\n    # 如果 item 本身就是食谱对象（包含 meals），直接返回\n    if \"meals\" in item:\n        return item\n    # 优先取 day_recipe_json（JSON 字符串）\n    if item.get(\"day_recipe_json\") not in (None, \"\"):\n        return item.get(\"day_recipe_json\")\n    # 尝试其他常见字段\n    for key in [\"output\", \"result\", \"content\", \"data\"]:\n        if item.get(key) not in (None, \"\"):\n            return item.get(key)\n    return None\n\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    output_list = params.get(\"outputList\") or []\n\n    debug_logs = []\n\n    def log(step, info):\n        debug_logs.append({\"step\": step, \"info\": info})\n\n    log(\"input_type\", {\"output_list_type\": type(output_list).__name__, \"is_list\": isinstance(output_list, list)})\n\n    # 兼容：参数声明为 string 时，Coze 会把上游 list 序列化为 JSON 字符串传入\n    if isinstance(output_list, str):\n        log(\"input_is_string\", {\"length\": len(output_list), \"preview\": output_list[:200]})\n        try:\n            output_list = json.loads(output_list)\n            log(\"parsed_string\", {\"parsed_type\": type(output_list).__name__})\n        except Exception as exc:\n            log(\"parse_string_error\", {\"error\": str(exc)})\n            output_list = []\n    if not isinstance(output_list, list):\n        log(\"input_not_list\", {\"type\": type(output_list).__name__})\n        output_list = []\n\n    valid_days = []\n    failed_days = []\n    errors = []\n\n    for index, item in enumerate(output_list):\n        item_type = type(item).__name__\n        item_keys = list(item.keys()) if isinstance(item, dict) else None\n        log(f\"item_{index}_start\", {\"item_type\": item_type, \"item_keys\": item_keys})\n\n        raw = extract_raw_from_item(item)\n        raw_type = type(raw).__name__\n        raw_preview = str(raw)[:300]\n        log(f\"item_{index}_raw\", {\"raw_type\": raw_type, \"raw_preview\": raw_preview})\n\n        if raw in (None, \"\", {}):\n            failed_days.append(index + 1)\n            err = {\n                \"index\": index + 1,\n                \"error\": \"day_recipe_json 为空\",\n                \"item_type\": item_type,\n                \"item_keys\": item_keys,\n            }\n            errors.append(err)\n            log(f\"item_{index}_empty\", err)\n            continue\n\n        try:\n            obj = parse_day_recipe_json(raw)\n            log(f\"item_{index}_parsed\", {\"obj_type\": type(obj).__name__, \"keys\": list(obj.keys())[:20] if isinstance(obj, dict) else None})\n\n            if not isinstance(obj, dict):\n                raise ValueError(\"不是有效的 JSON 对象，类型：\" + type(obj).__name__)\n\n            # 加固1：检测兜底/失败标记，防止\"假成功\"（dataOnErr 兜底或模型输出失败文案）\n            raw_text = str(raw)\n            if any(mark in raw_text for mark in [\"生成失败\", \"请重新生成\", \"默认兜底\"]):\n                raise ValueError(\"检测到兜底/失败标记，视为生成失败\")\n\n            # 加固2：item 自带 isSuccess=false 时判失败\n            if isinstance(item, dict) and item.get(\"isSuccess\") is False:\n                raise ValueError(\"批处理项 isSuccess=false\")\n\n            # 加固3：强制使用批处理顺序编号，不信 LLM 输出的 day_no（防幻觉/兜底错号）\n            day_no = index + 1\n            obj[\"day_no\"] = day_no\n\n            day_label = obj.get(\"dayLabel\") or obj.get(\"day_label\") or \"\"\n            # 优先用数据库记录的 day_label，保证与 day_no 对齐（防 4 节点残留标签错位）\n            base_label = item.get(\"day_label\") if isinstance(item, dict) else None\n            if base_label:\n                day_label = base_label\n            else:\n                m = re.search(r\"\\d+\", str(day_label))\n                if m and int(m.group()) != day_no:\n                    day_label = f\"Day{day_no}\"\n            obj[\"dayLabel\"] = day_label\n\n            meals = obj.get(\"meals\") or {}\n            log(f\"item_{index}_meals\", {\"meals_type\": type(meals).__name__, \"meals_keys\": list(meals.keys()) if isinstance(meals, dict) else None})\n\n            missing = [k for k in REQUIRED_MEALS if k not in meals]\n            if missing:\n                raise ValueError(\"缺少餐次：\" + \",\".join(missing))\n            if not meals.get(\"BREAKFAST\") or not meals.get(\"LUNCH\") or not meals.get(\"DINNER\"):\n                raise ValueError(\"早餐、午餐或晚餐为空\")\n\n            valid_days.append(obj)\n            log(f\"item_{index}_success\", {\"day_no\": day_no, \"day_label\": day_label})\n        except Exception as exc:\n            failed_days.append(index + 1)\n            err = {\n                \"index\": index + 1,\n                \"error\": str(exc),\n                \"item_type\": item_type,\n                \"raw_type\": raw_type,\n                \"raw_preview\": raw_preview,\n            }\n            errors.append(err)\n            log(f\"item_{index}_error\", err)\n\n    ok = (len(valid_days) == 28) and (not failed_days)\n    status = \"SUCCESS\" if ok else \"FAILED\"\n    result = {\n        \"status\": status,\n        \"is_success\": ok,\n        \"valid_days\": {\"items\": valid_days},\n        \"failed_days\": \",\".join(str(x) for x in failed_days),\n        \"errors\": {\"items\": errors},\n        \"completed_days\": str(len(valid_days)),\n        \"total_days\": \"28\",\n        \"debug_logs\": {\"items\": debug_logs}\n    }\n    log(\"final_result\", {\"completed_days\": len(valid_days), \"failed_count\": len(failed_days)})\n    return result\n",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "status"
+      },
+      {
+       "type": "object",
+       "name": "valid_days",
+       "schema": []
+      },
+      {
+       "type": "string",
+       "name": "failed_days"
+      },
+      {
+       "type": "object",
+       "name": "errors",
+       "schema": []
+      },
+      {
+       "type": "string",
+       "name": "completed_days"
+      },
+      {
+       "type": "string",
+       "name": "total_days"
+      },
+      {
+       "type": "boolean",
+       "name": "is_success"
+      },
+      {
+       "type": "object",
+       "name": "debug_logs",
+       "schema": []
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 5466.469447996465,
+      "y": 79.6275688952403,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200105b",
+    "type": "8",
+    "meta": {
+     "position": {
+      "x": 6106.469447996465,
+      "y": 66.6275688952403
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "校验分支",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+      "description": "连接多个下游分支，若设定的条件成立则仅运行对应的分支，若均不成立则只运行“否则”分支",
+      "mainColor": "#00B2B2",
+      "subTitle": "选择器"
+     },
+     "inputs": {
+      "branches": [
+       {
+        "condition": {
+         "logic": 2,
+         "conditions": [
+          {
+           "operator": 11,
+           "left": {
+            "input": {
+             "type": "boolean",
+             "value": {
+              "type": "ref",
+              "content": {
+               "source": "block-output",
+               "blockID": "200105",
+               "name": "is_success"
+              }
+             }
+            }
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "_temp": {
+     "bounds": {
+      "x": 5926.469447996465,
+      "y": 66.6275688952403,
+      "width": 360,
+      "height": 140.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+      "description": "连接多个下游分支，若设定的条件成立则仅运行对应的分支，若均不成立则只运行“否则”分支",
+      "title": "选择器",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200106",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 7958.469447996465,
+      "y": -373.69743110475997
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "整理28天结果",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "valid_days",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200108",
+           "name": "valid_days"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       },
+       {
+        "name": "reportAnalysis",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "105094",
+           "name": "reportAnalysis"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       }
+      ],
+      "code": "import json\n\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    days = params.get(\"valid_days\") or []\n    ra = params.get(\"reportAnalysis\") or []\n\n    # 兼容：参数声明为 string 时，Coze 会把上游 object 序列化为 JSON 字符串传入\n    if isinstance(days, str):\n        try:\n            days = json.loads(days)\n        except Exception:\n            days = []\n    if isinstance(days, dict):\n        days = days.get(\"items\") or days.get(\"list\") or []\n    if not isinstance(days, list):\n        days = []\n\n    # reportAnalysis 兼容字符串/对象\n    if isinstance(ra, str):\n        try:\n            ra = json.loads(ra)\n        except Exception:\n            ra = []\n    if isinstance(ra, dict):\n        ra = ra.get(\"items\") or []\n    if not isinstance(ra, list):\n        ra = []\n\n    days = sorted(days, key=lambda x: int(x.get(\"day_no\", 0)))\n    weeks = []\n\n    for week_number in range(1, 5):\n        start = (week_number - 1) * 7\n        week_days = []\n        for day in days[start:start + 7]:\n            # 输出白名单：只保留 MORNING/BREAKFAST/LUNCH/DINNER 四餐，\n            # 上游多余字段一律过滤，保证输出结构恒定\n            src_meals = day.get(\"meals\", {}) or {}\n            meals_out = {k: src_meals.get(k, \"\") for k in (\"MORNING\", \"BREAKFAST\", \"LUNCH\", \"DINNER\")}\n            week_days.append({\n                \"dayLabel\": day.get(\"dayLabel\", \"\"),\n                \"dayNumber\": int(day.get(\"day_no\", 0)),\n                \"meals\": meals_out\n            })\n        weeks.append({\"weekNumber\": week_number, \"days\": week_days})\n\n    result = {\"reportAnalysis\": ra, \"weeks\": weeks}\n    return {\n        \"error_message\": \"\",\n        \"result\": result,\n        \"status\": \"COMPLETED\",\n        \"total_days\": str(len(days))\n    }\n",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "error_message"
+      },
+      {
+       "type": "string",
+       "name": "status"
+      },
+      {
+       "type": "object",
+       "name": "result",
+       "schema": []
+      },
+      {
+       "type": "string",
+       "name": "total_days"
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 7778.469447996465,
+      "y": -373.69743110475997,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "197436",
+    "type": "43",
+    "meta": {
+     "position": {
+      "x": 3806.4694479964646,
+      "y": -78.22243110476006
+     }
+    },
+    "data": {
+     "inputs": {
+      "databaseInfoList": [
+       {
+        "databaseInfoID": "7668315009742569472"
+       }
+      ],
+      "selectParam": {
+       "condition": {
+        "conditionList": [
+         [
+          {
+           "name": "left",
+           "input": {
+            "type": "string",
+            "value": {
+             "type": "literal",
+             "content": "set_id"
+            }
+           }
+          },
+          {
+           "name": "operation",
+           "input": {
+            "type": "string",
+            "value": {
+             "type": "literal",
+             "content": "EQUAL"
+            }
+           }
+          },
+          {
+           "name": "right",
+           "input": {
+            "type": "string",
+            "value": {
+             "type": "ref",
+             "content": {
+              "source": "block-output",
+              "blockID": "200102",
+              "name": "recipe_set_id"
+             },
+             "rawMeta": {
+              "type": 1
+             }
+            }
+           }
+          }
+         ],
+         [
+          {
+           "name": "left",
+           "input": {
+            "type": "string",
+            "value": {
+             "type": "literal",
+             "content": "version"
+            }
+           }
+          },
+          {
+           "name": "operation",
+           "input": {
+            "type": "string",
+            "value": {
+             "type": "literal",
+             "content": "EQUAL"
+            }
+           }
+          },
+          {
+           "name": "right",
+           "input": {
+            "type": "string",
+            "value": {
+             "type": "literal",
+             "content": "v1",
+             "rawMeta": {
+              "type": 1
+             }
+            }
+           }
+          }
+         ]
+        ],
+        "logic": "AND"
+       },
+       "orderByList": [],
+       "limit": 100
+      },
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "list",
+       "name": "outputList",
+       "schema": {
+        "type": "object",
+        "schema": []
+       }
+      },
+      {
+       "type": "integer",
+       "name": "rowNum"
+      }
+     ],
+     "nodeMeta": {
+      "title": "查询数据",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icaon-database-select.jpg",
+      "description": "从表获取数据，用户可定义查询条件、选择列等，输出符合条件的数据",
+      "mainColor": "#F2B600",
+      "subTitle": "查询数据"
+     }
+    },
+    "_temp": {
+     "bounds": {
+      "x": 3626.4694479964646,
+      "y": -78.22243110476006,
+      "width": 360,
+      "height": 204.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icaon-database-select.jpg",
+      "description": "从表获取数据，用户可定义查询条件、选择列等，输出符合条件的数据",
+      "title": "查询数据",
+      "mainColor": "#F2B600"
+     }
+    }
+   },
+   {
+    "id": "200201",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 4266.469447996465,
+      "y": -33.22243110476006
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "排序28天基础食谱",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "outputList",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": []
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "197436",
+           "name": "outputList"
+          },
+          "rawMeta": {
+           "type": 103
+          }
+         }
+        }
+       }
+      ],
+      "code": "async def main(args: Args) -> Output:\n    params = args.params\n    output_list = params.get(\"outputList\") or []\n    if not isinstance(output_list, list):\n        output_list = []\n\n    # 按 day_no 升序排序，保证批处理输入顺序 = Day1~28\n    # 兼容 day_no 为 int/str/缺失 的情况\n    def day_key(item):\n        if isinstance(item, dict):\n            v = item.get(\"day_no\")\n            try:\n                return int(v)\n            except (TypeError, ValueError):\n                return 9999\n        return 9999\n\n    output_list = sorted(output_list, key=day_key)\n    return {\n        \"outputList\": output_list\n    }",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "list",
+       "name": "outputList",
+       "schema": {
+        "type": "object",
+        "schema": []
+       }
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 4086.4694479964646,
+      "y": -33.22243110476006,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200107",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 7121.992885496463,
+      "y": 204.34085014524067
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "筛选失败天",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "failed_days",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200105",
+           "name": "failed_days"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "base_list",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": []
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200201",
+           "name": "outputList"
+          },
+          "rawMeta": {
+           "type": 103
+          }
+         }
+        }
+       }
+      ],
+      "code": "import json\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    failed_str = params.get(\"failed_days\") or \"\"\n    base_list = params.get(\"base_list\") or []\n\n    # 解析失败天号\n    failed = []\n    for part in str(failed_str).split(\",\"):\n        part = part.strip()\n        if part.isdigit():\n            failed.append(int(part))\n\n    # base_list 是 200201 排序后的 28 天基础食谱（已按 day_no 升序）\n    if isinstance(base_list, str):\n        try:\n            base_list = json.loads(base_list)\n        except Exception:\n            base_list = []\n    if not isinstance(base_list, list):\n        base_list = []\n\n    # 按 day_no 建索引（基础食谱 item 带 day_no）\n    by_day = {}\n    for i, item in enumerate(base_list):\n        if isinstance(item, dict):\n            dn = item.get(\"day_no\")\n            if dn is not None:\n                try:\n                    by_day[int(dn)] = item\n                except Exception:\n                    by_day[i + 1] = item\n            else:\n                by_day[i + 1] = item\n        else:\n            by_day[i + 1] = item\n\n    # 顺序保持失败天号的升序（批处理顺序 = 失败天顺序）\n    retry_items = []\n    for dn in failed:\n        if dn in by_day:\n            retry_items.append(by_day[dn])\n        else:\n            # 找不到对应基础食谱时传占位（codex 🟢7），带 day_no 供 LLM 参考\n            retry_items.append({\"day_no\": dn})\n\n    # 空 failed 防御（codex 🟢6）：正常不会发生，兜底输出完整列表避免空批\n    if not retry_items:\n        retry_items = base_list\n\n    return {\"retry_items\": retry_items}\n",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "list",
+       "name": "retry_items",
+       "schema": {
+        "type": "object",
+        "schema": []
+       }
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 6941.992885496463,
+      "y": 204.34085014524067,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200104B",
+    "type": "3",
+    "meta": {
+     "position": {
+      "x": 7921.992885496463,
+      "y": 104.34085014524067
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "重生成失败天食谱",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "mainColor": "#5C62FF",
+      "subTitle": "大模型"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "profile_json",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200101",
+           "name": "profile_json"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       },
+       {
+        "name": "report_json",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "105094",
+           "name": "report"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "recipe_set_id",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200102",
+           "name": "recipe_set_id"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "micro_adjustment_tags",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200102",
+           "name": "micro_adjustment_tags"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "item1",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200104B",
+           "name": "item1"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       }
+      ],
+      "llmParam": [
+       {
+        "name": "temperature",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.3",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "maxTokens",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "4096",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "topP",
+        "input": {
+         "type": "float",
+         "value": {
+          "type": "literal",
+          "content": "0.7",
+          "rawMeta": {
+           "type": 4
+          }
+         }
+        }
+       },
+       {
+        "name": "responseFormat",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "2",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "modleName",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "Doubao-Seed-1.8",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "modelType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "180",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "generationDiversity",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "default_val",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "supportThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": true,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "enableThinking",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "apiType",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "1",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "prompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "当天基础食谱：\n{{item1}}\n\n用户结构化信息：\n{{profile_json}}\n\n体检报告摘要：\n{{report_json}}\n\n当前套系：\n{{recipe_set_id}}\n\n微调标签：\n{{micro_adjustment_tags}}\n\n请严格输出以下 JSON（只输出一个 JSON 对象，不要输出数组、Markdown 围栏或解释文字）：\n{\n  \"day_no\": 1,\n  \"dayLabel\": \"Day1（周一）\",\n  \"meals\": {\n    \"MORNING\": \"\",\n    \"BREAKFAST\": \"\",\n    \"LUNCH\": \"\",\n    \"DINNER\": \"\"\n  },\n  \"usedIngredients\": [],\n  \"adjustmentNotes\": []\n}\n\n要求：\n1. day_no 和 dayLabel 必须根据当天基础食谱中的实际日期生成，day_no 使用当天基础食谱的 day_no，不要使用批处理序号。\n2. MORNING、BREAKFAST、LUNCH、DINNER 必须有内容。\n3. 每个食材尽量保留克数或数量。\n4. 只输出 JSON，不要 Markdown 代码块、不要解释。\n5. 不要输出除上述字段以外的任何内容。\n6. 字段名必须与示例完全一致（usedIngredients 的 I 大写、adjustmentNotes 的 N 大写），不要改名或增删字段。\n7. 所有字符串值使用双引号，JSON 必须可被 json.loads 解析。",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "enableChatHistory",
+        "input": {
+         "type": "boolean",
+         "value": {
+          "type": "literal",
+          "content": false,
+          "rawMeta": {
+           "type": 3
+          }
+         }
+        }
+       },
+       {
+        "name": "chatHistoryRound",
+        "input": {
+         "type": "integer",
+         "value": {
+          "type": "literal",
+          "content": "3",
+          "rawMeta": {
+           "type": 2
+          }
+         }
+        }
+       },
+       {
+        "name": "systemPrompt",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "literal",
+          "content": "你是一名专业营养师，负责把一天的基础食谱改造成适合当前用户的单日食谱。\n\n\n必须保留基础食谱中的餐次和克数；可以根据用户慢病、过敏和忌口进行必要替换。\n糖尿病：减少粥、糯米、糖和高糖水果。\n高血压：减少盐、腌制品和高钠调味料。\n高血脂：减少肥肉、油炸和高油烹饪。\n高尿酸：避免浓肉汤，控制高嘌呤食物。\n鱼虾或海鲜过敏：替换为鸡胸肉、瘦牛肉、豆腐或鸡蛋。\n不得新增用户明确禁忌食材。\n只输出 JSON，不要输出解释、Markdown 标题或代码围栏。",
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       }
+      ],
+      "batch": {
+       "batchEnable": true,
+       "batchSize": 28,
+       "concurrentSize": 8,
+       "inputLists": [
+        {
+         "name": "item1",
+         "input": {
+          "type": "list",
+          "schema": {
+           "type": "object",
+           "schema": []
+          },
+          "value": {
+           "type": "ref",
+           "content": {
+            "source": "block-output",
+            "blockID": "200107",
+            "name": "retry_items"
+           },
+           "rawMeta": {
+            "type": 103
+           }
+          }
+         }
+        }
+       ]
+      },
+      "settingOnError": {
+       "switch": true,
+       "dataOnErr": "{\n    \"day_recipe_json\": \"{\\\"day_no\\\": 1, \\\"dayLabel\\\": \\\"DayN（默认兜底）\\\", \\\"meals\\\": {\\\"MORNING\\\": \\\"温水200ml\\\", \\\"BREAKFAST\\\": \\\"生成失败，请重新生成\\\", \\\"LUNCH\\\": \\\"生成失败，请重新生成\\\", \\\"DINNER\\\": \\\"生成失败，请重新生成\\\"}, \\\"usedIngredients\\\": [], \\\"adjustmentNotes\\\": [\\\"该日食谱由兜底数据填充，请重新生成或手动调整\\\"]}\",\n    \"reasoning_content\": \"该日 LLM 生成失败，已使用默认兜底食谱\",\n    \"outputList\": [\n        {}\n    ]\n}",
+       "processType": 1,
+       "timeoutMs": 300000,
+       "singleTimeoutMs": 60000,
+       "retryTimes": 1,
+       "ext": {
+        "backupLLmParam": "{\"temperature\":1,\"maxTokens\":4096,\"topP\":0.95,\"responseFormat\":2,\"modelName\":\"Doubao-Seed-2.0-pro\",\"modelType\":200,\"generationDiversity\":\"default_val\"}"
+       }
+      }
+     },
+     "outputs": [
+      {
+       "type": "list",
+       "name": "outputList",
+       "schema": {
+        "type": "object",
+        "schema": [
+         {
+          "type": "integer",
+          "name": "day_no"
+         },
+         {
+          "type": "string",
+          "name": "dayLabel"
+         },
+         {
+          "type": "object",
+          "name": "meals",
+          "schema": [
+           {
+            "type": "string",
+            "name": "MORNING"
+           },
+           {
+            "type": "string",
+            "name": "BREAKFAST"
+           },
+           {
+            "type": "string",
+            "name": "LUNCH"
+           },
+           {
+            "type": "string",
+            "name": "DINNER"
+           }
+          ]
+         },
+         {
+          "type": "list",
+          "name": "usedIngredients",
+          "schema": {
+           "type": "string"
+          }
+         },
+         {
+          "type": "list",
+          "name": "adjustmentNotes",
+          "schema": {
+           "type": "string"
+          }
+         },
+         {
+          "type": "object",
+          "name": "errorBody",
+          "schema": [
+           {
+            "type": "string",
+            "name": "errorMessage",
+            "readonly": true
+           },
+           {
+            "type": "string",
+            "name": "errorCode",
+            "readonly": true
+           }
+          ],
+          "readonly": true
+         },
+         {
+          "type": "boolean",
+          "name": "isSuccess",
+          "readonly": true
+         }
+        ]
+       }
+      }
+     ],
+     "version": "3"
+    },
+    "_temp": {
+     "bounds": {
+      "x": 7741.992885496463,
+      "y": 104.34085014524067,
+      "width": 360,
+      "height": 166.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+      "description": "调用大语言模型,使用变量和提示词生成回复",
+      "title": "大模型",
+      "mainColor": "#5C62FF"
+     }
+    }
+   },
+   {
+    "id": "200108",
+    "type": "5",
+    "meta": {
+     "position": {
+      "x": 8721.992885496464,
+      "y": 204.34085014524067
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "合并复检",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "mainColor": "#00B2B2",
+      "subTitle": "代码"
+     },
+     "inputs": {
+      "inputParameters": [
+       {
+        "name": "valid_days",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200105",
+           "name": "valid_days"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       },
+       {
+        "name": "retry_list",
+        "input": {
+         "type": "list",
+         "schema": {
+          "type": "object",
+          "schema": [
+           {
+            "type": "integer",
+            "name": "day_no"
+           },
+           {
+            "type": "string",
+            "name": "dayLabel"
+           },
+           {
+            "type": "object",
+            "name": "meals",
+            "schema": [
+             {
+              "type": "string",
+              "name": "MORNING"
+             },
+             {
+              "type": "string",
+              "name": "BREAKFAST"
+             },
+             {
+              "type": "string",
+              "name": "LUNCH"
+             },
+             {
+              "type": "string",
+              "name": "DINNER"
+             }
+            ]
+           },
+           {
+            "type": "list",
+            "name": "usedIngredients",
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "type": "list",
+            "name": "adjustmentNotes",
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "type": "object",
+            "name": "errorBody",
+            "schema": [
+             {
+              "type": "string",
+              "name": "errorMessage",
+              "readonly": true
+             },
+             {
+              "type": "string",
+              "name": "errorCode",
+              "readonly": true
+             }
+            ],
+            "readonly": true
+           },
+           {
+            "type": "boolean",
+            "name": "isSuccess",
+            "readonly": true
+           }
+          ]
+         },
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200104B",
+           "name": "outputList"
+          },
+          "rawMeta": {
+           "type": 103
+          }
+         }
+        }
+       },
+       {
+        "name": "failed_days",
+        "input": {
+         "type": "string",
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200105",
+           "name": "failed_days"
+          },
+          "rawMeta": {
+           "type": 1
+          }
+         }
+        }
+       },
+       {
+        "name": "errors",
+        "input": {
+         "type": "object",
+         "schema": [],
+         "value": {
+          "type": "ref",
+          "content": {
+           "source": "block-output",
+           "blockID": "200105",
+           "name": "errors"
+          },
+          "rawMeta": {
+           "type": 6
+          }
+         }
+        }
+       }
+      ],
+      "code": "import json\nimport re\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    valid_days = params.get(\"valid_days\") or {}\n    retry_list = params.get(\"retry_list\") or []\n    failed_str = params.get(\"failed_days\") or \"\"\n    errors = params.get(\"errors\") or \"\"\n\n    # 解析 valid_days（200105 输出为 {\"items\": [...]}）\n    if isinstance(valid_days, str):\n        try:\n            valid_days = json.loads(valid_days)\n        except Exception:\n            valid_days = {}\n    if isinstance(valid_days, dict):\n        valid_days = valid_days.get(\"items\") or []\n    if not isinstance(valid_days, list):\n        valid_days = []\n\n    # 解析重生成结果\n    if isinstance(retry_list, str):\n        try:\n            retry_list = json.loads(retry_list)\n        except Exception:\n            retry_list = []\n    if not isinstance(retry_list, list):\n        retry_list = []\n\n    # 原始错误透传（失败时供错误节点展示）\n    errors_src = []\n    if isinstance(errors, str):\n        try:\n            errors_src = json.loads(errors)\n        except Exception:\n            errors_src = []\n    if isinstance(errors_src, dict):\n        errors_src = errors_src.get(\"items\") or []\n    if not isinstance(errors_src, list):\n        errors_src = []\n\n    # 失败天号（与 retry_list 顺序一致）\n    failed = []\n    for part in str(failed_str).split(\",\"):\n        part = part.strip()\n        if part.isdigit():\n            failed.append(int(part))\n\n    # 已成功的天按 day_no 建表\n    merged = {}\n    for d in valid_days:\n        if isinstance(d, dict) and d.get(\"day_no\") is not None:\n            try:\n                merged[int(d[\"day_no\"])] = d\n            except Exception:\n                pass\n\n    # 重生成结果按顺序对应失败天号，强制修正 day_no（不信 LLM 序号）\n    for idx, item in enumerate(retry_list):\n        if idx >= len(failed):\n            break\n        dn = failed[idx]\n        obj = item\n        if isinstance(item, str):\n            try:\n                obj = json.loads(item)\n            except Exception:\n                obj = None\n        if not isinstance(obj, dict):\n            continue\n        # 解包 day_recipe_json 包装结构（兼容 200105 的 extract_raw_from_item）\n        if \"day_recipe_json\" in obj and obj.get(\"day_recipe_json\") not in (None, \"\"):\n            try:\n                inner = obj[\"day_recipe_json\"]\n                if isinstance(inner, str):\n                    inner = json.loads(inner)\n                if isinstance(inner, dict):\n                    obj = inner\n            except Exception:\n                pass\n        # 检测兜底/失败标记\n        raw_text = str(item)\n        if any(m in raw_text for m in [\"生成失败\", \"请重新生成\", \"默认兜底\"]):\n            continue\n        # isSuccess=false 判失败\n        if obj.get(\"isSuccess\") is False:\n            continue\n        meals = obj.get(\"meals\")\n        if not isinstance(meals, dict):\n            continue        # B/L/D 非空校验（同 200105）\n        if not meals.get(\"BREAKFAST\") or not meals.get(\"LUNCH\") or not meals.get(\"DINNER\"):\n            continue\n        # 强制修正 day_no\n        obj[\"day_no\"] = dn\n        # dayLabel 交叉校验：正则提取数字与 day_no 比对，不一致强制 Day{dn}\n        day_label = obj.get(\"dayLabel\") or obj.get(\"day_label\") or \"\"\n        m = re.search(r\"\\d+\", str(day_label))\n        if m and int(m.group()) != dn:\n            obj[\"dayLabel\"] = f\"Day{dn}\"\n        elif not day_label:\n            obj[\"dayLabel\"] = f\"Day{dn}\"\n        merged[dn] = obj\n\n    # 按 day_no 排序\n    days = sorted(merged.values(), key=lambda x: int(x.get(\"day_no\", 0)))\n\n    # 校验 28 天齐全\n    present = {int(d.get(\"day_no\", 0)) for d in days if isinstance(d, dict)}\n    missing = [str(i) for i in range(1, 29) if i not in present]\n    ok = len(present) == 28 and not missing\n    status = \"SUCCESS\" if ok else \"FAILED\"\n\n    # 合并错误：原始错误 + 重试后仍缺失的天\n    if not ok:\n        errors_src.append({\"index\": None, \"error\": \"重试后仍缺失: \" + \",\".join(missing)})\n\n    return {\n        \"status\": status,\n        \"is_success\": ok,\n        \"valid_days\": {\"items\": days},\n        \"failed_days\": \",\".join(missing),\n        \"errors\": {\"items\": errors_src},\n        \"completed_days\": str(len(present)),\n        \"total_days\": \"28\",\n        \"debug_logs\": {\"items\": [{\"step\": \"merged\", \"info\": {\"present\": sorted(present), \"missing\": missing, \"retry_count\": len(retry_list)}}]},\n    }\n",
+      "language": 3,
+      "settingOnError": {
+       "processType": 1,
+       "timeoutMs": 60000,
+       "retryTimes": 0
+      }
+     },
+     "outputs": [
+      {
+       "type": "string",
+       "name": "status"
+      },
+      {
+       "type": "object",
+       "name": "valid_days",
+       "schema": []
+      },
+      {
+       "type": "string",
+       "name": "failed_days"
+      },
+      {
+       "type": "object",
+       "name": "errors",
+       "schema": []
+      },
+      {
+       "type": "string",
+       "name": "completed_days"
+      },
+      {
+       "type": "string",
+       "name": "total_days"
+      },
+      {
+       "type": "boolean",
+       "name": "is_success"
+      },
+      {
+       "type": "object",
+       "name": "debug_logs",
+       "schema": []
+      }
+     ]
+    },
+    "_temp": {
+     "bounds": {
+      "x": 8541.992885496464,
+      "y": 204.34085014524067,
+      "width": 360,
+      "height": 114.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+      "description": "编写代码，处理输入变量来生成返回值",
+      "title": "代码",
+      "mainColor": "#00B2B2"
+     }
+    }
+   },
+   {
+    "id": "200105c",
+    "type": "8",
+    "meta": {
+     "position": {
+      "x": 9521.992885496464,
+      "y": 204.34085014524067
+     }
+    },
+    "data": {
+     "nodeMeta": {
+      "title": "最终校验分支",
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+      "description": "连接多个下游分支，若设定的条件成立则仅运行对应的分支，若均不成立则只运行“否则”分支",
+      "mainColor": "#00B2B2",
+      "subTitle": "选择器"
+     },
+     "inputs": {
+      "branches": [
+       {
+        "condition": {
+         "logic": 2,
+         "conditions": [
+          {
+           "operator": 11,
+           "left": {
+            "input": {
+             "type": "boolean",
+             "value": {
+              "type": "ref",
+              "content": {
+               "source": "block-output",
+               "blockID": "200108",
+               "name": "is_success"
+              }
+             }
+            }
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    },
+    "_temp": {
+     "bounds": {
+      "x": 9341.992885496464,
+      "y": 204.34085014524067,
+      "width": 360,
+      "height": 140.7
+     },
+     "externalData": {
+      "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+      "description": "连接多个下游分支，若设定的条件成立则仅运行对应的分支，若均不成立则只运行“否则”分支",
+      "title": "选择器",
+      "mainColor": "#00B2B2"
+     }
+    }
+   }
+  ],
+  "edges": [
+   {
+    "sourceNodeID": "182549",
+    "targetNodeID": "141264"
+   },
+   {
+    "sourceNodeID": "141264",
+    "targetNodeID": "1287269",
+    "sourcePortID": "branch_error"
+   },
+   {
+    "sourceNodeID": "141264",
+    "targetNodeID": "169974",
+    "sourcePortID": "default"
+   },
+   {
+    "sourceNodeID": "169974",
+    "targetNodeID": "1930343",
+    "sourcePortID": "true"
+   },
+   {
+    "sourceNodeID": "169974",
+    "targetNodeID": "127375",
+    "sourcePortID": "false"
+   },
+   {
+    "sourceNodeID": "1930343",
+    "targetNodeID": "105094",
+    "sourcePortID": "default"
+   },
+   {
+    "sourceNodeID": "1930343",
+    "targetNodeID": "1287269",
+    "sourcePortID": "branch_error"
+   },
+   {
+    "sourceNodeID": "105094",
+    "targetNodeID": "200101"
+   },
+   {
+    "sourceNodeID": "127375",
+    "targetNodeID": "102441"
+   },
+   {
+    "sourceNodeID": "200101",
+    "targetNodeID": "1287269",
+    "sourcePortID": "branch_error"
+   },
+   {
+    "sourceNodeID": "1287269",
+    "targetNodeID": "102441"
+   },
+   {
+    "sourceNodeID": "200105c",
+    "targetNodeID": "1428331",
+    "sourcePortID": "false"
+   },
+   {
+    "sourceNodeID": "1428331",
+    "targetNodeID": "102441"
+   },
+   {
+    "sourceNodeID": "200101",
+    "targetNodeID": "200102",
+    "sourcePortID": "default"
+   },
+   {
+    "sourceNodeID": "200102",
+    "targetNodeID": "197436"
+   },
+   {
+    "sourceNodeID": "200201",
+    "targetNodeID": "200104A"
+   },
+   {
+    "sourceNodeID": "200104A",
+    "targetNodeID": "200105"
+   },
+   {
+    "sourceNodeID": "200105",
+    "targetNodeID": "200105b"
+   },
+   {
+    "sourceNodeID": "200105b",
+    "targetNodeID": "200108",
+    "sourcePortID": "true"
+   },
+   {
+    "sourceNodeID": "200105b",
+    "targetNodeID": "200107",
+    "sourcePortID": "false"
+   },
+   {
+    "sourceNodeID": "200105c",
+    "targetNodeID": "200106",
+    "sourcePortID": "true"
+   },
+   {
+    "sourceNodeID": "197436",
+    "targetNodeID": "200201"
+   },
+   {
+    "sourceNodeID": "200107",
+    "targetNodeID": "200104B"
+   },
+   {
+    "sourceNodeID": "200104B",
+    "targetNodeID": "200108"
+   },
+   {
+    "sourceNodeID": "200108",
+    "targetNodeID": "200105c"
+   }
+  ]
+ },
+ "bounds": {
+  "x": 406.46944799646417,
+  "y": -791.6474311047598,
+  "width": 9295.5234375,
+  "height": 1136.6882812500005
+ }
+}

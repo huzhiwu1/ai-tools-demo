@@ -6,14 +6,17 @@
  * Coze 私有平台 save 接口所需的内部 schema JSON 字符串。
  *
  * 关键细节：
- * - 节点类型映射：字符串 type → 数字 type（start=1, end=2, database_query=43）
+ * - 节点类型映射：字符串 type → 数字 type（start=1, end=2, llm=3, code=5,
+ *   condition=8 选择器, text=15, merge=32, database_query=43, http=45）
  * - 节点 ID 重映射：start → 100001, end → 900001（平台固定约定）
- * - 边 ID 大写：sourceNodeId → sourceNodeID
+ * - 边 ID 大写：sourceNodeId → sourceNodeID，sourcePort → sourcePortID
+ * - 数据流靠 data.inputs 里 {type:"ref", content:{source:"block-output", blockID, name}}
+ *   引用（edges 只是展示）
  * - 顶层包裹 versions: { loop: "v2" }
  * - 输出为 JSON 字符串（save 的 schema 参数要求）
  *
- * TODO: llm/code/condition/http 的类型映射待实测确认，
- *       当前暂用占位数字，并在注释标注。
+ * 节点 data 结构依据 docs/coze-platform/coze-node-fields-guide.md
+ * （health-workflow-103-nosnack-sample.json 21 节点实测样本）。
  */
 import type { CozeWorkflow, CozeNode } from "@coze-workflow/workflow-schema";
 
@@ -24,19 +27,21 @@ import type { CozeWorkflow, CozeNode } from "@coze-workflow/workflow-schema";
 /**
  * 节点类型字符串 → 平台数字 ID 映射
  *
- * - start=1、end=2、database_query=43 已实测确认
- * - 其余类型待下一步实测（TODO），当前填占位值避免 save 报类型错误
+ * 2026-08-12 实测（node_template_list + 工作流样本）：
+ * 1=start 2=end 3=大模型 5=代码 8=选择器 15=文本处理 32=变量聚合
+ * 43=查询数据 45=HTTP 21=循环 28=批处理 1300=人工任务
  */
 function mapNodeType(type: CozeNode["type"]): string {
-  // 2026-08-12 实测（node_template_list）：3=大模型 5=代码 8=选择器 45=HTTP 43=查询数据
   const map: Record<string, string> = {
     start: "1",
     end: "2",
     llm: "3", // 大模型（实测）
     code: "5", // 代码（实测）
     condition: "8", // 选择器（实测）
-    http: "45", // HTTP 请求（实测）
+    text: "15", // 文本处理（实测）
+    merge: "32", // 变量聚合（实测）
     database_query: "43", // 查询数据（实测）
+    http: "45", // HTTP 请求（实测）
   };
   return map[type] ?? "3"; // 未知类型降级为 llm
 }
@@ -49,6 +54,8 @@ function nodeColor(type: CozeNode["type"]): string {
     llm: "#5C62FF",
     code: "#722ed1",
     condition: "#fa8c16",
+    text: "#13c2c2",
+    merge: "#2f54eb",
     http: "#13c2c2",
     database_query: "#eb2f96",
   };
@@ -72,6 +79,33 @@ function literal(name: string, type: string, content: unknown) {
   };
 }
 
+/**
+ * 构造平台 ref 引用项（数据流核心）
+ *
+ * @param name - 输入项名称
+ * @param blockID - 上游节点 ID（平台格式）
+ * @param outputName - 上游节点输出字段名
+ * @param rawType - rawMeta.type（默认 1=string）
+ */
+function refInput(
+  name: string,
+  blockID: string,
+  outputName: string,
+  rawType = 1,
+) {
+  return {
+    name,
+    input: {
+      type: rawType === 6 ? "object" : rawType === 2 ? "integer" : "string",
+      value: {
+        type: "ref",
+        content: { source: "block-output", blockID, name: outputName },
+        rawMeta: { type: rawType },
+      },
+    },
+  };
+}
+
 // ============================================
 // 主转换函数
 // ============================================
@@ -90,15 +124,14 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
     if (node.type === "end") idMap.set(node.id, "900001");
   }
 
+  const platformId = (id: string) => idMap.get(id) ?? id;
+
   // 转换节点
-  // 平台要求：start 必须带 outputs/trigger_parameters；end 必须带 inputs(terminatePlan + 引用上游)
-  // 缺失会导致平台后端解析 panic（exit.go 空指针）
   const platformNodes = workflow.nodes.map((node, index) => {
     const isStart = node.type === "start";
     const isEnd = node.type === "end";
 
     // end 节点：引用上游最后一个节点（edges 中指向 end 的 source，或倒数第二个节点）
-    // 注意：只有 end 节点需要算 upstream（start 的 fallback nodes[-1] 是 undefined）
     const upstreamNode = isEnd
       ? (workflow.nodes.find((n) =>
           workflow.edges.some(
@@ -153,12 +186,35 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
     }
     if (node.type === "llm") {
       // 大模型节点（type 3）：llmParam 结构见 docs/coze-platform/coze-llm-node-sample.json
-      const llm = node as { userPrompt?: string; systemPrompt?: string; config?: { temperature?: number; maxTokens?: number } };
+      const llm = node as {
+        userPrompt?: string;
+        systemPrompt?: string;
+        config?: {
+          temperature?: number;
+          maxTokens?: number;
+          model?: string;
+        };
+        inputMapping?: Record<string, string>;
+      };
+      const inputParameters = Object.entries(llm.inputMapping ?? {}).map(
+        ([name, refExpr]) => {
+          // refExpr 形如 "nodeId.outputName" 或 "{{var}}"
+          const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+          if (match) {
+            return refInput(name, platformId(match[1]), match[2]);
+          }
+          return literal(name, "string", refExpr);
+        },
+      );
       data.inputs = {
-        inputParameters: [],
+        inputParameters,
         llmParam: [
           literal("modelType", "integer", "201"),
-          literal("modleName", "string", "Doubao-Seed-2.0-Lite"),
+          literal(
+            "modleName",
+            "string",
+            llm.config?.model ?? "Doubao-Seed-2.0-Lite",
+          ),
           literal("generationDiversity", "string", "balance"),
           literal("apiType", "integer", "1"),
           literal("temperature", "float", String(llm.config?.temperature ?? 1)),
@@ -182,9 +238,215 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
       data.outputs = [{ type: "string", name: "output" }];
       data.version = "3";
     }
+    if (node.type === "code") {
+      // 代码节点（type 5）：结构见 coze-node-fields-guide.md
+      // language: 3=Python（平台约定），1=JavaScript
+      const code = node as {
+        code?: string;
+        language?: "javascript" | "python";
+        inputMapping?: Record<string, string>;
+      };
+      const inputParameters = Object.entries(code.inputMapping ?? {}).map(
+        ([name, refExpr]) => {
+          const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+          if (match) {
+            return refInput(name, platformId(match[1]), match[2]);
+          }
+          return literal(name, "string", refExpr);
+        },
+      );
+      data.inputs = {
+        inputParameters,
+        code:
+          code.code ??
+          "async def main(args: Args) -> Output:\n    params = args.params\n    ret: Output = {}\n    return ret",
+        language: code.language === "javascript" ? 1 : 3,
+        settingOnError: {
+          processType: 1,
+          timeoutMs: 60000,
+          retryTimes: 0,
+        },
+      };
+      data.outputs = [{ type: "object", name: "output", schema: {} }];
+    }
+    if (node.type === "condition") {
+      // 选择器节点（type 8）：branches → 平台条件结构
+      // 平台条件：logic 2=AND；operator 11=布尔为真
+      const condition = node as {
+        branches?: Array<{ expression?: string }>;
+      };
+      data.inputs = {
+        branches: (condition.branches ?? []).map((branch) => ({
+          condition: {
+            logic: 2,
+            conditions: [
+              {
+                operator: 11,
+                left: {
+                  input: {
+                    type: "boolean",
+                    value: {
+                      type: "ref",
+                      content: {
+                        source: "block-output",
+                        blockID: "100001",
+                        name: "input",
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        })),
+      };
+    }
+    if (node.type === "text") {
+      // 文本处理节点（type 15）：method=concat
+      const text = node as {
+        method?: "concat";
+        concatParams?: Array<{ name: string; value: string }>;
+        inputMapping?: Record<string, string>;
+      };
+      const inputParameters = Object.entries(text.inputMapping ?? {}).map(
+        ([name, refExpr]) => {
+          const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+          if (match) {
+            return refInput(name, platformId(match[1]), match[2]);
+          }
+          return literal(name, "string", refExpr);
+        },
+      );
+      // 若没有显式 concatParams，从 inputParameters 推断模板
+      const concatParams = text.concatParams ?? [];
+      const inferredConcat =
+        inputParameters.length > 0
+          ? inputParameters
+              .map((p) => `{{${p.name}}}`)
+              .join("")
+          : "{{String1}}";
+      data.inputs = {
+        method: text.method ?? "concat",
+        inputParameters,
+        concatParams:
+          concatParams.length > 0
+            ? concatParams.map((p) => ({
+                name: p.name,
+                input: {
+                  type: "string",
+                  value: {
+                    type: "literal",
+                    content: p.value,
+                    rawMeta: { type: 1 },
+                  },
+                },
+              }))
+            : [
+                {
+                  name: "concatResult",
+                  input: {
+                    type: "string",
+                    value: {
+                      type: "literal",
+                      content: inferredConcat,
+                      rawMeta: { type: 1 },
+                    },
+                  },
+                },
+              ],
+      };
+      data.outputs = [{ type: "string", name: "output", required: true }];
+    }
+    if (node.type === "merge") {
+      // 变量聚合节点（type 32）：mergeGroups 分组聚合上游输出
+      const merge = node as {
+        mergeGroups?: Array<{ name: string; variables: string[] }>;
+      };
+      const mergeGroups = (merge.mergeGroups ?? [{ name: "Group1", variables: [] }]).map(
+        (group) => ({
+          name: group.name,
+          variables: (group.variables ?? []).map((refExpr) => {
+            const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+            if (match) {
+              return {
+                type: "string",
+                value: {
+                  type: "ref",
+                  content: {
+                    source: "block-output",
+                    blockID: platformId(match[1]),
+                    name: match[2],
+                  },
+                  rawMeta: { type: 1 },
+                },
+              };
+            }
+            return {
+              type: "string",
+              value: { type: "literal", content: refExpr, rawMeta: { type: 1 } },
+            };
+          }),
+        }),
+      );
+      data.inputs = { mergeGroups };
+      data.outputs = mergeGroups.map((g) => ({
+        type: "string",
+        name: g.name,
+      }));
+    }
+    if (node.type === "database_query") {
+      // 查询数据节点（type 43）：databaseInfoList + selectParam
+      const db = node as {
+        connection?: string;
+        query?: string;
+        params?: Array<string | number>;
+        inputMapping?: Record<string, string>;
+      };
+      data.inputs = {
+        databaseInfoList: [{ databaseInfoID: db.connection ?? "" }],
+        selectParam: {
+          condition: {
+            conditionList: [[]],
+            logic: "AND",
+          },
+          orderByList: [],
+          limit: 100,
+        },
+        settingOnError: {
+          processType: 1,
+          timeoutMs: 60000,
+          retryTimes: 0,
+        },
+      };
+      data.outputs = [
+        { type: "list", name: "outputList", schema: { type: "object", schema: [] } },
+        { type: "integer", name: "rowNum" },
+      ];
+    }
+    if (node.type === "http") {
+      // HTTP 请求节点（type 45）：结构未实测，先按字段推断
+      const http = node as {
+        method?: string;
+        url?: string;
+        headers?: Record<string, string>;
+        body?: Record<string, unknown>;
+      };
+      data.inputs = {
+        method: http.method ?? "GET",
+        url: http.url ?? "",
+        headers: http.headers ?? {},
+        body: http.body ?? {},
+        settingOnError: {
+          processType: 1,
+          timeoutMs: 60000,
+          retryTimes: 0,
+        },
+      };
+      data.outputs = [{ type: "object", name: "response", schema: {} }];
+    }
 
     return {
-      id: idMap.get(node.id) ?? node.id,
+      id: platformId(node.id),
       type: mapNodeType(node.type),
       meta: { position: { x: 100 + index * 200, y: 100 } },
       data,
@@ -195,11 +457,17 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
     };
   });
 
-  // 转换边（ID 大写 + ID 重映射）
-  const platformEdges = workflow.edges.map((edge) => ({
-    sourceNodeID: idMap.get(edge.sourceNodeId) ?? edge.sourceNodeId,
-    targetNodeID: idMap.get(edge.targetNodeId) ?? edge.targetNodeId,
-  }));
+  // 转换边（ID 大写 + ID 重映射 + 端口）
+  const platformEdges = workflow.edges.map((edge) => {
+    const e: Record<string, string> = {
+      sourceNodeID: platformId(edge.sourceNodeId),
+      targetNodeID: platformId(edge.targetNodeId),
+    };
+    if (edge.sourcePort) {
+      e.sourcePortID = edge.sourcePort;
+    }
+    return e;
+  });
 
   const platformSchema = {
     versions: { loop: "v2" },
