@@ -27,9 +27,10 @@ import { AppService } from "./app.service";
 import { WorkflowModule } from "./workflow/workflow.module";
 import { AgentsModule } from "./agents/agents.module";
 import { McpModule } from "./mcp/mcp.module";
+import { ReactAgentModule } from "./agent/react-agent.module";
 
 @Module({
-  imports: [WorkflowModule, AgentsModule, McpModule],
+  imports: [WorkflowModule, AgentsModule, McpModule, ReactAgentModule],
   controllers: [AppController],
   providers: [AppService],
 })
