@@ -110,12 +110,11 @@ export class WorkflowPlanner {
     });
     const startOrder = order;
 
-    // 收集所有需要的节点类型（按 LLM 规划的 contracts 顺序）
-    // contracts 顺序 = 实际执行顺序（如 llm→code→condition）
+    // 构建步骤：优先用 LLM 显式输出的 steps（顺序权威），无则兜底
     const contracts = input.contracts ?? [];
     let contractIndex = 0;
 
-    /** 取下一个可用的数据契约 */
+    /** 取下一个可用的数据契约（与 steps 顺序一一对应） */
     const nextContract = (): PlanStep["contract"] | undefined => {
       const idx = contractIndex;
       contractIndex++;
@@ -130,61 +129,64 @@ export class WorkflowPlanner {
       return undefined;
     };
 
-    // 构建可选节点列表（按 LLM 规划的 contracts 顺序）
-    // 注意：LLM 的 nodeConfig 中的字段顺序（llm/code/condition/database）
-    // 反映的是 LLM 期望的执行顺序，但 contracts 更准确
-    // 这里我们按 contracts 顺序 + nodeConfig 字段匹配来构建
-    const orderedTypes: string[] = [];
-    const typeMap: Record<string, string> = {
-      llm: "llm",
-      code: "code",
-      condition: "condition",
-      database: "database_query",
+    /** 从 nodeConfig 按节点类型取配置（不依赖键顺序） */
+    const configFor = (nodeType: string): unknown => {
+      const nc = input.nodeConfig as Record<string, unknown> | undefined;
+      const keyByType: Record<string, string> = {
+        llm: "llm",
+        code: "code",
+        condition: "condition",
+        database_query: "database",
+        http: "http",
+      };
+      const key = keyByType[nodeType];
+      return key && nc ? nc[key] : undefined;
     };
 
-    // 用 contracts 数量决定类型顺序（比固定模板灵活）
-    // 当 LLM 输出 3 个 contracts 且 needCodeNode+needBranch+llm 时：
-    // contracts 顺序 = llm→code→condition
-    // 但我们需要确定哪个 contract 对应哪个类型
-    // 方案：用 nodeConfig 的键顺序匹配 contracts 顺序
-    const configKeys = Object.keys(input.nodeConfig ?? {});
-    if (configKeys.length > 0) {
-      // 用 nodeConfig 的键顺序决定类型顺序
-      for (const key of configKeys) {
-        if (typeMap[key]) {
-          orderedTypes.push(typeMap[key]);
-        }
+    const explicitSteps = input.steps ?? [];
+    let prevOrder = startOrder;
+
+    if (explicitSteps.length > 0) {
+      // 权威路径：LLM 显式输出 steps，顺序 + 依赖直接照抄
+      for (let i = 0; i < explicitSteps.length; i++) {
+        const s = explicitSteps[i];
+        order++;
+        const deps = (s.dependencies ?? [])
+          .map((d) => (d === -1 ? startOrder : d + 2)) // steps index → order（start=1，steps[0]=2）
+          .filter((d) => d >= startOrder && d < order);
+        if (deps.length === 0) deps.push(startOrder); // 无依赖兜底连 start
+        const cfg = configFor(s.nodeType);
+        steps.push({
+          order,
+          description: s.description || this.defaultDescForType(s.nodeType),
+          nodeType: s.nodeType as WorkflowNodeType,
+          dependencies: deps,
+          contract: nextContract(),
+          nodeConfig: cfg ? ({ [s.nodeType]: cfg } as any) : undefined,
+        });
+        prevOrder = order;
       }
     } else {
-      // 兜底：按布尔标志决定（旧逻辑）
-      if (input.needDatabaseNode) orderedTypes.push("database_query");
-      if (input.needCodeNode) orderedTypes.push("code");
-      if (input.needBranch) orderedTypes.push("condition");
-      orderedTypes.push("llm");
-    }
+      // 兜底：按布尔标志决定（旧逻辑，LLM 未输出 steps 时）
+      const fallbackTypes: string[] = [];
+      if (input.needDatabaseNode) fallbackTypes.push("database_query");
+      if (input.needCodeNode) fallbackTypes.push("code");
+      if (input.needBranch) fallbackTypes.push("condition");
+      fallbackTypes.push("llm");
 
-    // 按 orderedTypes 创建步骤，依赖链为串联
-    let prevOrder = startOrder;
-    for (const nodeType of orderedTypes) {
-      order++;
-
-      // 从 nodeConfig 取对应配置
-      const configKey = Object.keys(typeMap).find(
-        (k) => typeMap[k] === nodeType,
-      );
-      const cfg = configKey
-        ? input.nodeConfig?.[configKey as keyof typeof input.nodeConfig]
-        : undefined;
-
-      steps.push({
-        order,
-        description: this.defaultDescForType(nodeType),
-        nodeType: nodeType as WorkflowNodeType,
-        dependencies: [prevOrder],
-        contract: nextContract(),
-        nodeConfig: cfg ? ({ [configKey!]: cfg } as any) : undefined,
-      });
-      prevOrder = order;
+      for (const nodeType of fallbackTypes) {
+        order++;
+        const cfg = configFor(nodeType);
+        steps.push({
+          order,
+          description: this.defaultDescForType(nodeType),
+          nodeType: nodeType as WorkflowNodeType,
+          dependencies: [prevOrder],
+          contract: nextContract(),
+          nodeConfig: cfg ? ({ [nodeType]: cfg } as any) : undefined,
+        });
+        prevOrder = order;
+      }
     }
 
     // end — 返回结果

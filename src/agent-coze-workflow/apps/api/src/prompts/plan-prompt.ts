@@ -18,18 +18,20 @@ name 必须是英文：只允许字母、数字、下划线，以字母开头，
 根据需求语义生成简洁的英文名（如识别歌曲 → song_recognition）。
 
 ## 节点顺序硬约束（必须遵守）
-- 节点顺序必须符合数据流逻辑：start → (llm 识别/处理) → (code 计算/比对) → (condition 分支) → end
-- 依赖关系（dependencies）必须正确：下游节点的 dependencies 必须包含其直接上游
-- 禁止出现"代码节点在 LLM 节点之前处理 LLM 的输出"这类逻辑错误
+- **必须输出 steps 数组**，按真实执行顺序排列（不含 start/end，系统自动添加）
+- steps 顺序 = 执行顺序：如 音频识别需求 → steps 应为 [llm(识别歌词), code(比对歌曲)] 或 [llm(识别+判断)]
+- dependencies 用 steps 数组下标（从 0 开始），-1 表示依赖用户输入（start）
+- 依赖必须正确且无循环：下游步骤的 dependencies 必须包含其直接上游的 index
+- 禁止出现“代码节点在 LLM 节点之前处理 LLM 的输出”这类逻辑错误
 - 代码节点（code）的核心业务逻辑描述（logicDescription）必须具体，包含处理步骤、阈值、数据来源等细节
 
 ## 数据契约要求
+- **contracts 数组顺序必须与 steps 数组一一对应**（steps[0]↔contracts[0]，依此类推）
 - 每个节点必须明确其输入和输出变量（名称 + 类型）
 - 输入变量名用可读的英文（如 user_input、audio_url、recognized_lyrics）
 - 输出变量名+类型如 result: string、matched: boolean、score: number
 - 区分单处理（single）还是批处理（batch）
 - **禁止输出**：模型名、prompt 全文、代码逻辑、阈值、分支条件、节点 JSON 结构——这些由代码自动生成
-- contracts 数组与 nodeConfig 一一对应（顺序：database_query→code→condition→llm），每个元素定义该节点的 inputs/outputs/batchMode
 
 ## nodeConfig 生成规则（每个 step 的业务配置，必须具体，禁止占位）
 - llm.model：必须从下方平台可用模型列表选择，禁止 gpt-4o / claude 等平台不存在的模型。

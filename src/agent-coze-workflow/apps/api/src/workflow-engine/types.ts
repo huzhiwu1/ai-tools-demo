@@ -36,7 +36,43 @@ export const LLMPlanOutputSchema = z.object({
     ),
   constraints: z.array(z.string()).describe("工作流需满足的约束条件列表"),
   riskHints: z.array(z.string()).describe("潜在风险和注意事项列表"),
-  /** 数据契约：每个非 start/end 节点的输入输出定义 */
+  /**
+   * 节点步骤：按执行顺序排列（不含 start/end，系统自动添加）
+   *
+   * 这是执行顺序的唯一权威来源！planner 直接照抄，不再猜测。
+   * dependencies 用 steps 数组的 index（从 0 开始），-1 表示依赖用户输入（start）。
+   */
+  steps: z
+    .array(
+      z.object({
+        nodeType: z
+          .enum([
+            "llm",
+            "code",
+            "condition",
+            "database_query",
+            "http",
+            "text",
+            "merge",
+          ])
+          .describe(
+            "节点类型：llm=大模型 code=代码 condition=条件分支 database_query=查询数据 http=HTTP请求 text=文本处理 merge=变量聚合",
+          ),
+        description: z
+          .string()
+          .describe("该节点要完成的任务描述（一句话，具体到做什么）"),
+        dependencies: z
+          .array(z.number())
+          .describe(
+            "依赖的上游步骤 index（steps 数组的下标，从 0 开始）。-1 表示依赖用户输入（start）。例如第 2 步依赖第 1 步输出，写 [0]",
+          ),
+      }),
+    )
+    .optional()
+    .describe(
+      "按执行顺序排列的节点步骤列表（不含开始/结束节点，系统自动加）。顺序即真实执行顺序，LLM 必须保证依赖正确、无循环",
+    ),
+  /** 数据契约：与 steps 一一对应（按 index 匹配），每个非 start/end 节点的输入输出定义 */
   contracts: z
     .array(
       z.object({
@@ -77,7 +113,7 @@ export const LLMPlanOutputSchema = z.object({
     )
     .optional()
     .describe(
-      "各非 start/end 节点的数据契约列表（顺序：database_query→code→condition→llm），每个元素定义该节点的输入/输出/批处理模式",
+      "各节点的数据契约列表，顺序必须与 steps 数组一一对应（steps[0]↔contracts[0]，steps[1]↔contracts[1]，...）",
     ),
   nodeConfig: z
     .object({
