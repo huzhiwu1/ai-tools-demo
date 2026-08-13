@@ -42,7 +42,7 @@ ReAct Agent 新增 4 个工具，总数 5 → 9：
 
 | 工具 | 职责 |
 |---|---|
-| parse_answer_sheet | 解析 xlsx/csv 答案表 → 用例列表（url + expected） |
+| parse_table | 通用表格读取：xlsx/csv → 原始数据（列名+行），不做列映射 |
 | parse_lyrics_library | 解析 md 歌词库 → 歌曲字典（song_name → lyrics） |
 | batch_validate | 批量 test_run + 轮询结果 + 对照答案表 → 准确率 + 错误明细 |
 | update_workflow | 根据归因结果修改工作流节点（调阈值/改代码/改 prompt） |
@@ -70,22 +70,30 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 **⚠️ 如果接口实在探测不到**：先让 batch_validate 只做"提交成功"验证（拿到 execute_id 即视为运行中），并在返回信息里注明"结果轮询待接口打通"，不要卡死整个闭环。但要优先尝试打通。
 
-### 2. 答案表解析工具（parse_answer_sheet）
+### 2. 表格读取工具（parse_table）—— 通用版，不写死列名
+
+**⚠️ 设计原则：本工具只负责"把文件读成通用数据"，不做任何业务列映射。** 不同用户上传的表格表头/列数/形式都不一样（可能是 url/song，也可能是 音频链接/歌曲名/备注 或其他任意列），列映射由 LLM 理解 + clarify_question 确认，绝不在代码里写死。
 
 ```
 输入: filePath（upload 返回的 path）
-输出: { cases: [{ url, expected }], total, skippedEmptyRows }
+输出: { tableName, columns: [列名...], rows: [ {列名: 值}, ... ], totalRows, skippedEmptyRows }
 ```
 
 **解析实现要点：**
 - 装依赖：`pnpm --filter @coze-workflow/api add xlsx`（SheetJS，一个库同时支持 xlsx 和 csv）
 - 读文件 → 取第一个 sheet → 遍历行：
-  - 第 1 行是表头（url/song），跳过
-  - `url` 为空或非字符串 → 跳过（**空行忽略，计入 skippedEmptyRows**）
-  - `song` 为空 → expected = ""（预期"无法识别或非训练营"，但当前无负例，先保留空字符串）
-  - 有效行 → `{ url: url.trim(), expected: String(song ?? "").trim() }`
-- 返回结构化 JSON 字符串（LLM 可读）
+  - 第 1 行作为表头（columns）
+  - **空行跳过**（整行所有单元格都为空的行，计入 skippedEmptyRows）——Excel 经常有格式残留空行
+  - 每行转成 `{ 列名: 单元格值 }` 对象（列名用原始表头字符串，不翻译不映射）
+  - 行内空单元格：值为 null（保留列结构，不删列）
+- 返回完整 JSON 字符串（LLM 可读）
 - **try/catch 兜底**：解析失败返回 "解析失败: xxx"（ReAct 工具铁律）
+
+**LLM 侧的使用约定（写入工具 description）：**
+- description 里明确告诉 LLM："返回的是表格原始数据，你需要根据表头判断哪些列是工作流输入、哪些列是期望输出；判断不了时调用 clarify_question 向用户确认列含义。"
+- 例：看到 columns=[url, song] → LLM 推断 url 是输入、song 是期望输出；如果看到列名模糊（如 [A, B, C]）→ 必须 clarify_question 问用户
+
+**歌词库读取（parse_lyrics_library）同理**：md 格式相对标准（`# 《歌名》` + 歌词），保留正则解析；但若用户上传的歌词文件格式不同（如无书名号、表格形式），同样由 LLM 判断格式并适配，不确定就 clarify_question。
 
 ### 3. 歌词库解析工具（parse_lyrics_library）
 
@@ -104,14 +112,14 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ### 4. 批量验证工具（batch_validate）—— 核心
 
 ```
-输入: workflowId, cases（parse_answer_sheet 的输出）, 可选 concurrentLimit（默认 3）
+输入: workflowId, cases（LLM 理解表结构后构造的用例列表：[{ input: {...}, expected }]）, 可选 concurrentLimit（默认 3）
 输出: {
   total, passed, failed,
   accuracy,                    // passed / total，百分比
-  details: [{ url, expected, actual, match, error? }],
+  details: [{ input, expected, actual, match, error? }],
   failurePatterns: {           // 归因分组
     recognitionFailed: number, // 输出为空/无法识别
-    mismatch: number,          // 输出了但不是期望歌名
+    mismatch: number,          // 输出了但不是期望结果
     executionError: number     // test_run/查询报错
   }
 }
@@ -122,11 +130,11 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ```
 1. 遍历 cases（串行或小并发，默认串行优先，稳）
 2. 每个用例：
-   a. cozeClient.testRun(workflowId, { url: case.url }) → executeId
+   a. cozeClient.testRun(workflowId, case.input) → executeId   // input 是 LLM 构造的完整输入对象，如 { url: "..." }，不写死字段名
    b. 轮询 queryExecute(executeId)：每 2 秒查一次，最多 90 秒
       - 超时 → executionError，error="执行超时"
       - 查询报错 → executionError，error=错误信息
-   c. 取输出中的歌曲名字段（从 execute 结果里递归找字符串值）
+   c. 取输出中的结果字段（从 execute 结果里递归找非空字符串值）
    d. 比对：
       - actual === expected → passed
       - actual 为空/找不到 → recognitionFailed
@@ -184,7 +192,7 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 - `react-agent.controller.ts` 的 `POST /api/agent/chat/resume`：body 增加可选 `fileIds?: string[]`（本次回答附带的上传文件）
 - `react-agent.service.ts` 的 `handleResume`：接收 `fileIds` 参数，把文件引用信息拼进 resume 的 answer 文本（如 `answer + "\n\n[用户上传了文件]\n- xxx (fileId: ...)"`），再 `Command({ resume })`——这样 LLM 能感知到回答时带了文件
-- 文件的实际解析（读内容）由 parse_answer_sheet / parse_lyrics_library 负责，本任务只做到"传递 fileIds 引用"
+- 文件的实际解析（读内容）由 parse_table / parse_lyrics_library 负责，本任务只做到"传递 fileIds 引用"
 
 **验收（前端浏览器实测）**：
 - 发缺信息需求 → AI 提问 → 底部输入框变为"回复 AI 的问题"模式（有提示文案）→ 输入回答提交 → AI 继续执行 → 完成后输入框恢复普通模式
@@ -196,15 +204,16 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 ```
 ## 工作流构建+验证流程（当用户提供答案表/歌词库时）
-1. 先调用 parse_answer_sheet 解析答案表，parse_lyrics_library 解析歌词库
-2. plan_workflow 设计工作流（歌词库作为代码节点常量或 prompt 上下文）
-3. generate_workflow 生成 → 检查 validation
-4. save_to_coze 保存 → 拿 workflowId
-5. batch_validate 批量试运行 → 看 accuracy
-6. 若 accuracy < 100% 且迭代次数 < 3：
+1. 先调用 parse_table 解析答案表（拿到原始数据），parse_lyrics_library 解析歌词库
+2. LLM 根据表头推断输入列/期望输出列，不确定时 clarify_question 向用户确认
+3. plan_workflow 设计工作流（歌词库作为代码节点常量或 prompt 上下文）
+4. generate_workflow 生成 → 检查 validation
+5. save_to_coze 保存 → 拿 workflowId
+6. batch_validate 批量试运行 → 看 accuracy
+7. 若 accuracy < 100% 且迭代次数 < 3：
    分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
-7. 迭代 3 次仍 < 100%：向用户说明情况，或 clarify_question 索取信息，用户确认后继续
-8. 准确率 100%：总结交付（含最终 workflowId 和 accuracy）
+8. 迭代 3 次仍 < 100%：向用户说明情况，或 clarify_question 索取信息，用户确认后继续
+9. 准确率 100%：总结交付（含最终 workflowId 和 accuracy）
 ```
 
 ---
@@ -213,7 +222,8 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 
 1. `pnpm typecheck` 全绿；`pnpm build` 全绿
 2. **解析单测**（用 test-data 两个文件实测）：
-   - parse_answer_sheet 解析 `test-data/singing-testset.xlsx` → 19 个用例，空行跳过
+   - parse_table 解析 `test-data/singing-testset.xlsx` → 返回原始数据（columns=[url,song]，19 行，空行跳过）
+   - LLM 正确推断 url=输入列、song=期望输出列（可用一个模拟的"表头模糊"场景验证它会 clarify_question）
    - parse_lyrics_library 解析 `test-data/song-lyrics.md` → 8 首歌，歌词无"参考歌词："前缀
 3. **批量验证实测**（可选，依赖平台认证）：
    - 用已保存的工作流 + 19 条用例跑 batch_validate → 返回 accuracy + details + failurePatterns
@@ -241,7 +251,7 @@ test_run 只返回 execute_id，**工作流跑完没跑完、输出是什么，�
 ## 六、实现顺序建议
 
 1. CozeClient 加 queryExecute（先探测平台接口路径，探测不到用兜底候选 + 降级）
-2. 装 xlsx 依赖，写 parse_answer_sheet + parse_lyrics_library（纯本地，先单独验证）
+2. 装 xlsx 依赖，写 parse_table + parse_lyrics_library（纯本地，先单独验证）
 3. 写 batch_validate（依赖 1，先串行跑通 3 个用例再全量）
 4. 写 update_workflow（基于规则修改）
 5. tools/index.ts 注册 4 个新工具 + SYSTEM_PROMPT 更新
