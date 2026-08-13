@@ -76,6 +76,14 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 - save_to_coze 提示"工作流名称已存在"时：工具会自动加后缀重试；若仍需指定名称，用 rename_workflow 改名后重新保存
 - rename_workflow 只改名称/描述，不影响工作流内容
 
+## 防死循环规则（必须遵守）
+- 同一个工具连续失败 2 次 → 立即停止重试该工具，向用户说明失败原因，询问如何处理
+- save_to_coze 返回"authentication failed" / "access denied" → 这是平台凭证问题，不是工作流问题！
+  不要修改工作流、不要反复保存，直接告知用户"COZE_SESSION_KEY 可能过期，请检查 .env 后重试"
+- update_workflow 返回"无法识别修改类型" → 重新组织 fixInstruction（明确写类型：阈值/代码/逻辑/prompt/提示词/数据/常量），最多再试 1 次，仍失败就停止并告知用户
+- batch_validate 迭代：最多 3 轮（第 7 步的迭代计数），3 轮后无论是否达标都停止，向用户汇报结果
+- 任何时候：如果发现自己在重复做同样的事（同一工具、同一参数、同一错误），立即停止，向用户说明，而不是继续循环
+
 ## 文件与验证流程（当用户上传文件或要求验证时）
 1. 用户上传文件 → 消息里会附「本地路径」，用 read_file 读该路径（通用读取，不做业务假设）
 2. 根据用户需求 + 文件内容，判断：
@@ -133,7 +141,10 @@ export class ReactAgentService {
       tools: [...ALL_TOOLS],
       checkpointer,
       prompt: new SystemMessage(SYSTEM_PROMPT),
-    });
+      // 提高递归上限：默认 25 步，ReAct 循环含多次工具调用容易撞上限
+      // 40 步足够正常流程（plan+generate+save+validate+1~2次迭代），又不至于无限跑
+      recursionLimit: 40,
+    } as Parameters<typeof createReactAgent>[0] & { recursionLimit: number });
   }
 
   /**
@@ -185,9 +196,10 @@ export class ReactAgentService {
     );
 
     // 5. 流式执行
-    const config: RunnableConfig = {
+    const config = {
       configurable: { thread_id: finalSessionId },
-    };
+      recursionLimit: 40,
+    } as RunnableConfig & { recursionLimit: number };
 
     await this.streamAgentEvents(
       session.graph,
@@ -230,9 +242,10 @@ export class ReactAgentService {
 
     this.setSSEHeaders(res);
 
-    const config: RunnableConfig = {
+    const config = {
       configurable: { thread_id: sessionId },
-    };
+      recursionLimit: 40,
+    } as RunnableConfig & { recursionLimit: number };
 
     // 若有 fileIds，还原文件名与磁盘路径拼入 answer 文本让 LLM 感知文件并
     // 用 read_file 直接读取；纯文件上传时不以空文本开头
@@ -372,9 +385,17 @@ export class ReactAgentService {
       complete = true;
     } catch (e) {
       // 流异常
-      this.logger.error(`[Agent] ✗ ${(e as Error).message}`);
+      const msg = (e as Error).message;
+      this.logger.error(`[Agent] ✗ ${msg}`);
+      // 识别递归上限错误 → 提示用户 Agent 循环过深
+      const isRecursion = msg.includes("Recursion limit") || msg.includes("recursion_limit");
       res.write(
-        `d:${JSON.stringify({ type: "error", message: (e as Error).message })}\n`,
+        `d:${JSON.stringify({
+          type: "error",
+          message: isRecursion
+            ? "Agent 执行步骤过多（可能陷入循环），已停止。请简化需求或提供更明确的信息后重试。"
+            : msg,
+        })}\n`,
       );
       res.end();
       return;
