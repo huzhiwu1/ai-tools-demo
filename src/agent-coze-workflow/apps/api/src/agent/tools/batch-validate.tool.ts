@@ -20,6 +20,11 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { cozeClient } from "./coze-client";
+import {
+  incrementIteration,
+  MAX_ITERATIONS,
+  iterationLimitMessage,
+} from "./iteration-counter";
 
 /** 轮询间隔（ms） */
 const POLL_INTERVAL_MS = 2000;
@@ -69,6 +74,12 @@ function extractOutputString(output: unknown): string {
 
 export const batchValidateTool = tool(
   async ({ workflowId, cases: rawCases }) => {
+    // 迭代计数：每次调用 +1，超过上限直接返回错误，不执行验证
+    const iteration = incrementIteration(workflowId);
+    if (iteration > MAX_ITERATIONS) {
+      return iterationLimitMessage(workflowId);
+    }
+
     try {
       const cases = rawCases as Array<{
         input: Record<string, unknown>;

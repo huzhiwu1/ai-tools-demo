@@ -24,6 +24,11 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { DeepSeekClient } from "../../llm/deepseek.client";
 import { CodeGenerator } from "../../workflow-engine/code-generator";
+import {
+  incrementIteration,
+  MAX_ITERATIONS,
+  iterationLimitMessage,
+} from "./iteration-counter";
 
 /** 结构化修改指令 schema（每个字段 describe，LLM 据此输出） */
 const UpdateInstructionSchema = z.object({
@@ -139,7 +144,13 @@ function replaceThresholdText(
 }
 
 export const updateWorkflowTool = tool(
-  async ({ workflow, fixInstruction }) => {
+  async ({ workflow, fixInstruction, workflowId }) => {
+    // 迭代计数：每次调用 +1，超过上限直接返回错误，不执行修改
+    const iteration = incrementIteration(workflowId);
+    if (iteration > MAX_ITERATIONS) {
+      return iterationLimitMessage(workflowId);
+    }
+
     try {
       const wf = workflow as unknown as Record<string, unknown>;
       const nodes = wf.nodes as Array<Record<string, unknown>> | undefined;
@@ -311,6 +322,9 @@ export const updateWorkflowTool = tool(
         .describe(
           "当前工作流 JSON（含 meta、nodes、edges），通常从 generate_workflow 的输出中获取",
         ),
+      workflowId: z
+        .string()
+        .describe("save_to_coze 返回的 workflowId，用于迭代计数"),
       fixInstruction: z
         .string()
         .describe(

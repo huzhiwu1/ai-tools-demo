@@ -81,7 +81,8 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 - save_to_coze 返回"authentication failed" / "access denied" → 这是平台凭证问题，不是工作流问题！
   不要修改工作流、不要反复保存，直接告知用户"COZE_SESSION_KEY 可能过期，请检查 .env 后重试"
 - update_workflow 返回"无法识别修改类型" → 重新组织 fixInstruction（明确写类型：阈值/代码/逻辑/prompt/提示词/数据/常量），最多再试 1 次，仍失败就停止并告知用户
-- batch_validate 迭代：最多 3 轮（第 7 步的迭代计数），3 轮后无论是否达标都停止，向用户汇报结果
+- batch_validate / update_workflow 有系统级迭代上限（3 轮），由代码强制，达到后工具返回"已达迭代上限"错误
+  收到该错误时必须停止迭代并汇报结果，不要尝试绕过或继续修改
 - 任何时候：如果发现自己在重复做同样的事（同一工具、同一参数、同一错误），立即停止，向用户说明，而不是继续循环
 
 ## 文件与验证流程（当用户上传文件或要求验证时）
@@ -94,9 +95,9 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 4. generate_workflow 生成 → 检查 validation
 5. save_to_coze 保存 → 拿 workflowId
 6. batch_validate 批量试运行（cases 由 LLM 根据文件内容构造）→ 看 accuracy
-7. 若 accuracy < 100% 且迭代次数 < 3：
-   分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
-8. 迭代 3 次仍 < 100%：向用户说明情况，或 clarify_question 索取信息，用户确认后继续
+7. 若 accuracy < 100%：分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
+8. batch_validate / update_workflow 有系统级迭代上限（3 轮），达到后工具会返回"已达迭代上限"错误
+   收到该错误时必须停止迭代，向用户汇报当前结果（准确率 + 失败分析），不要尝试绕过或继续修改
 9. 验证通过：总结交付（含最终 workflowId 和 accuracy）
 
 ## 输出格式
@@ -388,7 +389,8 @@ export class ReactAgentService {
       const msg = (e as Error).message;
       this.logger.error(`[Agent] ✗ ${msg}`);
       // 识别递归上限错误 → 提示用户 Agent 循环过深
-      const isRecursion = msg.includes("Recursion limit") || msg.includes("recursion_limit");
+      const isRecursion =
+        msg.includes("Recursion limit") || msg.includes("recursion_limit");
       res.write(
         `d:${JSON.stringify({
           type: "error",

@@ -23,6 +23,7 @@ import { validateWorkflow } from "@coze-workflow/workflow-schema";
 import { checkPlatformCompatibility } from "../../workflow-engine/platform-validator";
 import { convertToPlatformSchema } from "../../coze/schema-converter";
 import { cozeClient } from "./coze-client";
+import { resetIteration } from "./iteration-counter";
 
 /**
  * 清洗工作流名称：平台只允许字母开头 + 字母/数字/下划线，长度 ≤ 50
@@ -104,6 +105,7 @@ export const saveToCozeTool = tool(
         cozeWorkflow.meta.description,
       );
       await cozeClient.saveWorkflow(workflowId, schemaJson);
+      resetIteration(workflowId);
       return JSON.stringify(
         { workflowId, saved: true, name: usedName },
         null,
