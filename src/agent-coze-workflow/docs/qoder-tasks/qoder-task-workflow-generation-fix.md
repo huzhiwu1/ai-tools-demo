@@ -107,7 +107,7 @@ export interface PlanStep {
 ```
 
 **PLAN_PROMPT 更新**（`apps/api/src/prompts/plan-prompt.ts`）：要求 LLM 对每个 step 输出 `nodeConfig`，内容具体：
-- llm.model：**只能从平台真实模型列表中选择**（见 `docs/coze-platform/platform-facts.md`），禁止 gpt-4o 等平台不存在的模型；**需要识别音频/视频的任务必须选 `audio_understanding: true` 的模型**（Doubao-Seed-2.0-Lite / Doubao-Seed-2.0-mini / Doubao-Seed-1.6 / gemini-3.1-pro-preview / Qwen3.5-Omni-Plus）；纯文本任务默认 Doubao-Seed-2.0-Lite
+- llm.model：**必须从 `docs/coze-platform/platform-facts.md` 的 25 个模型列表中选择**（先调 get_platform_facts 获取），禁止 gpt-4o 等平台不存在的模型；**LLM 根据任务类型从列表中自由选择**——需要识别音频/视频的任务选 `audio_understanding: true` 的模型（如 Doubao-Seed-2.0-Lite / Doubao-Seed-2.0-mini / Doubao-Seed-1.6 / gemini-3.1-pro-preview / Qwen3.5-Omni-Plus），纯文本任务可在 25 个模型中任选（推荐 Doubao-Seed-2.0-Lite 作为默认）；**Doubao-Seed-2.0-Lite 是默认值不是强制值，LLM 应根据任务特征选择最合适的模型**
 - llm.userPrompt：完整的业务提示词（如"读取音频链接识别歌词，输出 JSON"）
 - code.logicDescription：代码节点要实现的业务逻辑描述（如"计算识别歌词与8首歌参考歌词的相似度，取最高分"）
 - condition.branches：真实的分支条件（如"similarity >= 0.6 → 匹配成功"）
@@ -271,7 +271,7 @@ export const getPlatformFactsTool = tool(
 ## 七、红线
 
 - ❌ 不改平台 API 调用方式（coze.client.ts 的 create/save/test_run 不动）
-- ❌ 不引入外部模型名（gpt-4o/claude 等一律不用，平台模型只有 Doubao-Seed-2.0-Lite）
+- ❌ 不引入平台不存在的模型（gpt-4o/claude 等外部模型一律不用）；**模型必须来自 `docs/coze-platform/platform-facts.md` 的 25 个模型列表**，由 LLM 根据任务从列表中自由选择（音频/视频任务选 audio_understanding=true 的；纯文本任务任意），Doubao-Seed-2.0-Lite 仅作为"LLM 未指定时的兜底默认值"，**不是强制唯一选项**
 - ❌ 不删旧链路（legacy/）
 - ❌ 不把凭证写进代码
 - ✅ 新逻辑全部 try/catch 降级（LLM 失败时用可运行的兜底模板，不是空注释）
