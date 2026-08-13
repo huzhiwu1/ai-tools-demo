@@ -68,9 +68,9 @@ export class CozeClient {
     const res = await this.request<CreateWorkflowData>("create", {
       name,
       desc,
-      icon_uri: "",
+      icon_uri: "default_icon/default_workflow_icon.png", // 必须传默认工作流图标，空字符串会导致创建的资源不完整、无法打开
       space_id: this.spaceId,
-      flow_mode: 2,
+      flow_mode: 0, // 0=工作流（样本实测）；2=智能体（会导致打开报"无法查看智能体"）
     });
     return res.data.workflow_id;
   }

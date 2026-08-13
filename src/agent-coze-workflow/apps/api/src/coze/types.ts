@@ -38,6 +38,7 @@ export interface CozeApiResponse<T = unknown> {
 export interface CreateWorkflowRequest {
   name: string;
   desc: string;
+  /** 图标 URI，必须传 "default_icon/default_workflow_icon.png"，勿传空字符串 */
   icon_uri: string;
   space_id: string;
   /** 资源类型：0=工作流，2=智能体（勿用，否则创建后无法以工作流方式打开） */
