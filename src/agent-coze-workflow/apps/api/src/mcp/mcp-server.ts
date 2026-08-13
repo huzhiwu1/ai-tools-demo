@@ -58,8 +58,7 @@ function getConfig() {
 }
 
 export function createCozeMcpServer(client?: CozeClient): McpServer {
-  const coze =
-    client ?? new CozeClient(getConfig());
+  const coze = client ?? new CozeClient(getConfig());
 
   const server = new McpServer({
     name: "coze-workflow-mcp",
@@ -67,19 +66,31 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   });
 
   // ---------- 创建工作流 ----------
-  server.tool(
+  server.registerTool(
     "coze_create_workflow",
-    "在 Coze 平台创建空白工作流骨架，返回 workflow_id",
-    { name: z.string().describe("工作流名称"), desc: z.string().describe("工作流描述") },
+    {
+      description: "在 Coze 平台创建空白工作流骨架，返回 workflow_id",
+      inputSchema: {
+        name: z.string().describe("工作流名称"),
+        desc: z.string().describe("工作流描述"),
+      },
+    },
     async ({ name, desc }) => {
       try {
         const workflowId = await coze.createWorkflow(name, desc);
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ workflowId }) }],
+          content: [
+            { type: "text" as const, text: JSON.stringify({ workflowId }) },
+          ],
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
@@ -87,15 +98,18 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   );
 
   // ---------- 保存工作流 ----------
-  server.tool(
+  server.registerTool(
     "coze_save_workflow",
-    "保存工作流到 Coze 平台。schema 可传项目 CozeWorkflow 对象（自动转换）或平台内部 schema JSON 字符串",
     {
-      workflowId: z.string().describe("目标工作流 ID"),
-      schema: z
-        .union([z.string(), z.record(z.string(), z.unknown())])
-        .describe("项目 CozeWorkflow 对象或平台 schema JSON 字符串"),
-      spaceId: z.string().optional().describe("覆盖空间 ID（默认用 .env）"),
+      description:
+        "保存工作流到 Coze 平台。schema 可传项目 CozeWorkflow 对象（自动转换）或平台内部 schema JSON 字符串",
+      inputSchema: {
+        workflowId: z.string().describe("目标工作流 ID"),
+        schema: z
+          .union([z.string(), z.record(z.string(), z.unknown())])
+          .describe("项目 CozeWorkflow 对象或平台 schema JSON 字符串"),
+        spaceId: z.string().optional().describe("覆盖空间 ID（默认用 .env）"),
+      },
     },
     async ({ workflowId, schema, spaceId }) => {
       try {
@@ -103,14 +117,26 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
           typeof schema === "string"
             ? schema
             : convertToPlatformSchema(schema as unknown as CozeWorkflow);
-        const client = spaceId ? new CozeClient({ ...getConfig(), spaceId }) : coze;
+        const client = spaceId
+          ? new CozeClient({ ...getConfig(), spaceId })
+          : coze;
         await client.saveWorkflow(workflowId, schemaStr);
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ workflowId, saved: true }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ workflowId, saved: true }),
+            },
+          ],
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
@@ -118,22 +144,31 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   );
 
   // ---------- 试运行 ----------
-  server.tool(
+  server.registerTool(
     "coze_test_run",
-    "试运行工作流，返回 execute_id",
     {
-      workflowId: z.string(),
-      input: z.record(z.string(), z.unknown()).describe("工作流输入参数对象"),
+      description: "试运行工作流，返回 execute_id",
+      inputSchema: {
+        workflowId: z.string(),
+        input: z.record(z.string(), z.unknown()).describe("工作流输入参数对象"),
+      },
     },
     async ({ workflowId, input }) => {
       try {
         const executeId = await coze.testRun(workflowId, input);
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ executeId }) }],
+          content: [
+            { type: "text" as const, text: JSON.stringify({ executeId }) },
+          ],
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
@@ -141,10 +176,15 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   );
 
   // ---------- 工作流列表 ----------
-  server.tool(
+  server.registerTool(
     "coze_list_workflows",
-    "获取工作流列表",
-    { page: z.number().int().positive().default(1), size: z.number().int().positive().default(20) },
+    {
+      description: "获取工作流列表",
+      inputSchema: {
+        page: z.number().int().positive().default(1),
+        size: z.number().int().positive().default(20),
+      },
+    },
     async ({ page, size }) => {
       try {
         const list = await coze.listWorkflows(page, size);
@@ -153,7 +193,12 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
@@ -161,23 +206,35 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   );
 
   // ---------- 更新元信息 ----------
-  server.tool(
+  server.registerTool(
     "coze_update_meta",
-    "更新工作流名称/描述（不走 save，不影响 schema）",
     {
-      workflowId: z.string(),
-      name: z.string().describe("新名称（字母开头，字母数字下划线）"),
-      desc: z.string().describe("新描述"),
+      description: "更新工作流名称/描述（不走 save，不影响 schema）",
+      inputSchema: {
+        workflowId: z.string(),
+        name: z.string().describe("新名称（字母开头，字母数字下划线）"),
+        desc: z.string().describe("新描述"),
+      },
     },
     async ({ workflowId, name, desc }) => {
       try {
         await coze.updateMeta(workflowId, name, desc);
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ workflowId, updated: true }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ workflowId, updated: true }),
+            },
+          ],
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
@@ -185,10 +242,12 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   );
 
   // ---------- 获取 schema ----------
-  server.tool(
+  server.registerTool(
     "coze_get_schema",
-    "获取工作流最新 schema + submit_commit_id",
-    { workflowId: z.string() },
+    {
+      description: "获取工作流最新 schema + submit_commit_id",
+      inputSchema: { workflowId: z.string() },
+    },
     async ({ workflowId }) => {
       try {
         const result = await coze.getSchema(workflowId);
@@ -197,7 +256,12 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
@@ -205,19 +269,33 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   );
 
   // ---------- 纯本地：格式转换 ----------
-  server.tool(
+  server.registerTool(
     "coze_convert_schema",
-    "将项目 CozeWorkflow 格式转为平台内部 schema JSON 字符串（纯本地，不调 API）",
-    { workflow: z.record(z.string(), z.unknown()).describe("项目 CozeWorkflow 对象") },
+    {
+      description:
+        "将项目 CozeWorkflow 格式转为平台内部 schema JSON 字符串（纯本地，不调 API）",
+      inputSchema: {
+        workflow: z
+          .record(z.string(), z.unknown())
+          .describe("项目 CozeWorkflow 对象"),
+      },
+    },
     async ({ workflow }) => {
       try {
-        const schemaStr = convertToPlatformSchema(workflow as unknown as CozeWorkflow);
+        const schemaStr = convertToPlatformSchema(
+          workflow as unknown as CozeWorkflow,
+        );
         return {
           content: [{ type: "text" as const, text: schemaStr }],
         };
       } catch (e) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: (e as Error).message }) }],
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ error: (e as Error).message }),
+            },
+          ],
           isError: true,
         };
       }
