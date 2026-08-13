@@ -99,14 +99,25 @@ resetIteration(workflowId);  // 新工作流从 0 开始计数
 
 > 为什么：每次保存的是新工作流（或新版本），迭代次数应重新开始；若 Agent 反复保存同一 workflowId 则继续累计。
 
-### 5. SYSTEM_PROMPT 措辞微调（react-agent.service.ts）
+### 5. SYSTEM_PROMPT 删除 LLM 自觉判断规则（react-agent.service.ts）
 
-保留"迭代 3 次"的说明，但补充"由系统强制"：
+**删除以下让 LLM 自己数次数/自己决定是否停止的规则**（原文逐字删除）：
+
+```
+- 若 accuracy < 100% 且迭代次数 < 3：
+  分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
+- 迭代 3 次仍 < 100%：向用户说明情况，或 clarify_question 索取信息，用户确认后继续
+```
+
+**替换为**（只保留"由系统强制"的说明，不要求 LLM 自己计数）：
 
 ```
 - batch_validate / update_workflow 有系统级迭代上限（3 轮），达到后工具会返回"已达迭代上限"错误
 - 收到该错误时必须停止迭代，向用户汇报当前结果，不要尝试绕过或继续修改
+- 正常迭代流程：验证不达标 → 分析 failurePatterns → update_workflow → 重新保存 → 再次验证
 ```
+
+> 原则：**计数和上限判断是代码的职责（iteration-counter.ts），LLM 只负责收到错误后正确响应**。
 
 ---
 
