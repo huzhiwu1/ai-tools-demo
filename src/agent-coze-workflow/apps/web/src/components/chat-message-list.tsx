@@ -24,8 +24,6 @@ interface Props {
   messages: ChatMessage[];
   isLoading: boolean;
   pendingQuestion: { question: string; context?: string } | null;
-  /** 当前 LLM 思考内容（reasoning_delta 累积），思考气泡内流式显示 */
-  reasoningText?: string;
 }
 
 /** 工具名 → 中文显示名（让用户看懂 AI 正在做什么） */
@@ -90,7 +88,6 @@ export function ChatMessageList({
   messages,
   isLoading,
   pendingQuestion,
-  reasoningText = "",
 }: Props) {
   return (
     <div className="chat-messages">
@@ -111,7 +108,12 @@ export function ChatMessageList({
 
         // 固化的提问卡片：AI 咨询过的问题（回答后仍保留在消息流）
         const msgData = msg.data as
-          | { type?: string; question?: string; context?: string }
+          | {
+              type?: string;
+              question?: string;
+              context?: string;
+              content?: string;
+            }
           | undefined;
         if (msgData?.type === "question") {
           return (
@@ -125,6 +127,27 @@ export function ChatMessageList({
                 {msgData.context && (
                   <p className="question-context">{msgData.context}</p>
                 )}
+              </div>
+            </div>
+          );
+        }
+
+        // 固化的思考段落：LLM 的推理过程（遇到什么问题、为什么这么做、准备怎么处理）
+        // 流式累积，工具调用/正式输出时封存，保留在消息流里可回看
+        if (msgData?.type === "reasoning") {
+          const isStreamingReasoning =
+            index === messages.length - 1 && isLoading;
+          return (
+            <div key={msg.id} className="msg-row msg-ai">
+              <div className="msg-bubble thinking-bubble">
+                <div className="msg-avatar">AI</div>
+                <div className="msg-content">
+                  <div className="thinking-label">🧠 思考中</div>
+                  <div className="thinking-content">
+                    {msgData.content ?? ""}
+                  </div>
+                  {isStreamingReasoning && <span className="cursor-blink" />}
+                </div>
               </div>
             </div>
           );
@@ -156,7 +179,7 @@ export function ChatMessageList({
         );
       })}
 
-      {/* LLM 思考中：没有流式文本、没有工具调用、没有提问卡片时显示 */}
+      {/* LLM 思考中：没有流式文本、没有 reasoning 段落、没有提问卡片时显示 */}
       {isLoading &&
         !pendingQuestion &&
         !messages.some(
@@ -164,27 +187,22 @@ export function ChatMessageList({
             m.role === "assistant" &&
             m.content !== "" &&
             m.id === messages[messages.length - 1]?.id,
+        ) &&
+        !messages.some(
+          (m) =>
+            (m.data as { type?: string } | undefined)?.type === "reasoning" &&
+            m.id === messages[messages.length - 1]?.id,
         ) && (
           <div className="msg-row msg-ai">
             <div className="msg-bubble thinking-bubble">
               <div className="msg-avatar">AI</div>
               <div className="msg-content">
-                {reasoningText ? (
-                  <>
-                    <div className="thinking-label">🧠 思考中</div>
-                    <div className="thinking-content">{reasoningText}</div>
-                    <span className="cursor-blink" />
-                  </>
-                ) : (
-                  <>
-                    <span className="thinking-dots">
-                      <span className="dot" />
-                      <span className="dot" />
-                      <span className="dot" />
-                    </span>
-                    <span className="thinking-text">思考中</span>
-                  </>
-                )}
+                <span className="thinking-dots">
+                  <span className="dot" />
+                  <span className="dot" />
+                  <span className="dot" />
+                </span>
+                <span className="thinking-text">思考中</span>
               </div>
             </div>
           </div>

@@ -172,15 +172,14 @@ export default function App() {
   // 打断能力：resume 请求的 AbortController（发送新消息时中断正在进行的 resume）
   const resumeAbortRef = useRef<AbortController | null>(null);
 
-  /** 当前 LLM 思考内容（reasoning_delta 累积，正式输出/工具调用时清空） */
-  const [reasoningText, setReasoningText] = useState("");
-
   // 工具调用序号（tool_start 时递增）与 data 数组已处理位置
   const toolIdRef = useRef(0);
   const processedDataCount = useRef(0);
 
   /** 当前正在累积文本的 assistant 消息 id（null = 没有开放的分段） */
   const currentAssistantIdRef = useRef<string | null>(null);
+  /** 当前正在累积的思考段落消息 id（reasoning_delta 流式写入，工具调用/正式输出时封存） */
+  const currentReasoningIdRef = useRef<string | null>(null);
 
   const busy = isLoading || resuming;
 
@@ -206,8 +205,8 @@ export default function App() {
         const content = event.content ?? "";
         if (!content) break;
 
-        // 正式输出开始 → 思考结束，清空思考内容
-        setReasoningText("");
+        // 正式输出开始 → 思考段落封存（固化到消息流，不再累积）
+        currentReasoningIdRef.current = null;
 
         setMessages((prev) => {
           // 没有开放分段 → 新建一条 assistant 消息
@@ -228,17 +227,44 @@ export default function App() {
 
       case "reasoning_delta": {
         // LLM 思考内容增量（DeepSeek reasoning_content）
+        // 固化到消息流（data.type="reasoning"），让用户看到完整决策过程
+        // （遇到什么问题、为什么这么做、准备怎么处理）
         const content = event.content ?? "";
         if (!content) break;
-        setReasoningText((prev) => prev + content);
+        setMessages((prev) => {
+          // 没有开放的思考段落 → 新建一条 reasoning 消息
+          if (!currentReasoningIdRef.current) {
+            const newId = crypto.randomUUID();
+            currentReasoningIdRef.current = newId;
+            return [
+              ...prev,
+              {
+                id: newId,
+                role: "assistant",
+                content: "",
+                data: { type: "reasoning", content },
+              },
+            ];
+          }
+          // 有开放段落 → 追加内容
+          return prev.map((m) => {
+            if (m.id !== currentReasoningIdRef.current) return m;
+            const cur = (m.data as { content?: string } | undefined)
+              ?.content ?? "";
+            return {
+              ...m,
+              data: { type: "reasoning", content: cur + content },
+            };
+          });
+        });
         break;
       }
 
       case "tool_start": {
         // 分段边界：封存当前文本分段，后续文本进新气泡
         currentAssistantIdRef.current = null;
-        // 工具调用前的思考已完成，清空（下一个思考段落重新累积）
-        setReasoningText("");
+        // 工具调用前的思考段落封存（固化到消息流，用户能看到为什么调这个工具）
+        currentReasoningIdRef.current = null;
 
         const name = event.name ?? "unknown";
         toolIdRef.current += 1;
@@ -296,7 +322,8 @@ export default function App() {
         const question = event.question ?? "请补充信息";
         const context = event.context;
         setPendingQuestion({ question, context });
-        setReasoningText("");
+        // 封存思考段落
+        currentReasoningIdRef.current = null;
         // 底部输入框切换为回复模式
         setReplyMode(true);
         // 把问题固化到消息流（回答后仍保留，不会消失）
@@ -318,7 +345,7 @@ export default function App() {
       case "done": {
         // 一次对话完成，关闭当前分段
         currentAssistantIdRef.current = null;
-        setReasoningText("");
+        currentReasoningIdRef.current = null;
         break;
       }
 
@@ -384,9 +411,9 @@ export default function App() {
     setToolCalls([]);
     processedDataCount.current = 0;
     setData(undefined);
-    setReasoningText("");
     // 发新消息时重置分段状态
     currentAssistantIdRef.current = null;
+    currentReasoningIdRef.current = null;
     append({ role: "user", content: text });
   }
 
@@ -503,7 +530,6 @@ export default function App() {
             messages={messages as ChatMessage[]}
             isLoading={busy}
             pendingQuestion={pendingQuestion}
-            reasoningText={reasoningText}
           />
 
           <ChatInput
