@@ -34,9 +34,10 @@ import { Logger } from "@nestjs/common";
 
 /** 已知错误码 */
 const ERR_NOT_LATEST = 777777759; // commit 过期 / 没拿锁
+const ERR_RESOURCE_CHANGE = 777777770; // 资源变更通知失败（平台临时故障，可重试）
 const REQUEST_TIMEOUT_MS = 10_000;
 const LOCK_TTL_MS = 15 * 60 * 1000; // 15 分钟
-const MAX_SAVE_RETRIES = 2;
+const MAX_SAVE_RETRIES = 3;
 
 /** 请求体/响应体日志最大长度（超出截断，避免大 schema 刷屏；create 等小接口可完整打印） */
 const LOG_MAX_LEN = 2000;
@@ -118,7 +119,8 @@ export class CozeClient {
    * 保存工作流
    *
    * 流程：ensureLock → getSchema（拿最新 commit）→ save。
-   * 若返回 777777759（commit 过期），自动重试最多 2 次。
+   * 若返回 777777759（commit 过期）或 777777770（资源变更通知失败），
+   * 自动重试（最多 3 次），重试前清除锁状态并等待 2 秒。
    */
   async saveWorkflow(workflowId: string, schemaJson: string): Promise<void> {
     let lastError: Error | null = null;
@@ -138,13 +140,16 @@ export class CozeClient {
         return; // 成功
       } catch (e) {
         lastError = e as Error;
-        const isCommitExpired =
-          e instanceof Error && e.message.includes(String(ERR_NOT_LATEST));
-        if (!isCommitExpired || attempt >= MAX_SAVE_RETRIES) {
+        const errMsg = (e as Error).message;
+        const isRetryable =
+          errMsg.includes(String(ERR_NOT_LATEST)) ||
+          errMsg.includes(String(ERR_RESOURCE_CHANGE));
+        if (!isRetryable || attempt >= MAX_SAVE_RETRIES) {
           throw e;
         }
-        // commit 过期：清除锁状态，下一轮重试
+        // 可重试错误：清除锁状态，等待 2 秒后重试
         this.lockExpireAt = 0;
+        await new Promise((r) => setTimeout(r, 2000));
       }
     }
 
