@@ -268,11 +268,21 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
       if (node.type === "code") {
         // 代码节点（type 5）：结构见 coze-node-fields-guide.md
         // language: 3=Python（平台约定），1=JavaScript
+        // outputs 从节点声明读取，缺失用默认（防止平台 SetOutputTypesForNodeSchema panic）
         const code = node as {
           code?: string;
           language?: "javascript" | "python";
           inputMapping?: Record<string, string>;
+          outputs?: Array<{ type?: string; name?: string; schema?: unknown }>;
         };
+        const codeOutputs =
+          code.outputs && code.outputs.length > 0
+            ? code.outputs.map((o) => ({
+                type: o.type ?? "object",
+                name: o.name ?? "output",
+                schema: o.schema ?? {},
+              }))
+            : [{ type: "object", name: "output", schema: {} }];
         const inputParameters = Object.entries(code.inputMapping ?? {}).map(
           ([name, refExpr]) => {
             const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
@@ -294,7 +304,7 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
             retryTimes: 0,
           },
         };
-        data.outputs = [{ type: "object", name: "output", schema: {} }];
+        data.outputs = codeOutputs;
       }
       if (node.type === "condition") {
         // 选择器节点（type 8）：branches → 平台条件结构

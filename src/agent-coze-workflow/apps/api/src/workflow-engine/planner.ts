@@ -99,6 +99,25 @@ export class WorkflowPlanner {
     const steps: PlanStep[] = [];
     let order = 0;
 
+    // 准备数据契约索引：按 database→code→condition→llm 顺序
+    const contracts = input.contracts ?? [];
+    let contractIndex = 0;
+
+    /** 取下一个可用的数据契约 */
+    const nextContract = (): PlanStep["contract"] | undefined => {
+      const idx = contractIndex;
+      contractIndex++;
+      if (idx < contracts.length) {
+        const c = contracts[idx];
+        return {
+          inputs: c.inputs,
+          outputs: c.outputs,
+          batchMode: c.batchMode,
+        };
+      }
+      return undefined;
+    };
+
     // 1. start — 接收用户输入
     order++;
     steps.push({
@@ -117,6 +136,7 @@ export class WorkflowPlanner {
         description: "查询数据库获取相关数据",
         nodeType: "database_query",
         dependencies: [startOrder],
+        contract: nextContract(),
         nodeConfig: input.nodeConfig?.database
           ? { database: input.nodeConfig.database }
           : undefined,
@@ -131,6 +151,7 @@ export class WorkflowPlanner {
         description: "执行代码逻辑处理数据",
         nodeType: "code",
         dependencies: [order - 1],
+        contract: nextContract(),
         nodeConfig: input.nodeConfig?.code
           ? { code: input.nodeConfig.code }
           : undefined,
@@ -145,6 +166,7 @@ export class WorkflowPlanner {
         description: "根据条件进行分支判断",
         nodeType: "condition",
         dependencies: [order - 1],
+        contract: nextContract(),
         nodeConfig: input.nodeConfig?.condition
           ? { condition: input.nodeConfig.condition }
           : undefined,
@@ -158,6 +180,7 @@ export class WorkflowPlanner {
       description: "使用大模型进行核心推理",
       nodeType: "llm",
       dependencies: [order - 1],
+      contract: nextContract(),
       nodeConfig: input.nodeConfig?.llm
         ? { llm: input.nodeConfig.llm }
         : undefined,
@@ -179,6 +202,23 @@ export class WorkflowPlanner {
     const stepCount = steps.length;
     const estimatedComplexity: "simple" | "medium" | "complex" =
       stepCount <= 3 ? "simple" : stepCount <= 5 ? "medium" : "complex";
+
+    // 安全保险：确保 start 排第一、end 排最后（覆盖 LLM 输出异常顺序的情况）
+    const startIdx = steps.findIndex((s) => s.nodeType === "start");
+    const endIdx = steps.findIndex((s) => s.nodeType === "end");
+    if (startIdx > 0) {
+      // 把 start 移到第一位
+      const [start] = steps.splice(startIdx, 1);
+      steps.unshift(start);
+    }
+    if (endIdx >= 0 && endIdx < steps.length - 1) {
+      // 把 end 移到最后一位
+      const [end] = steps.splice(
+        steps.findIndex((s) => s.nodeType === "end"),
+        1,
+      );
+      steps.push(end);
+    }
 
     return {
       name,

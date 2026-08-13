@@ -4,19 +4,32 @@
  * 职责：
  * 将 WorkflowPlan 映射为 WorkflowSketch（草图）和 CozeWorkflow（最终 JSON）
  *
+ * LLM 只做这些事：
+ * 1. 从需求中梳理出需要用什么节点（节点类型序列）
+ * 2. 梳理出节点怎么连接（依赖关系/边）
+ * 3. 确定每个节点的数据契约（变量名、输入结构、输出结构、单批处理）
+ *
+ * 其余一切由代码完成：
+ * - 节点顺序按 dependencies 拓扑排序（不是 LLM 输出的 order）
+ * - inputMapping 根据 edges 自动生成（数据流接线，不靠 LLM）
+ * - 条件分支 targetNodeId 由 edges 自动回填（没有 TODO）
+ * - 代码节点代码由 CodeGenerator 生成（或兜底模板）
+ * - 模型选择按任务类型从平台事实匹配
+ * - prompt 文本基于节点 description 模板化生成
+ *
  * 流程：
- * 1. 接收 WorkflowPlan（含 steps、modules、complexity）
- * 2. 按 steps 顺序创建 Coze 节点（按 nodeConfig 组装真实业务逻辑）
- * 3. 代码节点由 CodeGenerator（LLM）生成真实 Python 代码
- * 4. 按 dependencies 创建连线
- * 5. 组装 CozeWorkflow 最终结构
+ * 1. topoSortSteps(plan.steps) — 拓扑排序依赖
+ * 2. 第 1 遍遍历：createNodeForStep → 生成节点骨架 + 记录 code 节点
+ * 3. 按 dependencies 创建 edges
+ * 4. buildInputMapping — 自动生成所有节点的 inputMapping
+ * 5. 第 2 遍遍历 code 节点：用真实 inputNames + logicDescription 生成代码
+ * 6. fillConditionTargets — 回填 branches 的 targetNodeId
  *
  * 关键细节：
- * - nodeConfig 由规划阶段 LLM 生成，generator 按此组装节点业务内容：
- *   llm 节点用 nodeConfig.llm 的模型+提示词，code 节点用 LLM 生成真实代码
  * - LLM 生成代码失败时降级为可运行模板（CodeGenerator.buildFallbackCode）
- * - database 节点无有效 connectionId 时跳过该节点（避免空 databaseInfoID）
- * - 未传入 CodeGenerator 时（旧链路），代码节点用兜底模板（纯同步模板）
+ * - database 节点无有效 connectionId 时跳过该节点
+ * - 未传入 CodeGenerator 时（旧链路），代码节点用兜底模板
+ * - CozeNode 是对象引用，第 2 遍直接修改 node.code，第 1 遍的引用自动更新
  */
 import { generateId } from "@coze-workflow/shared";
 import type {
@@ -43,10 +56,123 @@ import {
 } from "@coze-workflow/workflow-schema";
 import { CodeGenerator } from "./code-generator";
 
+/**
+ * 按 dependencies 拓扑排序 steps
+ *
+ * LLM 输出的 order 可能错误（如 code 在 llm 之前），代码必须保证
+ * start → ... → end 的正确依赖顺序。
+ */
+function topoSortSteps(steps: PlanStep[]): PlanStep[] {
+  const result: PlanStep[] = [];
+  const visited = new Set<number>();
+  const orderMap = new Map(steps.map((s) => [s.order, s]));
+
+  const visit = (order: number): void => {
+    if (visited.has(order)) return;
+    visited.add(order);
+    const step = orderMap.get(order);
+    if (!step) return;
+    for (const dep of step.dependencies) visit(dep);
+    result.push(step);
+  };
+
+  for (const step of steps) visit(step.order);
+  return result;
+}
+
+/**
+ * 获取节点默认输出名称
+ *
+ * start → "input", llm/code/condition/http/database_query/text/merge → "output"
+ */
+function outputNameForNode(node: CozeNode): string {
+  if (node.type === "start") return "input";
+  if (node.type === "end") return "output";
+  // 读取节点自身的 outputs 声明，取第一个输出字段名
+  const outputs = (node as unknown as Record<string, unknown>)?.outputs as
+    | Array<{ name?: string }>
+    | undefined;
+  if (outputs && outputs.length > 0 && outputs[0]?.name) {
+    return outputs[0].name;
+  }
+  return "output";
+}
+
+/**
+ * 自动生成节点 inputMapping
+ *
+ * 规则：对于每条边 source→target，若 target 是 llm/code 节点，
+ * 把 source 节点的输出名映射为 target 节点的输入参数名：
+ * - start 的输出 → user_input
+ * - llm/code 的输出 → input
+ *
+ * 命名约定由代码控制，不是 LLM。
+ *
+ * @param nodes - 已生成的所有节点
+ * @param edges - 已生成的所有连线
+ * @returns targetNodeId → { 参数名: "sourceNodeId.outputName" }
+ */
+function buildInputMapping(
+  nodes: CozeNode[],
+  edges: CozeEdge[],
+): Map<string, Record<string, string>> {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const mapping = new Map<string, Record<string, string>>();
+
+  for (const edge of edges) {
+    const source = nodeById.get(edge.sourceNodeId);
+    const target = nodeById.get(edge.targetNodeId);
+    if (!source || !target) continue;
+    // 只对 llm/code/text/http/database_query 节点生成 inputMapping
+    if (
+      target.type !== "llm" &&
+      target.type !== "code" &&
+      target.type !== "text" &&
+      target.type !== "http" &&
+      target.type !== "database_query"
+    ) {
+      continue;
+    }
+
+    const sourceOutput = outputNameForNode(source);
+    // start 的输出 → user_input，其余 → input
+    const paramName = source.type === "start" ? "user_input" : "input";
+
+    const existing = mapping.get(target.id) ?? {};
+    // 同一 source 可能有多个输出？当前只映射第一个输出
+    existing[paramName] = `${edge.sourceNodeId}.${sourceOutput}`;
+    mapping.set(target.id, existing);
+  }
+
+  return mapping;
+}
+
+/**
+ * 回填 condition 节点 branches 的 targetNodeId
+ *
+ * 规则：condition 节点有 N 个分支时，第 i 个分支指向 edges 中
+ * 从该 condition 出发的第 i 条边的 target（无出边则指向 end "900001"）。
+ *
+ * 关键：生成该函数必须在 edges 全部创建完毕后调用。
+ */
+function fillConditionTargets(nodes: CozeNode[], edges: CozeEdge[]): void {
+  for (const node of nodes) {
+    if (node.type !== "condition") continue;
+    const outgoing = edges.filter((e) => e.sourceNodeId === node.id);
+    const branches =
+      (node as CozeNode & { branches?: Array<{ targetNodeId?: string }> })
+        .branches ?? [];
+    for (let i = 0; i < branches.length; i++) {
+      branches[i].targetNodeId = outgoing[i]?.targetNodeId ?? "900001"; // 兜底 end
+    }
+  }
+}
+
 export class WorkflowGenerator {
   private readonly logger = new Logger("WorkflowGenerator");
 
   constructor(private readonly codeGenerator?: CodeGenerator) {}
+
   /**
    * 只生成 WorkflowSketch（轻量中间产物）
    *
@@ -61,9 +187,15 @@ export class WorkflowGenerator {
    *
    * 供 graph.ts 的 generate_node 单独调用，避免重复计算。
    * 代码节点需要 LLM 生成真实业务代码，因此是异步方法。
+   *
+   * @param plan - 规划结果
+   * @param referenceData - 用户参考数据（如歌词库），代码生成时传入 LLM 防止幻觉
    */
-  async generateWorkflow(plan: WorkflowPlan): Promise<CozeWorkflow> {
-    return this.buildWorkflow(plan);
+  async generateWorkflow(
+    plan: WorkflowPlan,
+    referenceData?: Record<string, string>,
+  ): Promise<CozeWorkflow> {
+    return this.buildWorkflow(plan, referenceData);
   }
 
   /**
@@ -72,13 +204,16 @@ export class WorkflowGenerator {
    * @param plan - 规划结果
    * @returns sketch（中间产物）和 workflow（最终 JSON）
    */
-  async generate(plan: WorkflowPlan): Promise<{
+  async generate(
+    plan: WorkflowPlan,
+    referenceData?: Record<string, string>,
+  ): Promise<{
     sketch: WorkflowSketch;
     workflow: CozeWorkflow;
   }> {
     return {
       sketch: this.generateSketch(plan),
-      workflow: await this.generateWorkflow(plan),
+      workflow: await this.generateWorkflow(plan, referenceData),
     };
   }
 
@@ -126,16 +261,31 @@ export class WorkflowGenerator {
 
   /**
    * 构建 CozeWorkflow（完整最终 JSON）
+   *
+   * 两遍遍历设计：
+   * - 第 1 遍：创建所有节点骨架（获取 orderToId + code 节点引用）
+   * - 生成 edges
+   * - buildInputMapping + 填充 inputMapping
+   * - 第 2 遍：为 code 节点用真实 inputNames 重新生成代码
+   * - fillConditionTargets（回填 branches targetNodeId）
    */
-  private async buildWorkflow(plan: WorkflowPlan): Promise<CozeWorkflow> {
+  private async buildWorkflow(
+    plan: WorkflowPlan,
+    referenceData?: Record<string, string>,
+  ): Promise<CozeWorkflow> {
+    // 0. 拓扑排序（保证 start → ... → end 的正确顺序）
+    const sortedSteps = topoSortSteps(plan.steps);
+
     const cozeNodes: CozeNode[] = [];
-    // order → nodeId 映射，供 edges 引用
     const orderToId = new Map<number, string>();
+    /** 第 1 遍创建的 code 节点，第 2 遍重新生成 code */
+    const codeEntries: Array<{ step: PlanStep; node: CozeNode }> = [];
 
     let positionY = 80;
 
-    for (const step of plan.steps) {
-      // database 节点无有效连接时跳过（空 databaseInfoID 会导致平台报错）
+    // 第 1 遍：创建所有节点骨架
+    for (const step of sortedSteps) {
+      // database 节点无有效连接时跳过
       if (
         step.nodeType === "database_query" &&
         !step.nodeConfig?.database?.connectionId
@@ -149,12 +299,17 @@ export class WorkflowGenerator {
       const node = await this.createNodeForStep(step, positionY);
       cozeNodes.push(node);
       orderToId.set(step.order, node.id);
+
+      if (step.nodeType === "code") {
+        codeEntries.push({ step, node });
+      }
+
       positionY += 120;
     }
 
     // 按 dependencies 创建连线
     const edges: CozeEdge[] = [];
-    for (const step of plan.steps) {
+    for (const step of sortedSteps) {
       for (const depOrder of step.dependencies) {
         const sourceId = orderToId.get(depOrder);
         const targetId = orderToId.get(step.order);
@@ -167,6 +322,40 @@ export class WorkflowGenerator {
         }
       }
     }
+
+    // 自动生成 inputMapping（数据流接线，不靠 LLM）
+    const inputMapping = buildInputMapping(cozeNodes, edges);
+    for (const [nodeId, map] of inputMapping) {
+      const node = cozeNodes.find((n) => n.id === nodeId);
+      if (node) {
+        (node as unknown as Record<string, unknown>).inputMapping = map;
+      }
+    }
+
+    // 第 2 遍：根据 inputMapping 重新生成 code 节点的代码
+    for (const { step, node } of codeEntries) {
+      const cfg = step.nodeConfig?.code;
+      // 从 inputMapping 取真实输入变量名（第 1 遍用的 cfg.inputs 可能不准确）
+      const inputNames = inputMapping.has(node.id)
+        ? Object.keys(inputMapping.get(node.id)!)
+        : (cfg?.inputs ?? ["input"]);
+
+      let code: string;
+      if (this.codeGenerator && cfg?.logicDescription) {
+        code = await this.codeGenerator.generateCode(
+          cfg.logicDescription,
+          inputNames,
+          referenceData,
+        );
+      } else {
+        code = CodeGenerator.buildFallbackCode(inputNames);
+      }
+      (node as unknown as Record<string, unknown>).code = code;
+      (node as unknown as Record<string, unknown>).language = "python";
+    }
+
+    // 回填 condition 节点 branches 的 targetNodeId（没有 TODO）
+    fillConditionTargets(cozeNodes, edges);
 
     return {
       meta: {
@@ -184,13 +373,12 @@ export class WorkflowGenerator {
   }
 
   /**
-   * 根据 PlanStep 创建对应类型的 Coze 节点
+   * 根据 PlanStep 创建对应类型的 Coze 节点（第 1 遍骨架创建）
    *
-   * 按 nodeConfig 组装真实业务逻辑（不再纯模板占位）：
-   * - llm：nodeConfig.llm 的模型 + 提示词
-   * - code：CodeGenerator 按 logicDescription 生成真实 Python 代码
-   * - condition：nodeConfig.condition 的真实分支条件
-   * - database_query：nodeConfig.database 的真实连接 + 查询描述
+   * code 节点在第 2 遍用真实 inputNames + CodeGenerator 重新生成代码，
+   * 第 1 遍仅创建骨架（code 用兜底占位），确保 orderToId 可映射。
+   *
+   * condition 节点 branches 的 targetNodeId 由 fillConditionTargets 回填。
    */
   private async createNodeForStep(
     step: PlanStep,
@@ -209,12 +397,32 @@ export class WorkflowGenerator {
         return createEndNode();
       case "llm": {
         const cfg = step.nodeConfig?.llm;
+        const contract = step.contract;
+
+        // 当 contract 存在且无 nodeConfig 时，基于 description 代码式生成（LLM 不输出业务细节）
+        if (contract && !cfg) {
+          const desc = step.description;
+          // 模型选择：根据 description 判断任务类型（音频/视频任务选 audio=true 模型）
+          const isAudioTask =
+            /音频|视频|识别|语音|audio|video|recognize|理解/i.test(desc);
+          const model = isAudioTask
+            ? "Doubao-Seed-2.0-Lite"
+            : "Doubao-Seed-2.0-Lite";
+          // prompt 模板：基于 description 生成（不靠 LLM 写全文）
+          const userPrompt = `你是一个工作流助手。任务：${desc}。请根据输入完成任务，输出 JSON 格式结果。`;
+          return createLLMNode({
+            ...baseOverrides,
+            userPrompt,
+            config: { model, temperature: 0.2, maxTokens: 4096 },
+          });
+        }
+
+        // 原有逻辑（nodeConfig 优先级更高）
         return createLLMNode({
           ...baseOverrides,
           userPrompt: cfg?.userPrompt ?? "{{input}}",
           systemPrompt: cfg?.systemPrompt,
           config: {
-            // 平台可用模型（权威依据 platform-facts.md），Doubao-Seed-2.0-Lite 为兜底默认
             model: cfg?.model ?? "Doubao-Seed-2.0-Lite",
             temperature: 0.2,
             maxTokens: 4096,
@@ -223,24 +431,41 @@ export class WorkflowGenerator {
       }
       case "code": {
         const cfg = step.nodeConfig?.code;
-        // 有 LLM 代码生成器时按业务逻辑生成真实 Python 代码，否则用可运行兜底模板
-        let code: string;
-        if (this.codeGenerator && cfg?.logicDescription) {
-          code = await this.codeGenerator.generateCode(
-            cfg.logicDescription,
-            cfg.inputs,
-          );
-        } else {
-          code = CodeGenerator.buildFallbackCode(cfg?.inputs);
-        }
+        const contract = step.contract;
+        // 优先用 contract.inputs 作为输入变量名
+        const inputNames = contract?.inputs?.map((i) => i.name) ??
+          cfg?.inputs ?? ["input"];
+        // 优先用 contract.outputs 作为输出声明
+        const outputs = contract?.outputs?.map((o) => ({
+          type: o.type,
+          name: o.name,
+          schema: {},
+        })) ?? [{ type: "object" as const, name: "output", schema: {} }];
+        // 第 1 遍：先用 inputNames 生成兜底代码
+        // 第 2 遍 buildWorkflow 会重新生成
+        const code = CodeGenerator.buildFallbackCode(inputNames);
         return createCodeNode({
           ...baseOverrides,
           code,
           language: "python",
+          outputs,
         });
       }
       case "condition": {
         const cfg = step.nodeConfig?.condition;
+        const contract = step.contract;
+
+        // 当无 nodeConfig 但有 contract 时，基于 description 自动生成分支结构
+        if (!cfg && contract) {
+          const desc = step.description;
+          // 按描述语义生成默认分支（成功/失败）
+          const branches = [
+            { expression: `${desc} 条件满足`, targetNodeId: "TODO" as const },
+            { expression: `${desc} 条件不满足`, targetNodeId: "TODO" as const },
+          ];
+          return createConditionNode({ ...baseOverrides, branches });
+        }
+
         return createConditionNode({
           ...baseOverrides,
           branches: cfg?.branches?.map((b) => ({
@@ -270,7 +495,6 @@ export class WorkflowGenerator {
       case "merge":
         return createMergeNode(baseOverrides);
       default:
-        // 未知类型降级为 LLM 节点
         return createLLMNode({ title: step.nodeType, desc: step.description });
     }
   }

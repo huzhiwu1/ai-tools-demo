@@ -109,6 +109,15 @@ export interface CodeNode extends CozeNodeBase {
   language: "javascript" | "python";
   /** 输入变量映射 */
   inputMapping?: Record<string, string>;
+  /**
+   * 输出变量声明（平台要求，缺失会导致 SetOutputTypesForNodeSchema panic）
+   * 每个元素声明一个输出字段的名称与类型。
+   */
+  outputs?: Array<{
+    type: "string" | "object" | "list" | "integer" | "number" | "boolean";
+    name: string;
+    schema?: unknown;
+  }>;
 }
 
 /** 条件判断节点 */

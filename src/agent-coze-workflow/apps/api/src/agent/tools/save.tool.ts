@@ -19,6 +19,8 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
+import { validateWorkflow } from "@coze-workflow/workflow-schema";
+import { checkPlatformCompatibility } from "../../workflow-engine/platform-validator";
 import { convertToPlatformSchema } from "../../coze/schema-converter";
 import { cozeClient } from "./coze-client";
 
@@ -26,6 +28,19 @@ export const saveToCozeTool = tool(
   async ({ workflow }) => {
     try {
       const cozeWorkflow = workflow as unknown as CozeWorkflow;
+
+      // 1. 结构校验（现有 validateWorkflow，来自 packages/workflow-schema）
+      const structValidation = validateWorkflow(cozeWorkflow);
+      if (!structValidation.valid) {
+        return `保存失败: 工作流结构校验未通过，请先修复:\n${structValidation.errors.map((e) => "- " + e.message).join("\n")}`;
+      }
+
+      // 2. 平台兼容性校验（新增，针对已知平台坑）
+      const compatResult = checkPlatformCompatibility(cozeWorkflow);
+      if (!compatResult.valid) {
+        return `保存失败: 平台兼容性校验未通过:\n${compatResult.errors.join("\n")}`;
+      }
+
       const schemaJson = convertToPlatformSchema(cozeWorkflow);
       const workflowId = await cozeClient.createWorkflow(
         cozeWorkflow.meta.name,

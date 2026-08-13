@@ -189,11 +189,38 @@ export const updateWorkflowTool = tool(
           if (node.type !== "code") {
             return `工作流更新失败: 节点 ${targetName} 不是代码节点（type=${String(node.type)}）`;
           }
-          // 复用 CodeGenerator：LLM 按新逻辑描述生成平台规范 Python 代码
-          const newCode = await codeGenerator.generateCode(instruction.content);
+          // 仅当明确要求"重写逻辑/重写代码"时才允许调 CodeGenerator（防幻觉）
+          const isRewriteRequest =
+            /重写|改.*逻辑|新.*算法|替换.*逻辑|修改.*实现|rewrite|new.*algorithm/i.test(
+              instruction.content + fixInstruction,
+            );
+          if (!isRewriteRequest) {
+            return (
+              `工作流更新失败: 修改类型为 code_logic 但指令未明确要求重写逻辑。` +
+              `如只需改阈值/数据常量请用 threshold/data 类型。`
+            );
+          }
+          // 无 referenceData 时不重写代码节点（防止 LLM 凭空生成全新代码）
+          const refDataStr = node.referenceData as
+            | Record<string, string>
+            | undefined;
+          if (!refDataStr || Object.keys(refDataStr).length === 0) {
+            return (
+              `工作流更新失败: 代码逻辑重写需要 referenceData（原工作流的参考数据），` +
+              `否则 LLM 会幻觉编造数据。请提供原工作流的参考数据。`
+            );
+          }
+          // 复用 CodeGenerator：传入 referenceData，prompt 强调保留原数据
+          const newCode = await codeGenerator.generateCode(
+            instruction.content,
+            undefined,
+            refDataStr,
+          );
           node.code = newCode;
           node.language = "python";
-          changes.push(`节点 ${targetName} 代码逻辑已按新描述重写`);
+          changes.push(
+            `节点 ${targetName} 代码逻辑已按新描述重写（保留原 referenceData）`,
+          );
           break;
         }
 

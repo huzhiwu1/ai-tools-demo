@@ -36,6 +36,49 @@ export const LLMPlanOutputSchema = z.object({
     ),
   constraints: z.array(z.string()).describe("工作流需满足的约束条件列表"),
   riskHints: z.array(z.string()).describe("潜在风险和注意事项列表"),
+  /** 数据契约：每个非 start/end 节点的输入输出定义 */
+  contracts: z
+    .array(
+      z.object({
+        inputs: z
+          .array(
+            z.object({
+              name: z.string().describe("输入变量名，如 user_input、audio_url"),
+              source: z
+                .string()
+                .describe("来源说明：如'用户输入'、'LLM 输出'、'代码输出'"),
+            }),
+          )
+          .optional()
+          .describe("该节点接收的输入参数列表"),
+        outputs: z
+          .array(
+            z.object({
+              name: z.string().describe("输出变量名，如 result、matched"),
+              type: z
+                .enum([
+                  "string",
+                  "object",
+                  "list",
+                  "integer",
+                  "number",
+                  "boolean",
+                ])
+                .describe("输出变量类型"),
+            }),
+          )
+          .optional()
+          .describe("该节点输出的字段列表"),
+        batchMode: z
+          .enum(["single", "batch"])
+          .optional()
+          .describe("单处理还是批处理"),
+      }),
+    )
+    .optional()
+    .describe(
+      "各非 start/end 节点的数据契约列表（顺序：database_query→code→condition→llm），每个元素定义该节点的输入/输出/批处理模式",
+    ),
   nodeConfig: z
     .object({
       llm: z

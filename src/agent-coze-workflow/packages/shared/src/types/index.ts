@@ -87,7 +87,24 @@ export interface PlanStep {
   nodeType: WorkflowNodeType;
   /** 依赖的前置步骤 */
   dependencies: number[];
-  /** 节点业务配置（LLM 生成，generator 按此组装真实节点） */
+  /**
+   * 数据契约（LLM 确定，代码按此组装节点）
+   *
+   * LLM 只输出节点类型 + 连接 + 数据契约（变量名/输入结构/输出结构/单批处理），
+   * 完整节点 JSON 由代码组装。
+   */
+  contract?: {
+    /** 输入变量：该节点接收哪些参数（名称 + 来源说明） */
+    inputs?: Array<{ name: string; source: string }>;
+    /** 输出变量：该节点输出哪些字段（名称 + 类型） */
+    outputs?: Array<{
+      name: string;
+      type: "string" | "object" | "list" | "integer" | "number" | "boolean";
+    }>;
+    /** 单处理还是批处理 */
+    batchMode?: "single" | "batch";
+  };
+  /** @deprecated 节点业务配置（LLM 生成），推荐用 contract 替代 */
   nodeConfig?: {
     /** LLM 节点：模型名（平台可用模型）+ 提示词 */
     llm?: { model: string; userPrompt: string; systemPrompt?: string };

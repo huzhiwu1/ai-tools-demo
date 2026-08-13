@@ -52,22 +52,30 @@ export class CodeGenerator {
    *
    * @param logicDescription - 业务逻辑描述（含阈值/数据常量/处理步骤）
    * @param inputs - 代码节点需要的输入变量名列表
+   * @param referenceData - 用户参考数据（如歌词库），LLM 必须原样写入代码常量
    * @returns Python 代码字符串（LLM 失败时返回可运行的兜底模板）
    */
   async generateCode(
     logicDescription: string,
     inputs?: string[],
+    referenceData?: Record<string, string>,
   ): Promise<string> {
+    const dataHint =
+      referenceData && Object.keys(referenceData).length > 0
+        ? `用户参考数据（必须原样写入代码常量，不得修改、不得替换）：\n${JSON.stringify(referenceData, null, 2)}\n\n重要：参考数据中的歌曲库/歌词库/列表必须原样保留，禁止编造、替换或删减。`
+        : "";
+
     const inputHint =
       inputs && inputs.length > 0
         ? `输入变量：${inputs.join(", ")}（通过 args.params 获取）`
         : "输入：args.params";
 
     try {
+      const prompt = `${CODE_SPEC_PROMPT}\n\n${dataHint}\n业务逻辑：${logicDescription}\n${inputHint}`;
       const result = await this.client.chatStructured(
         CodeOutputSchema,
         CODE_SPEC_PROMPT,
-        `业务逻辑：${logicDescription}\n${inputHint}`,
+        prompt,
       );
       if (result.code && result.code.trim()) {
         return result.code.trim();

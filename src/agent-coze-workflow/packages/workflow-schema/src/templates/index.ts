@@ -94,7 +94,7 @@ export function createLLMNode(
 /** 创建代码节点 */
 export function createCodeNode(
   overrides: Partial<
-    Pick<CodeNode, "title" | "desc" | "code" | "language">
+    Pick<CodeNode, "title" | "desc" | "code" | "language" | "outputs">
   > = {},
 ): CodeNode {
   return {
@@ -104,6 +104,9 @@ export function createCodeNode(
     desc: overrides.desc ?? "执行自定义代码逻辑",
     code: overrides.code ?? "// TODO: 填充代码逻辑",
     language: overrides.language ?? "javascript",
+    outputs: overrides.outputs ?? [
+      { type: "object", name: "output", schema: {} },
+    ],
     inputMapping: {},
     _temp: {
       bounds: { x: 360, y: 80, width: 180, height: 90 },
