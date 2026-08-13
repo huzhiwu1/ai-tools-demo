@@ -3,4 +3,5 @@ dist/
 uploads/
 .env
 *.log
-.turbo/.env.bak*
+.turbo/
+.env.bak*

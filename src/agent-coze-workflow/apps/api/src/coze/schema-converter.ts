@@ -269,20 +269,48 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
         // 代码节点（type 5）：结构见 coze-node-fields-guide.md
         // language: 3=Python（平台约定），1=JavaScript
         // outputs 从节点声明读取，缺失用默认（防止平台 SetOutputTypesForNodeSchema panic）
+        //
+        // schema 字段格式（平台 dtoMetaToViewMeta 要求）：
+        // - type="object" → schema 必须是数组（字段定义列表），空数组=无子字段
+        // - type="list"   → schema 是类型对象如 {type:"string"} 或 {type:"object", schema:[]}
+        // - 其他类型       → 不传 schema
+        // 详见 docs/coze-platform/coze-node-fields-guide.md 对比分析
         const code = node as {
           code?: string;
           language?: "javascript" | "python";
           inputMapping?: Record<string, string>;
           outputs?: Array<{ type?: string; name?: string; schema?: unknown }>;
         };
+        const normalizeSchema = (
+          type: string,
+          schema: unknown,
+        ): unknown => {
+          if (type === "object") {
+            // 平台期望 schema 是数组；若为 null/undefined/非数组，降级为空数组
+            return Array.isArray(schema) ? schema : [];
+          }
+          if (type === "list") {
+            // 平台期望 schema 是类型对象，如 {type:"string"} 或 {type:"object", schema:[]}
+            if (schema && typeof schema === "object" && !Array.isArray(schema))
+              return schema;
+            return { type: "string" };
+          }
+          // 基础类型（string/boolean/integer/float）不传 schema
+          return undefined;
+        };
         const codeOutputs =
           code.outputs && code.outputs.length > 0
-            ? code.outputs.map((o) => ({
-                type: o.type ?? "object",
-                name: o.name ?? "output",
-                schema: o.schema ?? {},
-              }))
-            : [{ type: "object", name: "output", schema: {} }];
+            ? code.outputs.map((o) => {
+                const type = o.type ?? "object";
+                const schema = normalizeSchema(type, o.schema);
+                const entry: Record<string, unknown> = {
+                  type,
+                  name: o.name ?? "output",
+                };
+                if (schema !== undefined) entry.schema = schema;
+                return entry;
+              })
+            : [{ type: "object", name: "output", schema: [] }];
         const inputParameters = Object.entries(code.inputMapping ?? {}).map(
           ([name, refExpr]) => {
             const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
@@ -490,7 +518,7 @@ export function convertToPlatformSchema(workflow: CozeWorkflow): string {
             retryTimes: 0,
           },
         };
-        data.outputs = [{ type: "object", name: "response", schema: {} }];
+        data.outputs = [{ type: "object", name: "response", schema: [] }];
       }
 
       return {
