@@ -33,14 +33,20 @@ export class DeepSeekClient {
   private readonly logger = new Logger("DeepSeekClient");
 
   constructor(config?: DeepSeekConfig) {
-    const apiKey = config?.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
+    // 优先 dachensky 网关（LLM_*，支持思考+工具调用），fallback 官方 DeepSeek（DEEPSEEK_*）
+    const apiKey =
+      config?.apiKey ?? process.env.LLM_API_KEY ?? process.env.DEEPSEEK_API_KEY ?? "";
     // DeepSeek 兼容端点必须含 /v1
     const baseURL =
       config?.baseUrl ??
+      process.env.LLM_BASE_URL ??
       process.env.DEEPSEEK_BASE_URL ??
       "https://api.deepseek.com/v1";
     const modelName =
-      config?.model ?? process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+      config?.model ??
+      process.env.LLM_MODEL ??
+      process.env.DEEPSEEK_MODEL ??
+      "deepseek-chat";
 
     if (!apiKey) {
       this.logger.warn(
@@ -82,10 +88,11 @@ export class DeepSeekClient {
     );
 
     try {
-      // 使用 function_calling 模式：DeepSeek 不支持 response_format json_object，
-      // 但支持 tool calling，LangChain 会将 zod schema 映射为 function 参数定义
+      // 使用 jsonMode（response_format json_object）：
+      // 网关 deepseek-v4-flash 是思考模式，不支持 functionCalling 的强制 tool_choice
+      // （实测 2026-08-14: tool_choice=required 报 InvalidParameter）
       const structuredModel = this.model.withStructuredOutput(schema, {
-        method: "functionCalling",
+        method: "jsonMode",
       });
       const result = await structuredModel.invoke([
         new SystemMessage(systemPrompt),
