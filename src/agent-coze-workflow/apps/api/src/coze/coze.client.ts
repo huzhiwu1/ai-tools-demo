@@ -238,6 +238,42 @@ export class CozeClient {
     return res.data.workflow_list;
   }
 
+  /**
+   * 获取平台资源库中的数据库列表（res_type=7）
+   *
+   * 接口契约见 docs/coze-platform/platform-facts.md 第二节：
+   * POST /api/plugin_api/library_resource_list，返回 resource_list[]。
+   * res_id 即 database 节点的 databaseInfoID（不能臆造）。
+   *
+   * @returns 数据库资源列表（name + resId + desc）
+   */
+  async listDatabases(): Promise<
+    Array<{ name: string; resId: string; desc: string }>
+  > {
+    const res = await this.request<{
+      resource_list: Array<{ name?: string; res_id?: string; desc?: string }>;
+    }>(
+      "plugin_api/library_resource_list",
+      {
+        user_filter: 0,
+        res_type_filter: [7],
+        name: "",
+        publish_status_filter: 0,
+        space_id: this.spaceId,
+        size: 15,
+        owner_ids: [],
+        desc: "",
+        res_id: "",
+      },
+      "/api/",
+    );
+    return (res.data.resource_list ?? []).map((item) => ({
+      name: item.name ?? "",
+      resId: item.res_id ?? "",
+      desc: item.desc ?? "",
+    }));
+  }
+
   // ============================================
   // 私有方法
   // ============================================
@@ -245,11 +281,14 @@ export class CozeClient {
   /**
    * 统一 HTTP 请求
    *
-   * @param path - API 路径（如 "create"），自动拼接 /api/workflow_api/
+   * @param path - API 路径（如 "create"），自动拼接 urlPrefix
+   * @param body - 请求体
+   * @param urlPrefix - 接口前缀（默认 /api/workflow_api/；资源库等外部接口传 /api/）
    */
   private async request<T>(
     path: string,
     body: unknown,
+    urlPrefix = "/api/workflow_api/",
   ): Promise<CozeApiResponse<T>> {
     const start = Date.now();
     const controller = new AbortController();
@@ -259,7 +298,7 @@ export class CozeClient {
     this.logger.debug(`[CozeAPI] -> ${path} body=${this.summarize(body)}`);
 
     try {
-      const res = await fetch(`${this.baseUrl}/api/workflow_api/${path}`, {
+      const res = await fetch(`${this.baseUrl}${urlPrefix}${path}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

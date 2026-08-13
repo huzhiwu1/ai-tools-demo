@@ -17,16 +17,23 @@ import { z } from "zod";
 import type { WorkflowPlan } from "@coze-workflow/shared";
 import { validateWorkflow } from "@coze-workflow/workflow-schema";
 import { WorkflowGenerator } from "../../workflow-engine/generator";
+import { CodeGenerator } from "../../workflow-engine/code-generator";
+import { DeepSeekClient } from "../../llm/deepseek.client";
 
-/** 模块级单例：generator 纯代码映射，无外部依赖 */
-const generator = new WorkflowGenerator();
+/**
+ * 模块级单例：generator 依赖 CodeGenerator（LLM 生成代码节点 Python 代码），
+ * 无状态可安全共享；LLM 失败时 CodeGenerator 内部自动降级为兜底模板。
+ */
+const generator = new WorkflowGenerator(
+  new CodeGenerator(new DeepSeekClient()),
+);
 
 export const generateWorkflowTool = tool(
   async ({ plan }) => {
     try {
       // 将 plan 转换为 WorkflowPlan 类型（LLM 传递的 JSON 对象结构匹配）
       const workflowPlan = plan as unknown as WorkflowPlan;
-      const workflow = generator.generateWorkflow(workflowPlan);
+      const workflow = await generator.generateWorkflow(workflowPlan);
 
       // 调用本地校验，避免无效 API 调用
       const validation = validateWorkflow(workflow);

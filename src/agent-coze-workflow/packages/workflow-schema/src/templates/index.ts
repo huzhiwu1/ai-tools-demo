@@ -58,7 +58,13 @@ export function createEndNode(outputs?: EndNode["outputVariables"]): EndNode {
   };
 }
 
-/** 创建 LLM 节点 */
+/**
+ * 创建 LLM 节点
+ *
+ * 默认模型 Doubao-Seed-2.0-Lite（modelType=201）：模型必须来自
+ * docs/coze-platform/platform-facts.md 的 25 个模型列表，
+ * 音频/视频任务需选 audio_understanding=true 的模型。
+ */
 export function createLLMNode(
   overrides: Partial<
     Pick<LLMNode, "title" | "desc" | "userPrompt" | "systemPrompt" | "config">
@@ -70,7 +76,7 @@ export function createLLMNode(
     title: overrides.title ?? "LLM 处理",
     desc: overrides.desc ?? "调用大模型处理数据",
     config: {
-      model: "gpt-4o",
+      model: "Doubao-Seed-2.0-Lite",
       temperature: 0.7,
       maxTokens: 2048,
       ...overrides.config,

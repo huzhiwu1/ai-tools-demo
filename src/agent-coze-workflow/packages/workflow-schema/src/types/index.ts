@@ -79,8 +79,15 @@ export interface StartNode extends CozeNodeBase {
 /** LLM 节点 */
 export interface LLMNode extends CozeNodeBase {
   type: "llm";
-  /** 模型配置 */
+  /**
+   * 模型配置
+   *
+   * model 必须来自 docs/coze-platform/platform-facts.md 的 25 个模型列表
+   * （音频/视频任务选 audio_understanding=true 的），
+   * 默认 Doubao-Seed-2.0-Lite（modelType=201）。
+   */
   config: {
+    /** 模型名（platform-facts.md models 列表，禁止 gpt-4o 等平台不存在模型） */
     model: string;
     temperature?: number;
     maxTokens?: number;

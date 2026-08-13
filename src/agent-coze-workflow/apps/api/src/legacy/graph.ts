@@ -97,7 +97,8 @@ export function createWorkflowGraph(
       if (!state.plan) {
         return { errors: ["generate_node: plan 为空，跳过"] };
       }
-      const workflow = generator.generateWorkflow(state.plan);
+      // generateWorkflow 已改 async：代码节点由 CodeGenerator 生成（未注入时走同步兜底模板）
+      const workflow = await generator.generateWorkflow(state.plan);
       return { workflow };
     } catch (e) {
       return {

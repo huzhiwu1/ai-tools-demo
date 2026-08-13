@@ -16,6 +16,7 @@ export { generateWorkflowTool } from "./generate.tool";
 export { saveToCozeTool } from "./save.tool";
 export { testRunWorkflowTool } from "./test-run.tool";
 export { readFileTool } from "./read-file.tool";
+export { getPlatformFactsTool } from "./platform-facts.tool";
 export { batchValidateTool } from "./batch-validate.tool";
 export { updateWorkflowTool } from "./update-workflow.tool";
 
@@ -28,6 +29,7 @@ import { generateWorkflowTool } from "./generate.tool";
 import { saveToCozeTool } from "./save.tool";
 import { testRunWorkflowTool } from "./test-run.tool";
 import { readFileTool } from "./read-file.tool";
+import { getPlatformFactsTool } from "./platform-facts.tool";
 import { batchValidateTool } from "./batch-validate.tool";
 import { updateWorkflowTool } from "./update-workflow.tool";
 
@@ -44,7 +46,7 @@ function stringifyToolOutput(result: unknown): string {
  * 包装工具 invoke：统一记录入参 / 出参 / 耗时日志
  *
  * 通过覆盖实例 invoke 方法实现（StructuredTool 原型方法可被实例属性遮蔽），
- * 在 ALL_TOOLS 注册时统一包装，8 个工具自动覆盖，无需逐文件埋点。
+ * 在 ALL_TOOLS 注册时统一包装，9 个工具自动覆盖，无需逐文件埋点。
  *
  * 特殊处理：clarify_question 触发的 GraphInterrupt 是正常的 interrupt 暂停，
  * 记为 debug 而非 error，避免误报工具失败。
@@ -99,6 +101,7 @@ function withToolLog<T extends StructuredToolInterface>(
 export const ALL_TOOLS = [
   withToolLog(clarifyQuestionTool, "clarify_question"),
   withToolLog(readFileTool, "read_file"),
+  withToolLog(getPlatformFactsTool, "get_platform_facts"),
   withToolLog(planWorkflowTool, "plan_workflow"),
   withToolLog(generateWorkflowTool, "generate_workflow"),
   withToolLog(saveToCozeTool, "save_to_coze"),

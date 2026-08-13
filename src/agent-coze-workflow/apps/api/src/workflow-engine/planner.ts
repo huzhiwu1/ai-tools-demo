@@ -31,6 +31,30 @@ import { PLAN_PROMPT } from "../prompts/plan-prompt";
 import type { DeepSeekClient } from "../llm/deepseek.client";
 import { LLMPlanOutputSchema, type LLMPlanOutput } from "./types";
 
+/**
+ * 生成合法工作流名：字母开头 + 字母/数字/下划线，超长截断
+ *
+ * 平台硬性约束（update_meta 接口实测）：工作流名称只允许字母、数字、
+ * 下划线，且必须以字母开头。LLM 负责语义（输出英文名），此函数代码兜底：
+ * 非法字符转下划线、去重下划线、去前导非字母、截断 50、空名降级 workflow。
+ *
+ * @param name - LLM 输出的原始名称（可能含中文/空格等非法字符）
+ * @returns 平台合法的英文工作流名
+ */
+function sanitizeWorkflowName(name: string): string {
+  // 只保留字母数字下划线
+  let clean = name.replace(/[^a-zA-Z0-9_]/g, "_");
+  // 去重下划线
+  clean = clean.replace(/_+/g, "_");
+  // 必须以字母开头
+  clean = clean.replace(/^[^a-zA-Z]+/, "");
+  // 截断 50
+  clean = clean.slice(0, 50);
+  // 空兜底
+  if (!clean) clean = "workflow";
+  return clean;
+}
+
 export class WorkflowPlanner {
   constructor(private readonly client: DeepSeekClient) {}
 
@@ -61,8 +85,8 @@ export class WorkflowPlanner {
    * 模板化优先：LLM 只做语义解析，结构组装交给代码
    */
   private mapToWorkflowPlan(input: LLMPlanOutput): WorkflowPlan {
-    // name：goal 截断 30 字符
-    const name = input.goal.length > 30 ? input.goal.slice(0, 30) : input.goal;
+    // name：LLM 语义英文名 + sanitize 代码兜底（平台只允许字母数字下划线）
+    const name = sanitizeWorkflowName(input.name || input.goal);
 
     // description：goal + constraints
     const constraintsSuffix =
@@ -93,6 +117,9 @@ export class WorkflowPlanner {
         description: "查询数据库获取相关数据",
         nodeType: "database_query",
         dependencies: [startOrder],
+        nodeConfig: input.nodeConfig?.database
+          ? { database: input.nodeConfig.database }
+          : undefined,
       });
     }
 
@@ -104,6 +131,9 @@ export class WorkflowPlanner {
         description: "执行代码逻辑处理数据",
         nodeType: "code",
         dependencies: [order - 1],
+        nodeConfig: input.nodeConfig?.code
+          ? { code: input.nodeConfig.code }
+          : undefined,
       });
     }
 
@@ -115,6 +145,9 @@ export class WorkflowPlanner {
         description: "根据条件进行分支判断",
         nodeType: "condition",
         dependencies: [order - 1],
+        nodeConfig: input.nodeConfig?.condition
+          ? { condition: input.nodeConfig.condition }
+          : undefined,
       });
     }
 
@@ -125,6 +158,9 @@ export class WorkflowPlanner {
       description: "使用大模型进行核心推理",
       nodeType: "llm",
       dependencies: [order - 1],
+      nodeConfig: input.nodeConfig?.llm
+        ? { llm: input.nodeConfig.llm }
+        : undefined,
     });
 
     // 6. end — 返回结果

@@ -87,6 +87,19 @@ export interface PlanStep {
   nodeType: WorkflowNodeType;
   /** 依赖的前置步骤 */
   dependencies: number[];
+  /** 节点业务配置（LLM 生成，generator 按此组装真实节点） */
+  nodeConfig?: {
+    /** LLM 节点：模型名（平台可用模型）+ 提示词 */
+    llm?: { model: string; userPrompt: string; systemPrompt?: string };
+    /** 代码节点：业务逻辑描述（LLM 生成真实 Python 代码用） */
+    code?: { logicDescription: string; inputs?: string[] };
+    /** 条件节点：分支条件描述 */
+    condition?: { branches: Array<{ label: string; condition: string }> };
+    /** 数据库节点：连接标识 + 查询描述（无真实连接时不要生成该节点） */
+    database?: { connectionId: string; queryDescription: string };
+    /** HTTP 节点：方法/URL/描述 */
+    http?: { method: string; url: string; description: string };
+  };
 }
 
 /** 工作流节点类型枚举 */

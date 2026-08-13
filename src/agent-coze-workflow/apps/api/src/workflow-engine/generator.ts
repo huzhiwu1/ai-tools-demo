@@ -6,18 +6,25 @@
  *
  * 流程：
  * 1. 接收 WorkflowPlan（含 steps、modules、complexity）
- * 2. 按 steps 顺序创建 Coze 节点（模板化：每种 nodeType 调对应工厂函数）
- * 3. 按 dependencies 创建连线
- * 4. 组装 CozeWorkflow 最终结构
+ * 2. 按 steps 顺序创建 Coze 节点（按 nodeConfig 组装真实业务逻辑）
+ * 3. 代码节点由 CodeGenerator（LLM）生成真实 Python 代码
+ * 4. 按 dependencies 创建连线
+ * 5. 组装 CozeWorkflow 最终结构
  *
  * 关键细节：
- * - 模板化优先：不使用 LLM，纯代码映射（确定性、零 token、高可靠）
- * - nodeType → 工厂函数映射：start/end/llm/code/condition/http/database_query
- * - 条件节点的 branches 在模板阶段填写占位 TODO，后续由 LLM/人工细化
- * - 生成阶段不涉及 Coze 节点 JSON 的精细配置（那是 Coze 平台编辑的事）
+ * - nodeConfig 由规划阶段 LLM 生成，generator 按此组装节点业务内容：
+ *   llm 节点用 nodeConfig.llm 的模型+提示词，code 节点用 LLM 生成真实代码
+ * - LLM 生成代码失败时降级为可运行模板（CodeGenerator.buildFallbackCode）
+ * - database 节点无有效 connectionId 时跳过该节点（避免空 databaseInfoID）
+ * - 未传入 CodeGenerator 时（旧链路），代码节点用兜底模板（纯同步模板）
  */
 import { generateId } from "@coze-workflow/shared";
-import type { WorkflowPlan, WorkflowSketch } from "@coze-workflow/shared";
+import type {
+  WorkflowPlan,
+  WorkflowSketch,
+  PlanStep,
+} from "@coze-workflow/shared";
+import { Logger } from "@nestjs/common";
 import type {
   CozeWorkflow,
   CozeNode,
@@ -34,8 +41,12 @@ import {
   createTextNode,
   createMergeNode,
 } from "@coze-workflow/workflow-schema";
+import { CodeGenerator } from "./code-generator";
 
 export class WorkflowGenerator {
+  private readonly logger = new Logger("WorkflowGenerator");
+
+  constructor(private readonly codeGenerator?: CodeGenerator) {}
   /**
    * 只生成 WorkflowSketch（轻量中间产物）
    *
@@ -48,9 +59,10 @@ export class WorkflowGenerator {
   /**
    * 只生成 CozeWorkflow（完整最终 JSON）
    *
-   * 供 graph.ts 的 generate_node 单独调用，避免重复计算
+   * 供 graph.ts 的 generate_node 单独调用，避免重复计算。
+   * 代码节点需要 LLM 生成真实业务代码，因此是异步方法。
    */
-  generateWorkflow(plan: WorkflowPlan): CozeWorkflow {
+  async generateWorkflow(plan: WorkflowPlan): Promise<CozeWorkflow> {
     return this.buildWorkflow(plan);
   }
 
@@ -60,13 +72,13 @@ export class WorkflowGenerator {
    * @param plan - 规划结果
    * @returns sketch（中间产物）和 workflow（最终 JSON）
    */
-  generate(plan: WorkflowPlan): {
+  async generate(plan: WorkflowPlan): Promise<{
     sketch: WorkflowSketch;
     workflow: CozeWorkflow;
-  } {
+  }> {
     return {
       sketch: this.generateSketch(plan),
-      workflow: this.generateWorkflow(plan),
+      workflow: await this.generateWorkflow(plan),
     };
   }
 
@@ -115,7 +127,7 @@ export class WorkflowGenerator {
   /**
    * 构建 CozeWorkflow（完整最终 JSON）
    */
-  private buildWorkflow(plan: WorkflowPlan): CozeWorkflow {
+  private async buildWorkflow(plan: WorkflowPlan): Promise<CozeWorkflow> {
     const cozeNodes: CozeNode[] = [];
     // order → nodeId 映射，供 edges 引用
     const orderToId = new Map<number, string>();
@@ -123,7 +135,18 @@ export class WorkflowGenerator {
     let positionY = 80;
 
     for (const step of plan.steps) {
-      const node = this.createNodeForStep(step, positionY);
+      // database 节点无有效连接时跳过（空 databaseInfoID 会导致平台报错）
+      if (
+        step.nodeType === "database_query" &&
+        !step.nodeConfig?.database?.connectionId
+      ) {
+        this.logger.warn(
+          `[WorkflowGenerator] 跳过无连接的数据库节点 (step ${step.order}): ${step.description}`,
+        );
+        continue;
+      }
+
+      const node = await this.createNodeForStep(step, positionY);
       cozeNodes.push(node);
       orderToId.set(step.order, node.id);
       positionY += 120;
@@ -162,11 +185,17 @@ export class WorkflowGenerator {
 
   /**
    * 根据 PlanStep 创建对应类型的 Coze 节点
+   *
+   * 按 nodeConfig 组装真实业务逻辑（不再纯模板占位）：
+   * - llm：nodeConfig.llm 的模型 + 提示词
+   * - code：CodeGenerator 按 logicDescription 生成真实 Python 代码
+   * - condition：nodeConfig.condition 的真实分支条件
+   * - database_query：nodeConfig.database 的真实连接 + 查询描述
    */
-  private createNodeForStep(
-    step: { nodeType: string; description: string },
+  private async createNodeForStep(
+    step: PlanStep,
     y: number,
-  ): CozeNode {
+  ): Promise<CozeNode> {
     const title = this.nodeLabelForType(step.nodeType);
     const baseOverrides = {
       title,
@@ -178,16 +207,64 @@ export class WorkflowGenerator {
         return createStartNode();
       case "end":
         return createEndNode();
-      case "llm":
-        return createLLMNode(baseOverrides);
-      case "code":
-        return createCodeNode(baseOverrides);
-      case "condition":
-        return createConditionNode(baseOverrides);
-      case "http":
-        return createHttpNode(baseOverrides);
-      case "database_query":
-        return createDatabaseQueryNode(baseOverrides);
+      case "llm": {
+        const cfg = step.nodeConfig?.llm;
+        return createLLMNode({
+          ...baseOverrides,
+          userPrompt: cfg?.userPrompt ?? "{{input}}",
+          systemPrompt: cfg?.systemPrompt,
+          config: {
+            // 平台可用模型（权威依据 platform-facts.md），Doubao-Seed-2.0-Lite 为兜底默认
+            model: cfg?.model ?? "Doubao-Seed-2.0-Lite",
+            temperature: 0.2,
+            maxTokens: 4096,
+          },
+        });
+      }
+      case "code": {
+        const cfg = step.nodeConfig?.code;
+        // 有 LLM 代码生成器时按业务逻辑生成真实 Python 代码，否则用可运行兜底模板
+        let code: string;
+        if (this.codeGenerator && cfg?.logicDescription) {
+          code = await this.codeGenerator.generateCode(
+            cfg.logicDescription,
+            cfg.inputs,
+          );
+        } else {
+          code = CodeGenerator.buildFallbackCode(cfg?.inputs);
+        }
+        return createCodeNode({
+          ...baseOverrides,
+          code,
+          language: "python",
+        });
+      }
+      case "condition": {
+        const cfg = step.nodeConfig?.condition;
+        return createConditionNode({
+          ...baseOverrides,
+          branches: cfg?.branches?.map((b) => ({
+            expression: b.condition,
+            targetNodeId: "TODO",
+          })),
+        });
+      }
+      case "http": {
+        const cfg = step.nodeConfig?.http;
+        return createHttpNode({
+          ...baseOverrides,
+          method: (cfg?.method as "GET" | "POST" | "PUT" | "DELETE") ?? "GET",
+          url: cfg?.url,
+        });
+      }
+      case "database_query": {
+        const cfg = step.nodeConfig?.database;
+        return createDatabaseQueryNode({
+          ...baseOverrides,
+          connection: cfg?.connectionId ?? "",
+          query: cfg?.queryDescription ?? "SELECT 1",
+        });
+      }
       case "text":
         return createTextNode(baseOverrides);
       case "merge":
