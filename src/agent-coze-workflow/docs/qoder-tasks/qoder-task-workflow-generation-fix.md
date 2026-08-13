@@ -107,11 +107,11 @@ export interface PlanStep {
 ```
 
 **PLAN_PROMPT 更新**（`apps/api/src/prompts/plan-prompt.ts`）：要求 LLM 对每个 step 输出 `nodeConfig`，内容具体：
-- llm.model：**只能用平台可用模型 `Doubao-Seed-2.0-Lite`**（私有部署实测唯一可用，禁止 gpt-4o 等外部模型）
+- llm.model：**只能从平台真实模型列表中选择**（见 `docs/coze-platform/platform-facts.md`），禁止 gpt-4o 等平台不存在的模型；**需要识别音频/视频的任务必须选 `audio_understanding: true` 的模型**（Doubao-Seed-2.0-Lite / Doubao-Seed-2.0-mini / Doubao-Seed-1.6 / gemini-3.1-pro-preview / Qwen3.5-Omni-Plus）；纯文本任务默认 Doubao-Seed-2.0-Lite
 - llm.userPrompt：完整的业务提示词（如"读取音频链接识别歌词，输出 JSON"）
 - code.logicDescription：代码节点要实现的业务逻辑描述（如"计算识别歌词与8首歌参考歌词的相似度，取最高分"）
 - condition.branches：真实的分支条件（如"similarity >= 0.6 → 匹配成功"）
-- database：**只有当用户明确提供数据库连接信息时才生成 database 节点**；否则该 step 的 nodeType 应为 code 或 llm
+- database：**只有当用户明确提供数据库信息、且该数据源存在于 `docs/coze-platform/platform-facts.md` 的数据库列表时才生成 database 节点**（databaseInfoID 必须用真实 res_id）；否则该 step 的 nodeType 应为 code 或 llm
 
 **generator 增强**（`workflow-engine/generator.ts`）：
 
@@ -150,8 +150,9 @@ case "llm": {
 3. 生成的代码里，**用户上传的参考数据（如歌词库）写入代码常量**：generator 组装时把用户文件内容（LLM 已读取）嵌入代码字符串（如 `SONG_LYRICS = {...}`）
 
 **converter 侧配套**（`apps/api/src/coze/schema-converter.ts`）：
-- LLM 节点 modleName 默认改 `Doubao-Seed-2.0-Lite`（现在代码里已有此兜底，但 generator 传了 gpt-4o 会覆盖——修复 generator 后自然正确；同时把 converter 的默认值统一为 Doubao-Seed-2.0-Lite）
+- LLM 节点 modleName 默认改 `Doubao-Seed-2.0-Lite`（modelType=201，见 platform-facts.md）——generator 传了错误模型会覆盖，修复 generator 后自然正确；同时把 converter 的默认值统一为 Doubao-Seed-2.0-Lite
 - 数据库节点：`databaseInfoID` 若为空字符串，**该节点不应存在**（LLM 规划时已避免生成，代码再兜底：database 节点 connection 为空时跳过该节点并 warn）
+- **新增能力（可选，强烈建议）**：`coze.client.ts` 加 `listDatabases()` 方法（调 `POST /api/plugin_api/library_resource_list`，res_type_filter=[7]，返回真实数据库列表），供 LLM 规划时查询可用数据源——接口契约见 `docs/coze-platform/platform-facts.md` 第三节
 
 ---
 
