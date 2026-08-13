@@ -699,12 +699,20 @@ export function convertToPlatformSchema(
           },
         );
 
-        // 将 URL 中的 {var} 转换为 {{var}}（平台使用双花括号做变量替换）
-        // 只有匹配 inputMapping 中的变量名才转换，避免误伤 URL 中的 JSON 语法
-        const knownVars = Object.keys(http.inputMapping ?? {});
+        // 将 URL 中的变量引用转换为平台完整引用格式 {{block_output_<blockID>.<outputName>}}
+        // 实测（2026-08-14）：平台不认 {{city}} 简写，必须带来源节点完整路径
+        // 例如：{city} / {{city}} → {{block_output_100001.city}}
+        // 仅转换匹配 inputMapping 中变量名的引用，避免误伤 URL 中的 JSON 语法
         let url = http.url ?? "";
-        for (const v of knownVars) {
-          url = url.replaceAll(`{${v}}`, `{{${v}}}`);
+        for (const [name, refExpr] of Object.entries(http.inputMapping ?? {})) {
+          const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+          if (!match) continue;
+          const blockID = platformId(match[1]);
+          const outputName = match[2];
+          const fullRef = `{{block_output_${blockID}.${outputName}}}`;
+          // 先替换双花括号 {{name}}，再替换单花括号 {name}（避免 {{name}} 中的 {name} 被提前替换）
+          url = url.replaceAll(`{{${name}}}`, fullRef);
+          url = url.replaceAll(`{${name}}`, fullRef);
         }
 
         data.inputs = {
