@@ -23,7 +23,14 @@
 
 /** 后端 d: 事件负载（结构松散，前端按 type 分发） */
 export interface DataStreamEvent {
-  type: "session" | "tool_start" | "tool_end" | "interrupt" | "done" | "error";
+  type:
+    | "session"
+    | "tool_start"
+    | "tool_end"
+    | "interrupt"
+    | "done"
+    | "error"
+    | "text_delta";
   sessionId?: string;
   name?: string;
   input?: unknown;
@@ -32,6 +39,7 @@ export interface DataStreamEvent {
   context?: string;
   final?: string;
   message?: string;
+  content?: string; // text_delta 用, LLM 文本增量
 }
 
 /** parseDataStream 的事件处理器 */
@@ -128,7 +136,7 @@ export async function parseDataStream(
  * （供 useChat 的自定义 fetch 使用）
  *
  * 转换规则：
- * - 0:"text" → 0:"text"（直通，useChat 自动流式拼接）
+ * - 0:"text" → 2:[{type:"text_delta",content:"text"}]（转为 data 事件，前端手动分段管理）
  * - d:{...}  → 2:[{...}]（数据事件，useChat 的 data 数组接收）
  * - d:{"type":"error"} → 3:"message"（触发 useChat 的 error 状态）
  * - e:{...}  → 丢弃（流自然结束，useChat 自动收尾）
@@ -151,8 +159,13 @@ export function transformToDataProtocolStream(
     if (!trimmed) return null;
 
     if (trimmed.startsWith("0:")) {
-      // 文本增量直通
-      return `${trimmed}\n`;
+      // 文本增量不再直通 useChat, 转为 text_delta data 事件
+      // 前端在 handleDataEvent 里手动分段管理
+      const text: unknown = JSON.parse(trimmed.slice(2));
+      if (typeof text === "string" && text.length > 0) {
+        return `2:${JSON.stringify([{ type: "text_delta", content: text }])}\n`;
+      }
+      return null;
     }
 
     if (trimmed.startsWith("d:")) {

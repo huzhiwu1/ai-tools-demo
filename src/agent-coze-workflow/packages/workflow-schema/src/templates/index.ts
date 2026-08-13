@@ -25,7 +25,9 @@ import type {
 // ============================================
 
 /** 创建开始节点 */
-export function createStartNode(inputs?: StartNode["inputVariables"]): StartNode {
+export function createStartNode(
+  inputs?: StartNode["inputVariables"],
+): StartNode {
   return {
     id: generateId(),
     type: "start",
@@ -60,7 +62,7 @@ export function createEndNode(outputs?: EndNode["outputVariables"]): EndNode {
 export function createLLMNode(
   overrides: Partial<
     Pick<LLMNode, "title" | "desc" | "userPrompt" | "systemPrompt" | "config">
-  > = {}
+  > = {},
 ): LLMNode {
   return {
     id: generateId(),
@@ -85,7 +87,9 @@ export function createLLMNode(
 
 /** 创建代码节点 */
 export function createCodeNode(
-  overrides: Partial<Pick<CodeNode, "title" | "desc" | "code" | "language">> = {}
+  overrides: Partial<
+    Pick<CodeNode, "title" | "desc" | "code" | "language">
+  > = {},
 ): CodeNode {
   return {
     id: generateId(),
@@ -106,7 +110,7 @@ export function createCodeNode(
 export function createConditionNode(
   overrides: Partial<
     Pick<ConditionNode, "title" | "desc" | "branches" | "defaultBranch">
-  > = {}
+  > = {},
 ): ConditionNode {
   return {
     id: generateId(),
@@ -129,7 +133,7 @@ export function createConditionNode(
 export function createHttpNode(
   overrides: Partial<
     Pick<HttpNode, "title" | "desc" | "method" | "url" | "headers" | "body">
-  > = {}
+  > = {},
 ): HttpNode {
   return {
     id: generateId(),
@@ -155,7 +159,7 @@ export function createDatabaseQueryNode(
       DatabaseQueryNode,
       "title" | "desc" | "query" | "connection" | "params"
     >
-  > = {}
+  > = {},
 ): DatabaseQueryNode {
   return {
     id: generateId(),
@@ -177,7 +181,7 @@ export function createDatabaseQueryNode(
 export function createTextNode(
   overrides: Partial<
     Pick<TextNode, "title" | "desc" | "method" | "concatParams">
-  > = {}
+  > = {},
 ): TextNode {
   return {
     id: generateId(),
@@ -198,18 +202,14 @@ export function createTextNode(
 
 /** 创建变量聚合节点（平台 type=32） */
 export function createMergeNode(
-  overrides: Partial<
-    Pick<MergeNode, "title" | "desc" | "mergeGroups">
-  > = {}
+  overrides: Partial<Pick<MergeNode, "title" | "desc" | "mergeGroups">> = {},
 ): MergeNode {
   return {
     id: generateId(),
     type: "merge",
     title: overrides.title ?? "变量聚合",
     desc: overrides.desc ?? "聚合多个分支的输出变量",
-    mergeGroups: overrides.mergeGroups ?? [
-      { name: "Group1", variables: [] },
-    ],
+    mergeGroups: overrides.mergeGroups ?? [{ name: "Group1", variables: [] }],
     inputMapping: {},
     _temp: {
       bounds: { x: 360, y: 80, width: 180, height: 90 },

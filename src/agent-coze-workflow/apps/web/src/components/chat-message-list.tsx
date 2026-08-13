@@ -85,6 +85,11 @@ export function ChatMessageList({
         const isLast = index === messages.length - 1;
         const streaming = isLast && msg.role === "assistant" && isLoading;
 
+        // 跳过空气泡：非最后一条且内容为空的 assistant 消息
+        if (msg.role === "assistant" && msg.content === "" && !streaming) {
+          return null;
+        }
+
         return (
           <div
             key={msg.id}

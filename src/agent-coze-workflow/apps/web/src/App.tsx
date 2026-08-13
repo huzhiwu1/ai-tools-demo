@@ -171,6 +171,9 @@ export default function App() {
   const toolIdRef = useRef(0);
   const processedDataCount = useRef(0);
 
+  /** 当前正在累积文本的 assistant 消息 id（null = 没有开放的分段） */
+  const currentAssistantIdRef = useRef<string | null>(null);
+
   const busy = isLoading || resuming;
 
   // ============================================
@@ -191,7 +194,31 @@ export default function App() {
         break;
       }
 
+      case "text_delta": {
+        const content = event.content ?? "";
+        if (!content) break;
+
+        setMessages((prev) => {
+          // 没有开放分段 → 新建一条 assistant 消息
+          if (!currentAssistantIdRef.current) {
+            const newId = crypto.randomUUID();
+            currentAssistantIdRef.current = newId;
+            return [...prev, { id: newId, role: "assistant", content }];
+          }
+          // 有开放分段 → 追加文本
+          return prev.map((m) =>
+            m.id === currentAssistantIdRef.current
+              ? { ...m, content: m.content + content }
+              : m,
+          );
+        });
+        break;
+      }
+
       case "tool_start": {
+        // 分段边界：封存当前文本分段，后续文本进新气泡
+        currentAssistantIdRef.current = null;
+
         const name = event.name ?? "unknown";
         toolIdRef.current += 1;
         setToolCalls((prev) => [
@@ -202,6 +229,9 @@ export default function App() {
       }
 
       case "tool_end": {
+        // 工具结束后 AI 若继续说话 → 新气泡
+        currentAssistantIdRef.current = null;
+
         const name = event.name ?? "unknown";
         const output = event.output ?? "";
         // 输出包含"失败"视为错误（与后端工具的失败文案约定一致）
@@ -252,7 +282,8 @@ export default function App() {
       }
 
       case "done": {
-        // final 文本已通过 0: 流式展示，此处无需重复追加
+        // 一次对话完成，关闭当前分段
+        currentAssistantIdRef.current = null;
         break;
       }
 
@@ -261,7 +292,7 @@ export default function App() {
         break;
       }
     }
-  }, []);
+  }, [setMessages]);
 
   // data 数组变化时增量处理新事件（避免重复处理已消费的事件）
   useEffect(() => {
@@ -295,6 +326,8 @@ export default function App() {
     setToolCalls([]);
     processedDataCount.current = 0;
     setData(undefined);
+    // 发新消息时重置分段状态
+    currentAssistantIdRef.current = null;
     append({ role: "user", content: text });
   }
 
@@ -313,12 +346,13 @@ export default function App() {
     setReplyMode(false);
     setGlobalError(null);
 
-    const assistantId = crypto.randomUUID();
+    // 恢复对话前关闭当前分段，确保回答后的文本从新气泡开始
+    currentAssistantIdRef.current = null;
+
     setMessages((prev) => [
       ...prev,
       // 纯文件上传（无文字回答）时显示兜底文案
       { id: crypto.randomUUID(), role: "user", content: answer || "[仅上传文件]" },
-      { id: assistantId, role: "assistant", content: "" },
     ]);
 
     setResuming(true);
@@ -333,13 +367,13 @@ export default function App() {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
+      // 复用 handleDataEvent 的 text_delta 分段逻辑
       await parseDataStream(response, {
         onText: (delta) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + delta } : m,
-            ),
-          );
+          handleDataEvent({
+            type: "text_delta",
+            content: delta,
+          } as DataStreamEvent);
         },
         onEvent: (event) => handleDataEvent(event),
       });
