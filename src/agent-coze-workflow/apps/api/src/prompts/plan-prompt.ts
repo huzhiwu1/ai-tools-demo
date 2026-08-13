@@ -44,6 +44,8 @@ name 必须是英文：只允许字母、数字、下划线，以字母开头，
 - llm.userPrompt：完整的业务提示词（如"读取音频链接识别歌词，输出 JSON"）。
 - code.logicDescription：代码节点要实现的业务逻辑描述，要具体（可包含阈值、数据常量、处理步骤）。
 - condition.branches：真实的分支条件（如"similarity >= 0.6 → 匹配成功"）。
+- text.concatResult：文本拼接模板，用 {{输入变量名}} 引用输入参数（变量名必须与 contract.inputs 一致），
+  如"姓名：{{name}}，年龄：{{age}}"。文本拼接/格式化任务必须用 text 节点，禁止用 llm。
 - database：只有当用户明确提供数据库信息、且该数据源存在于下方平台数据库列表时才生成 database 节点（connectionId 必须用真实 res_id）；否则 needDatabaseNode 应为 false，改为用 code 或 llm 节点。
 
 ## 平台可用模型列表（25 个，权威依据 platform-facts.md）

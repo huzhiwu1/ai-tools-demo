@@ -639,8 +639,22 @@ export class WorkflowGenerator {
           query: cfg?.queryDescription ?? "SELECT 1",
         });
       }
-      case "text":
-        return createTextNode(baseOverrides);
+      case "text": {
+        const cfg = step.nodeConfig?.text;
+        const contract = step.contract;
+        // 拼接模板：优先 nodeConfig.text.concatResult（LLM 输出，如 "姓名：{{name}}，年龄：{{age}}"）
+        // 否则从 contract.inputs 推断（{{name}}+{{age}}）
+        let template = cfg?.concatResult;
+        if (!template && contract?.inputs && contract.inputs.length > 0) {
+          template = contract.inputs.map((i) => `{{${i.name}}}`).join("+");
+        }
+        return createTextNode({
+          ...baseOverrides,
+          concatParams: template
+            ? [{ name: "concatResult", value: template }]
+            : undefined,
+        });
+      }
       case "merge":
         return createMergeNode(baseOverrides);
       default:

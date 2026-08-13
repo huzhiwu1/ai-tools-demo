@@ -510,17 +510,22 @@ export function convertToPlatformSchema(
           inputParameters.length > 0
             ? inputParameters.map((p) => `{{${p.name}}}`).join("")
             : "{{String1}}";
-        // 平台 concat 模式完整参数（样本 1287269 实测）：
+        // 平台 concat 模式完整参数（样本 1287269 + 2026-08-14 实测）必须齐全：
         // concatResult（拼接结果模板）+ arrayItemConcatChar（数组项分隔符）
         // + allArrayItemConcatChars（可选分隔符列表，list 类型带 schema）
-        const defaultConcatParams = [
+        // 节点上的 concatParams 只提供 concatResult 模板，后两项用平台默认值补齐，
+        // 缺失会导致平台保存后拼接行为异常
+        const templateParam = concatParams.find(
+          (p) => p.name === "concatResult",
+        );
+        const fullConcatParams = [
           {
             name: "concatResult",
             input: {
               type: "string",
               value: {
                 type: "literal",
-                content: inferredConcat,
+                content: templateParam?.value ?? inferredConcat,
                 rawMeta: { type: 1 },
               },
             },
@@ -565,20 +570,7 @@ export function convertToPlatformSchema(
         data.inputs = {
           method: text.method ?? "concat",
           inputParameters,
-          concatParams:
-            concatParams.length > 0
-              ? concatParams.map((p) => ({
-                  name: p.name,
-                  input: {
-                    type: "string",
-                    value: {
-                      type: "literal",
-                      content: p.value,
-                      rawMeta: { type: 1 },
-                    },
-                  },
-                }))
-              : defaultConcatParams,
+          concatParams: fullConcatParams,
         };
         data.outputs = [{ type: "string", name: "output", required: true }];
       }

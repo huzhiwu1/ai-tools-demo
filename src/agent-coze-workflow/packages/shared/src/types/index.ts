@@ -116,6 +116,8 @@ export interface PlanStep {
     database?: { connectionId: string; queryDescription: string };
     /** HTTP 节点：方法/URL/描述 */
     http?: { method: string; url: string; description: string };
+    /** 文本节点：拼接模板（用 {{输入变量名}} 引用，如 "姓名：{{name}}，年龄：{{age}}"） */
+    text?: { concatResult: string };
   };
 }
 
