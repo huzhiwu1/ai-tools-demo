@@ -182,7 +182,7 @@ export function createDatabaseQueryNode(
   overrides: Partial<
     Pick<
       DatabaseQueryNode,
-      "title" | "desc" | "query" | "connection" | "params"
+      "title" | "desc" | "query" | "connection" | "params" | "outputs"
     >
   > = {},
 ): DatabaseQueryNode {
@@ -195,6 +195,11 @@ export function createDatabaseQueryNode(
     connection: overrides.connection ?? "default",
     params: overrides.params ?? [],
     inputMapping: {},
+    // 平台数据库查询节点固定输出：outputList/rowNum（schema-converter 同步）
+    outputs: overrides.outputs ?? [
+      { type: "list", name: "outputList", schema: { type: "object", schema: [] } },
+      { type: "integer", name: "rowNum" },
+    ],
     _temp: {
       bounds: { x: 360, y: 80, width: 180, height: 90 },
       externalData: {},

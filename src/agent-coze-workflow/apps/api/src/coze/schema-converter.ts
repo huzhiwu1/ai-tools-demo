@@ -636,6 +636,18 @@ export function convertToPlatformSchema(
         if (!db.connection) {
           return null;
         }
+
+        // 从 inputMapping 生成 inputParameters（允许数据库查询引用上游变量做条件参数）
+        const inputParameters = Object.entries(db.inputMapping ?? {}).map(
+          ([name, refExpr]) => {
+            const match = /^([^.{}]+)\.(.+)$/.exec(refExpr);
+            if (match) {
+              return refInput(name, platformId(match[1]), match[2]);
+            }
+            return literal(name, "string", refExpr);
+          },
+        );
+
         data.inputs = {
           databaseInfoList: [{ databaseInfoID: db.connection ?? "" }],
           selectParam: {
@@ -651,6 +663,7 @@ export function convertToPlatformSchema(
             timeoutMs: 60000,
             retryTimes: 0,
           },
+          ...(inputParameters.length > 0 ? { inputParameters } : {}),
         };
         data.outputs = [
           {

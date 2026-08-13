@@ -174,6 +174,11 @@ export interface DatabaseQueryNode extends CozeNodeBase {
   params?: Array<string | number>;
   /** 输入变量映射 */
   inputMapping?: Record<string, string>;
+  /**
+   * 输出变量声明（平台要求，数据库查询节点固定输出 outputList/rowNum）
+   * 缺了这个会导致结束节点引用不到正确的输出名
+   */
+  outputs?: Array<{ type?: string; name?: string; schema?: unknown }>;
 }
 
 /** 文本处理节点（平台 type=15，concat 拼接等） */
@@ -188,6 +193,8 @@ export interface TextNode extends CozeNodeBase {
   }>;
   /** 输入变量映射 */
   inputMapping?: Record<string, string>;
+  /** 输出变量声明（平台要求，text 节点固定输出 output） */
+  outputs?: Array<{ type?: string; name?: string; required?: boolean }>;
 }
 
 /** 变量聚合节点（平台 type=32，多分支输出聚合） */
