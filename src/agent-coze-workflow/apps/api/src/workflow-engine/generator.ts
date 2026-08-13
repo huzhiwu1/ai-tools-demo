@@ -549,8 +549,14 @@ export class WorkflowGenerator {
           const model = isAudioTask
             ? "Doubao-Seed-2.0-Lite"
             : "Doubao-Seed-2.0-Lite";
-          // prompt 模板：基于 description 生成（不靠 LLM 写全文）
-          const userPrompt = `你是一个工作流助手。任务：${desc}。请根据输入完成任务，输出 JSON 格式结果。`;
+          // 从 contract.inputs 提取变量名，拼成 {{name}} 引用
+          // 平台要求 prompt 模板中用 {{变量名}} 引用上游输出，否则大模型拿不到变量值
+          const inputRefs =
+            contract.inputs && contract.inputs.length > 0
+              ? contract.inputs.map((i) => `{{${i.name}}}`).join("、")
+              : "{{input}}";
+          // prompt 模板：基于 description 生成，带上变量引用（不靠 LLM 写全文）
+          const userPrompt = `你是一个工作流助手。任务：${desc}\n输入：${inputRefs}\n请根据上述输入完成任务，输出 JSON 格式结果。`;
           return createLLMNode({
             ...baseOverrides,
             userPrompt,
