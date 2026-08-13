@@ -44,7 +44,7 @@ async function main() {
   }
 
   // 2. 直接调 createWorkflow 测凭证
-  const { CozeClient } = await import("../src/coze/coze.client");
+  const { CozeClient } = await import("../apps/api/src/coze/coze.client");
   const client = new CozeClient({ baseUrl, sessionKey: key, spaceId });
 
   console.log("3) 直接调用 createWorkflow 测试凭证…");
