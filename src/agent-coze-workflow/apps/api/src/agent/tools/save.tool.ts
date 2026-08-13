@@ -11,23 +11,16 @@
  * 3. cozeClient.saveWorkflow(workflowId, schemaJson) → 保存
  *
  * 关键细节：
- * - 使用模块级单例 cozeClient，内部管理编辑锁和重试
+ * - 使用共享单例 cozeClient（见 coze-client.ts），内部管理编辑锁和重试
  * - try/catch 兜底，错误以字符串返回给 LLM
- * - .env 中的 COZE_API_BASE_URL / COZE_SESSION_KEY / COZE_SPACE_ID 由 CozeClient 内部读取
+ * - COZE_API_BASE_URL / COZE_SESSION_KEY / COZE_SPACE_ID 配置集中在 coze-client.ts 中读取
  */
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
-import { CozeClient } from "../../mcp/cozeClient";
 import { convertToPlatformSchema } from "../../mcp/schema-converter";
-
-/** 模块级单例：cozeClient 内部管理编辑锁状态 */
-const cozeClient = new CozeClient({
-  baseUrl: process.env.COZE_API_BASE_URL ?? "",
-  sessionKey: process.env.COZE_SESSION_KEY ?? "",
-  spaceId: process.env.COZE_SPACE_ID ?? "",
-});
+import { cozeClient } from "./coze-client";
 
 export const saveToCozeTool = tool(
   async ({ workflow }) => {

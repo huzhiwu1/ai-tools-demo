@@ -12,9 +12,13 @@
         "test": "echo 'test ok'"
     },
     "dependencies": {
+        "@ai-sdk/react": "^1.0.13",
         "@coze-workflow/shared": "workspace:*",
+        "ai": "^3.4.33",
         "react": "^18.3.1",
-        "react-dom": "^18.3.1"
+        "react-dom": "^18.3.1",
+        "zod": "3.24.2",
+        "zod-to-json-schema": "3.24.1"
     },
     "devDependencies": {
         "@types/react": "^18.3.5",

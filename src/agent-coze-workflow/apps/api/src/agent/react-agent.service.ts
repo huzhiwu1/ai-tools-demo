@@ -2,12 +2,18 @@
  * ReactAgentService - ReAct Agent 核心服务
  *
  * 职责：
- * 管理 createReactAgent 实例的创建、SSE 流式对话、会话管理和 interrupt/resume 流程。
+ * 管理 createReactAgent 实例的创建、流式对话、会话管理和 interrupt/resume 流程。
  *
  * 流程：
  * 1. 每个会话创建独立的 graph 实例（含 MemorySaver checkpointer）
- * 2. chat()：接收用户消息 → streamEvents 迭代 → 写 SSE 事件 → 检测 interrupt
+ * 2. chat()：接收用户消息 → streamEvents 迭代 → 写 Data Stream 协议事件 → 检测 interrupt
  * 3. resume()：Command({ resume: answer }) → 继续 streamEvents
+ *
+ * 输出协议：Vercel AI SDK Data Stream Protocol
+ * - 0:"text"   → LLM 文本增量（前端 useChat 自动拼接）
+ * - d:{...}    → 结构化数据（session/tool_start/tool_end/interrupt/done/error）
+ * - e:{...}    → 流结束标记（finish）
+ * Content-Type 保持 text/event-stream（useChat 用 fetch 读流，兼容）
  *
  * 关键细节：
  * - MemorySaver 不支持跨实例恢复，每个会话必须缓存独立的 graph
@@ -143,9 +149,9 @@ export class ReactAgentService {
     // 会话创建后 sessionId 必存在
     const finalSessionId = sessionId!;
 
-    // 发送 sessionId 给前端
+    // 发送 sessionId 给前端（d: 结构化事件）
     res.write(
-      `event: session\ndata: ${JSON.stringify({ sessionId: finalSessionId })}\n\n`,
+      `d:${JSON.stringify({ type: "session", sessionId: finalSessionId })}\n`,
     );
 
     // 5. 流式执行
@@ -179,7 +185,7 @@ export class ReactAgentService {
     if (!session) {
       this.setSSEHeaders(res);
       res.write(
-        `event: error\ndata: ${JSON.stringify({ message: "会话不存在或已过期" })}\n\n`,
+        `d:${JSON.stringify({ type: "error", message: "会话不存在或已过期" })}\n`,
       );
       res.end();
       return;
@@ -210,6 +216,9 @@ export class ReactAgentService {
 
   /**
    * 设置 SSE 响应头
+   *
+   * Content-Type 保持 text/event-stream：Vercel AI SDK 的 useChat
+   * 内部用 fetch 读流按行解析，兼容此格式。
    */
   private setSSEHeaders(res: SSEResponse): void {
     res.setHeader("Content-Type", "text/event-stream");
@@ -220,13 +229,13 @@ export class ReactAgentService {
   }
 
   /**
-   * 流式迭代 graph 事件，写入 SSE
+   * 流式迭代 graph 事件，写入 Data Stream 协议
    *
    * 事件类型：
-   * - on_chat_model_stream → event: message
-   * - on_tool_start → event: tool_start
-   * - on_tool_end → event: tool_end
-   * - 流结束后检查 interrupt → event: interrupt 或 event: done
+   * - on_chat_model_stream → 0:"text"（LLM 文本增量）
+   * - on_tool_start → d:{"type":"tool_start",...}
+   * - on_tool_end → d:{"type":"tool_end",...}
+   * - 流结束后检查 interrupt → d:{"type":"interrupt",...} 或 d:{"type":"done",...} + e:finish
    */
   private async streamAgentEvents(
     graph: Session["graph"],
@@ -271,9 +280,7 @@ export class ReactAgentService {
                         .join("")
                     : "";
               if (content) {
-                res.write(
-                  `event: message\ndata: ${JSON.stringify({ content })}\n\n`,
-                );
+                res.write(`0:${JSON.stringify(content)}\n`);
               }
             }
             break;
@@ -284,7 +291,7 @@ export class ReactAgentService {
             const toolName = event.name ?? "unknown";
             const toolInput = event.data?.input ?? {};
             res.write(
-              `event: tool_start\ndata: ${JSON.stringify({ name: toolName, input: toolInput })}\n\n`,
+              `d:${JSON.stringify({ type: "tool_start", name: toolName, input: toolInput })}\n`,
             );
             break;
           }
@@ -292,9 +299,9 @@ export class ReactAgentService {
           case "on_tool_end": {
             // 工具结束
             const toolName = event.name ?? "unknown";
-            const toolOutput = event.data?.output ?? "";
+            const output = event.data?.output;
             res.write(
-              `event: tool_end\ndata: ${JSON.stringify({ name: toolName, output: toolOutput })}\n\n`,
+              `d:${JSON.stringify({ type: "tool_end", name: toolName, output: this.extractToolContent(output) })}\n`,
             );
             break;
           }
@@ -305,7 +312,7 @@ export class ReactAgentService {
     } catch (e) {
       // 流异常
       res.write(
-        `event: error\ndata: ${JSON.stringify({ message: (e as Error).message })}\n\n`,
+        `d:${JSON.stringify({ type: "error", message: (e as Error).message })}\n`,
       );
       res.end();
       return;
@@ -332,7 +339,7 @@ export class ReactAgentService {
       if (interruptData) {
         // 处于 interrupt 状态，推送问题给前端
         res.write(
-          `event: interrupt\ndata: ${JSON.stringify({ ...interruptData, sessionId })}\n\n`,
+          `d:${JSON.stringify({ type: "interrupt", ...interruptData, sessionId })}\n`,
         );
         res.end();
         return;
@@ -344,16 +351,70 @@ export class ReactAgentService {
         session.messages.push({ role: "assistant", content: finalContent });
       }
 
-      res.write(
-        `event: done\ndata: ${JSON.stringify({ final: finalContent })}\n\n`,
-      );
+      res.write(`d:${JSON.stringify({ type: "done", final: finalContent })}\n`);
+      // 流结束标记（Data Stream 协议 e: 事件）
+      res.write(`e:${JSON.stringify({ type: "finish" })}\n`);
     } catch (e) {
       res.write(
-        `event: error\ndata: ${JSON.stringify({ message: `状态检测失败: ${(e as Error).message}` })}\n\n`,
+        `d:${JSON.stringify({ type: "error", message: `状态检测失败: ${(e as Error).message}` })}\n`,
       );
     }
 
     res.end();
+  }
+
+  /**
+   * 从 tool_end 事件的 output 中提取工具结果纯文本
+   *
+   * 实测（@langchain/langgraph ^1.4.9）：event.data.output 是 ToolMessage
+   * 的 JSON 字符串（LangChain 序列化格式），需解析后取 kwargs.content。
+   * 兼容三种形态：对象 / JSON 字符串 / 普通字符串。
+   *
+   * @param output - tool_end 事件的原始 output 值
+   * @returns 纯文本内容（工具返回的字符串，如 JSON 文本或错误信息）
+   */
+  private extractToolContent(output: unknown): string {
+    // 对象形态：可能是 ToolMessage 实例（content 平铺）或序列化形态（kwargs.content）
+    if (typeof output === "object" && output !== null) {
+      const obj = output as Record<string, unknown>;
+
+      // 序列化形态：{ lc, type, id, kwargs: { content } }
+      const kwargs = obj.kwargs;
+      if (
+        typeof kwargs === "object" &&
+        kwargs !== null &&
+        "content" in kwargs
+      ) {
+        return String((kwargs as Record<string, unknown>).content ?? "");
+      }
+
+      // ToolMessage 实例形态：content 属性直接平铺在实例上
+      if ("content" in obj && typeof obj.content === "string") {
+        return obj.content;
+      }
+
+      return JSON.stringify(output);
+    }
+
+    // 字符串形态：可能是 ToolMessage 的 JSON 序列化文本，尝试解析
+    if (typeof output === "string") {
+      try {
+        const parsed = JSON.parse(output) as Record<string, unknown>;
+        const kwargs = parsed.kwargs;
+        if (
+          typeof kwargs === "object" &&
+          kwargs !== null &&
+          "content" in kwargs
+        ) {
+          return String((kwargs as Record<string, unknown>).content ?? "");
+        }
+      } catch {
+        // 不是 JSON 字符串，原样返回
+      }
+      return output;
+    }
+
+    return JSON.stringify(output ?? "");
   }
 
   /**

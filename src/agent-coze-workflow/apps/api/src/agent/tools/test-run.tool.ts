@@ -5,21 +5,14 @@
  * 对已保存到 Coze 平台的工作流进行试运行，返回 executeId。
  *
  * 关键细节：
- * - 使用模块级单例 cozeClient（与 save.tool.ts 共用同一实例）
+ * - 使用共享单例 cozeClient（见 coze-client.ts，与 save.tool.ts 共用同一实例）
  * - response_format 可指定输出格式（可选，默认不传）
  * - try/catch 兜底，错误以字符串返回给 LLM
  */
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { CozeClient } from "../../mcp/cozeClient";
-
-/** 模块级单例：与 save.tool.ts 共用同一 CozeClient */
-const cozeClient = new CozeClient({
-  baseUrl: process.env.COZE_API_BASE_URL ?? "",
-  sessionKey: process.env.COZE_SESSION_KEY ?? "",
-  spaceId: process.env.COZE_SPACE_ID ?? "",
-});
+import { cozeClient } from "./coze-client";
 
 export const testRunWorkflowTool = tool(
   async ({ workflowId, input }) => {

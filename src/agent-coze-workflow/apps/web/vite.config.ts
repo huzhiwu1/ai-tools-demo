@@ -11,6 +11,11 @@ export default defineConfig({
         target: "http://localhost:3000",
         changeOrigin: true,
       },
+      // /workflow 旧接口同样代理到后端（保持旧功能可用）
+      "/workflow": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
       "/health": {
         target: "http://localhost:3000",
         changeOrigin: true,

@@ -1,9 +1,9 @@
 // @coze-workflow/web - 工作流 API 封装
 //
-// 职责：封装对后端 workflow 接口的调用，统一错误处理
+// 职责：封装对后端接口的调用，统一错误处理
 //
 // 设计说明：
-// - 后端路由无 /api 前缀，此处直接拼接 BASE_URL + path
+// - 全部使用相对路径，开发环境走 vite proxy（/workflow、/api 已配置代理）
 // - 不使用 axios / react-query 等第三方库，保持依赖最小化
 // - CozeWorkflow 类型在此定义（web 无法直接 import CommonJS 的 workflow-schema 包）
 
@@ -58,13 +58,24 @@ export interface CozeSaveResult {
 }
 
 // ============================================
+// 文件上传
+// ============================================
+
+/** 上传接口返回的文件信息 */
+export interface UploadedFileInfo {
+  fileId: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  path: string;
+}
+
+// ============================================
 // 内部工具
 // ============================================
 
-const BASE_URL = "http://localhost:3000";
-
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -111,4 +122,27 @@ export const workflowApi = {
   /** 保存工作流到 Coze 平台 */
   create: (workflow: CozeWorkflow) =>
     post<CozeSaveResult>("/workflow/create", workflow),
+
+  /**
+   * 上传文件（multipart/form-data，字段名 file）
+   *
+   * @param file - 浏览器 File 对象
+   * @returns { fileId, name, size, mimeType, path }
+   */
+  async uploadFile(file: File): Promise<UploadedFileInfo> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch("/api/agent/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      throw new Error(`上传失败: HTTP ${res.status} ${errText}`);
+    }
+
+    return (await res.json()) as UploadedFileInfo;
+  },
 };
