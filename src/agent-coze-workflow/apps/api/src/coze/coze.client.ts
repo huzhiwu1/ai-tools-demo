@@ -224,6 +224,51 @@ export class CozeClient {
   }
 
   /**
+   * 获取平台模型列表
+   *
+   * 接口：POST /api/bot/get_model_list
+   * 返回可用模型的全量清单（含 audio/image/video 能力标记），
+   * 供 get_platform_facts 工具动态查询，替代硬编码的 25 个模型列表。
+   *
+   * 关键约束：LLM 生成节点的 modelType + modleName 必须来自此列表。
+   * 音频/视频任务必须选 audio_understanding=true 的模型。
+   */
+  async listModels(): Promise<
+    Array<{
+      name: string;
+      modelType: number;
+      audio: boolean;
+      image: boolean;
+      video: boolean;
+    }>
+  > {
+    const res = await this.request<{
+      model_list: Array<{
+        model_name: string;
+        model_type: number;
+        audio_understanding: boolean;
+        image_input: boolean;
+        video_input: boolean;
+      }>;
+    }>(
+      "bot/get_model_list",
+      {
+        model: true,
+        space_id: this.spaceId,
+        cur_model_ids: ["201"],
+      },
+      "/api/",
+    );
+    return (res.data.model_list ?? []).map((m) => ({
+      name: m.model_name,
+      modelType: m.model_type,
+      audio: m.audio_understanding ?? false,
+      image: m.image_input ?? false,
+      video: m.video_input ?? false,
+    }));
+  }
+
+  /**
    * 获取工作流列表
    */
   async listWorkflows(page = 1, size = 20): Promise<unknown[]> {
