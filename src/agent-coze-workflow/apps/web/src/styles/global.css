@@ -671,6 +671,52 @@ body {
   }
 }
 
+/* LLM 思考中气泡（loading 且无流式文本/工具调用时显示） */
+.thinking-bubble {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.thinking-dots .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-secondary, #999);
+  animation: thinking-dot 1.2s ease-in-out infinite;
+}
+
+.thinking-dots .dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dots .dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinking-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.thinking-text {
+  font-size: 13px;
+  color: var(--color-text-secondary, #999);
+}
+
 /* 工具调用卡片（消息流内） */
 .msg-tool-card {
   display: flex;

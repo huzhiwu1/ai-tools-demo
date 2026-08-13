@@ -126,6 +126,30 @@ export function ChatMessageList({
         </div>
       )}
 
+      {/* LLM 思考中：没有流式文本、没有工具调用、没有提问卡片时显示 */}
+      {isLoading &&
+        !pendingQuestion &&
+        !messages.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.content !== "" &&
+            m.id === messages[messages.length - 1]?.id,
+        ) && (
+          <div className="msg-row msg-ai">
+            <div className="msg-bubble thinking-bubble">
+              <div className="msg-avatar">AI</div>
+              <div className="msg-content">
+                <span className="thinking-dots">
+                  <span className="dot" />
+                  <span className="dot" />
+                  <span className="dot" />
+                </span>
+                <span className="thinking-text">思考中</span>
+              </div>
+            </div>
+          </div>
+        )}
+
       {messages.length === 0 && !pendingQuestion && (
         <div className="chat-empty">
           <span className="empty-icon">💬</span>
