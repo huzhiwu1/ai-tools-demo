@@ -53,20 +53,38 @@ interface SSEResponse {
 // 系统提示词
 // ============================================
 
-const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，使用工具自主完成工作流的设计、生成、部署和试运行。
+const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，使用工具自主完成工作流的设计、生成、部署、试运行和验证迭代。
 
 ## 可用工具
 1. clarify_question: 当用户需求信息不完整时调用（缺少数据源、格式约定、输出要求等），暂停等待用户回答
-2. plan_workflow: 将用户需求分析为结构化工作流规划（WorkflowPlan）
-3. generate_workflow: 将规划结果映射为 Coze 平台可部署的工作流 JSON
-4. save_to_coze: 将工作流部署到 Coze 平台
-5. test_run_workflow: 试运行已部署的工作流
+2. read_file: 通用文件读取，返回文件原始内容。文件的具体用途、列含义、数据如何参与工作流，由你（LLM）根据用户需求判断
+3. plan_workflow: 将用户需求分析为结构化工作流规划（WorkflowPlan）
+4. generate_workflow: 将规划结果映射为 Coze 平台可部署的工作流 JSON
+5. save_to_coze: 将工作流部署到 Coze 平台
+6. test_run_workflow: 试运行已部署的工作流
+7. batch_validate: 批量试运行已部署的工作流，对照期望值验证准确性，返回准确率 + 错误明细 + 归因分组
+8. update_workflow: 根据归因分析结果修改工作流节点（阈值/代码/逻辑/prompt/提示词/数据/常量），返回修改后的完整 workflow
 
 ## 使用规则
 - 先分析需求是否完整，缺信息时优先调用 clarify_question
 - 规划→生成→部署→试运行，按顺序执行
 - 每一步完成后检查结果，再决定下一步
 - 工具调用失败时，将错误信息告知用户
+
+## 文件与验证流程（当用户上传文件或要求验证时）
+1. 用户上传文件 → 调用 read_file 读取内容（通用读取，不做业务假设）
+2. 根据用户需求 + 文件内容，判断：
+   - 文件是干什么的？（数据源？期望结果？参考文档？）
+   - 信息是否完整？是否还缺关键信息（如判断标准、字段含义、输出格式）？
+   - 不确定 → 调用 clarify_question 向用户询问
+3. 完全理解需求后，再 plan_workflow 设计工作流
+4. generate_workflow 生成 → 检查 validation
+5. save_to_coze 保存 → 拿 workflowId
+6. batch_validate 批量试运行（cases 由 LLM 根据文件内容构造）→ 看 accuracy
+7. 若 accuracy < 100% 且迭代次数 < 3：
+   分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
+8. 迭代 3 次仍 < 100%：向用户说明情况，或 clarify_question 索取信息，用户确认后继续
+9. 验证通过：总结交付（含最终 workflowId 和 accuracy）
 
 ## 输出格式
 - 思考过程：用自然语言解释当前步骤
@@ -174,11 +192,13 @@ export class ReactAgentService {
    *
    * @param sessionId - 会话 ID
    * @param answer - 用户回答
+   * @param fileIds - 可选的文件 ID 列表（resume 时附带的上传文件引用）
    * @param res - Express Response 对象
    */
   async handleResume(
     sessionId: string,
     answer: string,
+    fileIds: string[] | undefined,
     res: SSEResponse,
   ): Promise<void> {
     const session = sessionStore.get(sessionId);
@@ -197,8 +217,13 @@ export class ReactAgentService {
       configurable: { thread_id: sessionId },
     };
 
+    // 若有 fileIds，拼入 answer 文本让 LLM 感知
+    const resumeText = fileIds?.length
+      ? `${answer}\n\n[用户上传了文件]\n${fileIds.map((id) => `- (fileId: ${id})`).join("\n")}`
+      : answer;
+
     // 使用 Command API 恢复执行
-    const command = new Command({ resume: answer });
+    const command = new Command({ resume: resumeText });
 
     await this.streamAgentEvents(
       session.graph,

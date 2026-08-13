@@ -786,25 +786,12 @@ body {
   color: var(--color-text-muted);
 }
 
-.answer-form {
-  display: flex;
-  gap: 8px;
-}
-
-.answer-form input {
-  flex: 1;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: var(--color-text);
-  padding: 8px 10px;
-  font-size: 14px;
-  font-family: inherit;
-  outline: none;
-}
-
-.answer-form input:focus {
-  border-color: var(--color-warning);
+/* 提问卡片底部提示：引导用户在下方输入框回复 */
+.question-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 4px 0 0;
+  margin: 0;
 }
 
 /* 错误横幅 */
@@ -990,6 +977,34 @@ body {
 
 .file-chip-remove:hover {
   color: var(--color-accent);
+}
+
+/* 回复模式：输入框上方的问题摘要条（最多 2 行截断） */
+.reply-question {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 171, 46, 0.1);
+  border: 1px dashed var(--color-warning);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+.reply-question-icon {
+  flex-shrink: 0;
+}
+
+.reply-question-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.5;
+  overflow-y: auto;
+  max-height: 3em;
 }
 
 /* 工具调用时间线（右侧面板） */

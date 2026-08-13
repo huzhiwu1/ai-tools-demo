@@ -20,6 +20,12 @@ interface Props {
   onInputChange: (value: string) => void;
   /** 发送回调（App 负责拼接文件引用后提交） */
   onSend: (text: string) => void;
+  /** 回答回调（reply 模式，App 调用 resume 接口） */
+  onAnswer?: (answer: string, fileIds: string[]) => void;
+  /** 输入模式：normal 普通需求输入 / reply 回复 AI 问题 */
+  mode?: "normal" | "reply";
+  /** 当前 AI 问题摘要（reply 模式显示在输入框上方） */
+  pendingQuestionText?: string;
   loading: boolean;
 }
 
@@ -44,7 +50,16 @@ function UploadIcon() {
   );
 }
 
-export function ChatInput({ input, onInputChange, onSend, loading }: Props) {
+export function ChatInput({
+  input,
+  onInputChange,
+  onSend,
+  onAnswer,
+  mode = "normal",
+  pendingQuestionText,
+  loading,
+}: Props) {
+  const isReply = mode === "reply";
   const [files, setFiles] = useState<UploadedFileInfo[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -87,6 +102,7 @@ export function ChatInput({ input, onInputChange, onSend, loading }: Props) {
     const text = input.trim();
     if (!text || loading) return;
 
+    const fileIds = files.map((f) => f.fileId);
     const fileNote =
       files.length > 0
         ? `\n\n[用户上传了文件]\n${files
@@ -94,7 +110,13 @@ export function ChatInput({ input, onInputChange, onSend, loading }: Props) {
             .join("\n")}`
         : "";
 
-    onSend(text + fileNote);
+    if (isReply && onAnswer) {
+      // reply 模式：调用 onAnswer，文件引用由后端拼接
+      onAnswer(text, fileIds);
+    } else {
+      // normal 模式：文件引用拼到消息文本中
+      onSend(text + fileNote);
+    }
     setFiles([]);
   }
 
@@ -124,6 +146,14 @@ export function ChatInput({ input, onInputChange, onSend, loading }: Props) {
               </button>
             </span>
           ))}
+        </div>
+      )}
+
+      {/* 回复模式：输入框上方显示当前问题摘要 */}
+      {isReply && pendingQuestionText && (
+        <div className="reply-question">
+          <span className="reply-question-icon">🤔</span>
+          <span className="reply-question-text">{pendingQuestionText}</span>
         </div>
       )}
 
@@ -163,7 +193,11 @@ export function ChatInput({ input, onInputChange, onSend, loading }: Props) {
           <textarea
             value={input}
             onChange={(e) => onInputChange(e.target.value)}
-            placeholder="描述你的工作流需求…（Ctrl+Enter 发送）"
+            placeholder={
+              isReply
+                ? "回复 AI 的问题…（Ctrl+Enter 发送）"
+                : "描述你的工作流需求…（Ctrl+Enter 发送）"
+            }
             rows={1}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -178,12 +212,16 @@ export function ChatInput({ input, onInputChange, onSend, loading }: Props) {
             className="btn btn-primary"
             disabled={loading || !input.trim()}
           >
-            {loading ? "思考中…" : "发送"}
+            {loading ? "思考中…" : isReply ? "回复" : "发送"}
           </button>
         </form>
       </div>
 
-      <p className="input-hint">支持拖拽上传文件，发送后文件引用会附加到消息中</p>
+      <p className="input-hint">
+        {isReply
+          ? "正在回复 AI 的问题，上传按钮仍可用于提供补充文件"
+          : "支持拖拽上传文件，发送后文件引用会附加到消息中"}
+      </p>
     </div>
   );
 }

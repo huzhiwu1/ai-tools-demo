@@ -9,8 +9,6 @@
  * - 提问卡片通过 pendingQuestion prop 渲染在列表末尾
  */
 
-import { useState } from "react";
-import type { FormEvent } from "react";
 import type { DataStreamEvent } from "../api/data-stream.js";
 
 /** useChat messages 的消息类型（宽松定义，兼容 role:"data" 消息） */
@@ -25,7 +23,6 @@ interface Props {
   messages: ChatMessage[];
   isLoading: boolean;
   pendingQuestion: { question: string; context?: string } | null;
-  onAnswer: (answer: string) => void;
 }
 
 /** 工具卡片：按 data 事件类型渲染 */
@@ -67,7 +64,6 @@ export function ChatMessageList({
   messages,
   isLoading,
   pendingQuestion,
-  onAnswer,
 }: Props) {
   return (
     <div className="chat-messages">
@@ -119,7 +115,7 @@ export function ChatMessageList({
             {pendingQuestion.context && (
               <p className="question-context">{pendingQuestion.context}</p>
             )}
-            <AnswerForm onSubmit={onAnswer} />
+            <p className="question-hint">请在下方输入框回复 AI 的问题</p>
           </div>
         </div>
       )}
@@ -134,37 +130,5 @@ export function ChatMessageList({
         </div>
       )}
     </div>
-  );
-}
-
-/** 提问卡片的回答输入框（受控内部状态，提交后清空） */
-function AnswerForm({ onSubmit }: { onSubmit: (answer: string) => void }) {
-  const [value, setValue] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const answer = value.trim();
-    if (!answer || submitting) return;
-    setSubmitting(true);
-    setValue("");
-    onSubmit(answer);
-    // 提交后由父组件清掉 pendingQuestion，这里无需恢复 submitting
-  }
-
-  return (
-    <form className="answer-form" onSubmit={handleSubmit}>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="输入你的回答…"
-        disabled={submitting}
-        autoFocus
-      />
-      <button type="submit" className="btn btn-primary" disabled={submitting}>
-        {submitting ? "提交中…" : "提交回答"}
-      </button>
-    </form>
   );
 }

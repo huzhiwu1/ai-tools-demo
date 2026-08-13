@@ -119,6 +119,31 @@ export interface UpdateMetaRequest {
 }
 
 // ============================================
+// execute_detail — 查询执行结果
+// ============================================
+
+export interface ExecuteDetailRequest {
+  execute_id: string;
+}
+
+/**
+ * 执行结果数据
+ *
+ * 注意：字段名以实测为准，当前为候选结构。
+ * 若平台接口返回字段不同，需按要求调整。
+ */
+export interface ExecuteDetailData {
+  /** 执行状态：running / success / fail */
+  status: string;
+  /** 执行输出（工作流 end 节点的返回值，可能嵌套在 data 里） */
+  output?: unknown;
+  /** 错误信息（status=fail 时） */
+  error?: string;
+  /** 执行耗时（ms） */
+  duration?: number;
+}
+
+// ============================================
 // workflow_list — 工作流列表
 // ============================================
 

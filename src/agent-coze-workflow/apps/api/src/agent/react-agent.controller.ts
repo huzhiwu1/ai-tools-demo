@@ -86,10 +86,10 @@ export class ReactAgentController {
    */
   @Post("chat/resume")
   async resume(
-    @Body() body: { sessionId: string; answer: string },
+    @Body() body: { sessionId: string; answer: string; fileIds?: string[] },
     @Res() res: any,
   ): Promise<void> {
-    const { sessionId, answer } = body;
+    const { sessionId, answer, fileIds } = body;
 
     // 基本参数校验
     if (!sessionId) {
@@ -110,7 +110,7 @@ export class ReactAgentController {
       return;
     }
 
-    await this.agentService.handleResume(sessionId, answer, res);
+    await this.agentService.handleResume(sessionId, answer, fileIds, res);
   }
 
   /**

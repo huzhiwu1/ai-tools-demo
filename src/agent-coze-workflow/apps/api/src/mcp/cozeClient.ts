@@ -26,6 +26,7 @@ import type {
   EditLockData,
   CanvasData,
   TestRunData,
+  ExecuteDetailData,
 } from "./types";
 
 /** 已知错误码 */
@@ -176,6 +177,46 @@ export class CozeClient {
   }
 
   /**
+   * 查询执行结果（轮询用）
+   *
+   * 候选接口路径（按优先级尝试）：
+   * 1. execute_detail
+   * 2. execute_info（兜底）
+   *
+   * 若候选接口均返回 404/非 0 code，抛 CozeError 提示接口未打通。
+   *
+   * @param executeId - testRun 返回的 execute_id
+   * @returns 执行状态和输出
+   */
+  async queryExecute(executeId: string): Promise<ExecuteDetailData> {
+    const candidates = ["execute_detail", "execute_info"];
+
+    for (const path of candidates) {
+      try {
+        const res = await this.request<ExecuteDetailData>(path, {
+          execute_id: executeId,
+        });
+        // 接口返回了数据，提取有效字段
+        return this.normalizeExecuteResult(
+          res.data as unknown as Record<string, unknown>,
+        );
+      } catch (e) {
+        // 最后一个候选也失败，统一抛错
+        const isLast = path === candidates[candidates.length - 1];
+        if (isLast) {
+          throw new Error(
+            `CozeError: 执行详情接口未打通，需在平台 DevTools 抓包确认路径。` +
+              `已尝试: ${candidates.join(", ")}。错误: ${(e as Error).message}`,
+          );
+        }
+        // 继续尝试下一个候选
+      }
+    }
+
+    throw new Error("CozeError: queryExecute 无可用候选接口");
+  }
+
+  /**
    * 获取工作流列表
    */
   async listWorkflows(page = 1, size = 20): Promise<unknown[]> {
@@ -240,6 +281,70 @@ export class CozeClient {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * 规整执行结果字段
+   *
+   * 平台返回的字段名可能不统一（如 status 可能是 execute_status、state 等），
+   * 本方法做兼容映射，并递归提取输出值。
+   */
+  private normalizeExecuteResult(
+    raw: Record<string, unknown>,
+  ): ExecuteDetailData {
+    const status =
+      (raw.status as string) ??
+      (raw.execute_status as string) ??
+      (raw.state as string) ??
+      "unknown";
+
+    const output = this.findOutput(raw);
+
+    return {
+      status,
+      output,
+      error: (raw.error as string) ?? (raw.error_msg as string),
+      duration: (raw.duration as number) ?? (raw.cost as number),
+    };
+  }
+
+  /**
+   * 递归查找第一个非空 output 值
+   *
+   * 平台可能将输出嵌套在 data.output、result.output 等路径中，
+   * 递归查找以兼容不同接口返回格式。
+   */
+  private findOutput(obj: unknown, depth = 0): unknown {
+    if (depth > 5 || obj === null || obj === undefined) return undefined;
+
+    if (typeof obj === "object" && !Array.isArray(obj)) {
+      const record = obj as Record<string, unknown>;
+
+      // 优先命中 output / result 字段
+      if (
+        "output" in record &&
+        record.output !== null &&
+        record.output !== undefined
+      ) {
+        return record.output;
+      }
+      if (
+        "result" in record &&
+        record.result !== null &&
+        record.result !== undefined
+      ) {
+        return record.result;
+      }
+
+      // 递归搜索子对象
+      for (const key of Object.keys(record)) {
+        if (key === "status" || key === "error" || key === "duration") continue;
+        const found = this.findOutput(record[key], depth + 1);
+        if (found !== undefined) return found;
+      }
+    }
+
+    return undefined;
   }
 
   /**

@@ -156,6 +156,8 @@ export default function App() {
   // ============================================
   const [pendingQuestion, setPendingQuestion] =
     useState<PendingQuestion | null>(null);
+  /** 是否处于回复 AI 问题模式（底部输入框切换为回复模式） */
+  const [replyMode, setReplyMode] = useState(false);
   const [toolCalls, setToolCalls] = useState<ToolCallItem[]>([]);
   const [workflow, setWorkflow] = useState<CozeWorkflow | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -244,6 +246,8 @@ export default function App() {
           question: event.question ?? "请补充信息",
           context: event.context,
         });
+        // 底部输入框切换为回复模式
+        setReplyMode(true);
         break;
       }
 
@@ -283,6 +287,7 @@ export default function App() {
     setInput("");
     setGlobalError(null);
     setPendingQuestion(null);
+    setReplyMode(false);
     setWorkflow(null);
     setValidation(null);
     setSketch(null);
@@ -297,13 +302,15 @@ export default function App() {
    * 提交 AI 提问的回答（resume 流程，方案 A）
    *
    * 1. 回答作为 user 消息追加到 messages
-   * 2. 手写 fetch 调用 /api/agent/chat/resume
+   * 2. 手写 fetch 调用 /api/agent/chat/resume（带 fileIds）
    * 3. parseDataStream 解析返回流，增量追加 AI 回复
    */
-  async function handleAnswer(answer: string) {
+  async function handleAnswer(answer: string, fileIds: string[] = []) {
     if (!sessionId) return;
 
+    setInput("");
     setPendingQuestion(null);
+    setReplyMode(false);
     setGlobalError(null);
 
     const assistantId = crypto.randomUUID();
@@ -318,7 +325,7 @@ export default function App() {
       const response = await fetch("/api/agent/chat/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, answer }),
+        body: JSON.stringify({ sessionId, answer, fileIds }),
       });
 
       if (!response.ok) {
@@ -393,13 +400,15 @@ export default function App() {
             messages={messages as ChatMessage[]}
             isLoading={busy}
             pendingQuestion={pendingQuestion}
-            onAnswer={handleAnswer}
           />
 
           <ChatInput
             input={input}
             onInputChange={setInput}
             onSend={handleSend}
+            onAnswer={handleAnswer}
+            mode={replyMode ? "reply" : "normal"}
+            pendingQuestionText={pendingQuestion?.question}
             loading={busy}
           />
         </section>
