@@ -11,7 +11,7 @@ export const PLAN_PROMPT = `你是 Coze 工作流需求分析器。
 请把用户输入的需求转成结构化 JSON。
 要求：只输出 JSON，不要解释。
 
-字段包括：mode、name、goal、inputType、outputType、needBranch、needCodeNode、needDatabaseNode、constraints、riskHints、nodeConfig。
+字段包括：mode、name、goal、inputType、outputType、needBranch、needCodeNode、needDatabaseNode、startInputs、constraints、riskHints、nodeConfig。
 
 ## 工作流命名规则（必须遵守）
 name 必须是英文：只允许字母、数字、下划线，以字母开头，长度 ≤ 50。
@@ -31,6 +31,7 @@ name 必须是英文：只允许字母、数字、下划线，以字母开头，
 - 输入变量名用可读的英文（如 user_input、audio_url、recognized_lyrics）
 - 输出变量名+类型如 result: string、matched: boolean、score: number
 - 区分单处理（single）还是批处理（batch）
+- **startInputs**：工作流入口参数列表（用户输入什么）。多输入时列出全部，如 [{name:"audio_url",type:"string"}]；默认单输入 user_input
 - **禁止输出**：模型名、prompt 全文、代码逻辑、阈值、分支条件、节点 JSON 结构——这些由代码自动生成
 
 ## nodeConfig 生成规则（每个 step 的业务配置，必须具体，禁止占位）

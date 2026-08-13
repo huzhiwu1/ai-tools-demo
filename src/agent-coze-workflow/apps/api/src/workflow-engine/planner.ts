@@ -100,13 +100,24 @@ export class WorkflowPlanner {
     const steps: PlanStep[] = [];
     let order = 0;
 
-    // 1. start — 接收用户输入
+    // 1. start — 接收用户输入（支持多输入：LLM 通过 startInputs 定义入口参数）
     order++;
     steps.push({
       order,
       description: "接收用户输入",
       nodeType: "start",
       dependencies: [],
+      // start 的输出 = 工作流入口参数（LLM 定义，默认 user_input）
+      contract: {
+        outputs:
+          input.startInputs && input.startInputs.length > 0
+            ? input.startInputs.map((s) => ({
+                name: s.name,
+                type: s.type,
+                default: s.default,
+              }))
+            : [{ name: "user_input", type: "string" }],
+      },
     });
     const startOrder = order;
 

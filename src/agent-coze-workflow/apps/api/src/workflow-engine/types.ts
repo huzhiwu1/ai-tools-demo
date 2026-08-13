@@ -34,6 +34,24 @@ export const LLMPlanOutputSchema = z.object({
     .describe(
       "是否需要数据库查询节点。只有用户明确提供数据库信息、且该数据源存在于平台数据库列表时才为 true",
     ),
+  /** 工作流入口参数（start 节点的输出），默认 user_input */
+  startInputs: z
+    .array(
+      z.object({
+        name: z.string().describe("输入参数名，如 audio_url、user_input、threshold"),
+        type: z
+          .enum(["string", "object", "list", "integer", "number", "boolean"])
+          .describe("输入参数类型"),
+        default: z
+          .string()
+          .optional()
+          .describe("可选参数的默认值（如 personal_requirement 默认 '无'），必填参数不传"),
+      }),
+    )
+    .optional()
+    .describe(
+      "工作流入口参数列表（用户输入什么）。多输入时列出全部，如 [{name:audio_url,type:string}]；默认单输入 user_input",
+    ),
   constraints: z.array(z.string()).describe("工作流需满足的约束条件列表"),
   riskHints: z.array(z.string()).describe("潜在风险和注意事项列表"),
   /**

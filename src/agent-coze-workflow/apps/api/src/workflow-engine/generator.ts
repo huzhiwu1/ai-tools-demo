@@ -86,9 +86,14 @@ function topoSortSteps(steps: PlanStep[]): PlanStep[] {
  * start → "input", llm/code/condition/http/database_query/text/merge → "output"
  */
 function outputNameForNode(node: CozeNode): string {
-  if (node.type === "start") return "input";
   if (node.type === "end") return "output";
-  // 读取节点自身的 outputs 声明，取第一个输出字段名
+  // 读取节点自身的 outputs 声明（start 的 inputVariables / llm/code 的 outputs），取第一个
+  if (node.type === "start") {
+    const vars = (node as unknown as { inputVariables?: Array<{ name?: string }> })
+      ?.inputVariables;
+    if (vars && vars.length > 0 && vars[0]?.name) return vars[0].name;
+    return "input";
+  }
   const outputs = (node as unknown as Record<string, unknown>)?.outputs as
     | Array<{ name?: string }>
     | undefined;
@@ -135,8 +140,26 @@ function buildInputMapping(
     }
 
     const sourceOutput = outputNameForNode(source);
-    // start 的输出 → user_input，其余 → input
-    const paramName = source.type === "start" ? "user_input" : "input";
+
+    if (source.type === "start") {
+      // start 多输入：把所有入口参数都映射给下游
+      const vars = (source as unknown as {
+        inputVariables?: Array<{ name?: string }>;
+      })?.inputVariables;
+      const names: string[] =
+        vars && vars.length > 0
+          ? vars.map((v) => v.name).filter((n): n is string => !!n)
+          : [sourceOutput];
+      const existing = mapping.get(target.id) ?? {};
+      for (const name of names) {
+        existing[name] = `${edge.sourceNodeId}.${name}`;
+      }
+      mapping.set(target.id, existing);
+      continue;
+    }
+
+    // 其余节点 → input
+    const paramName = "input";
 
     const existing = mapping.get(target.id) ?? {};
     // 同一 source 可能有多个输出？当前只映射第一个输出
@@ -178,6 +201,51 @@ function conditionBranchPort(index: number): string {
  *
  * @param endNodeId - 所有分支汇聚的 end 节点 ID
  */
+/**
+ * 为 LLM 节点添加 default + branch_error 两条出边
+ *
+ * 平台约定（2026-08-14 平台样本实测）：
+ * - 大模型节点（type=3）必须有两根出边：
+ *   - "default" → 下游处理节点（正常输出）
+ *   - "branch_error" → 错误处理节点或 end 节点（异常分支）
+ * - 代码节点（type=5）出边不写 sourcePortID
+ *
+ * 参考：docs/coze-platform/coze-node-fields-guide.md
+ * 样本 LLM 节点 200101：default→200102(代码), branch_error→1287269(文本处理)
+ *
+ * @param endNodeId - 汇聚的 end 节点 ID，branch_error 指向此
+ */
+function createLLMEdges(
+  nodes: CozeNode[],
+  edges: CozeEdge[],
+  endNodeId: string,
+): void {
+  for (const node of nodes) {
+    if (node.type !== "llm") continue;
+
+    // 找到 LLM 节点已有的出边（指向下一个处理节点）
+    const existingEdge = edges.find((e) => e.sourceNodeId === node.id);
+    if (existingEdge) {
+      // 给主边加上 default 端口（平台要求大模型出边带端口标记）
+      existingEdge.sourcePort = "default";
+    }
+
+    // 检查是否已有 branch_error 边（避免重复添加）
+    const hasBranchError = edges.some(
+      (e) => e.sourceNodeId === node.id && e.sourcePort === "branch_error",
+    );
+    if (!hasBranchError) {
+      // 添加 branch_error 边指向 end 节点（异常时走这里）
+      edges.push({
+        id: generateId(),
+        sourceNodeId: node.id,
+        targetNodeId: endNodeId,
+        sourcePort: "branch_error",
+      });
+    }
+  }
+}
+
 function createConditionEdges(
   nodes: CozeNode[],
   edges: CozeEdge[],
@@ -406,9 +474,13 @@ export class WorkflowGenerator {
       (node as unknown as Record<string, unknown>).language = "python";
     }
 
-    // 为条件节点创建所有分支边 + else 边（带正确的 sourcePortID，避免 validate_tree 报端口未连接）
+    // 为 LLM 节点添加 default + branch_error 端口边（平台要求 LLM 节点两条出边）
+    // 大模型节点必须同时有正常输出和异常分支两根出线，否则 validate_tree 报端口未连接
     const endNode = cozeNodes.find((n) => n.type === "end");
     const endNodeId = endNode?.id ?? "900001";
+    createLLMEdges(cozeNodes, edges, endNodeId);
+
+    // 为条件节点创建所有分支边 + else 边（带正确的 sourcePortID，避免 validate_tree 报端口未连接）
     createConditionEdges(cozeNodes, edges, endNodeId);
 
     return {
@@ -446,7 +518,15 @@ export class WorkflowGenerator {
 
     switch (step.nodeType) {
       case "start":
-        return createStartNode();
+        // 多输入支持：start 的输入变量从 contract.outputs 生成（LLM 的 startInputs）
+        return createStartNode(
+          step.contract?.outputs?.map((o) => ({
+            name: o.name,
+            type: o.type ?? "string",
+            required: true,
+            default: (o as { default?: string }).default,
+          })),
+        );
       case "end":
         return createEndNode();
       case "llm": {

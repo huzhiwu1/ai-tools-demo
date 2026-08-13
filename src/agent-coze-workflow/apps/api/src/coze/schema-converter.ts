@@ -196,7 +196,40 @@ export function convertToPlatformSchema(
       };
 
       if (isStart) {
-        data.outputs = [{ type: "string", name: "input", required: false }];
+        // 多输入支持：从 inputVariables 生成 outputs + trigger_parameters
+        // （LLM 的 startInputs → planner → generator 的 createStartNode inputs）
+        // 对照平台样本（2026-08-14 实测）：
+        // - list 类型带 schema:{type:string}（元素类型）
+        // - 支持 defaultValue（如 personal_requirement 默认 "无"）
+        const vars = (node as unknown as {
+          inputVariables?: Array<{
+            name: string;
+            type?: string;
+            required?: boolean;
+            default?: string;
+          }>;
+        })?.inputVariables;
+        const startOutputs =
+          vars && vars.length > 0
+            ? vars.map((v) => {
+                const type = v.type ?? "string";
+                const entry: Record<string, unknown> = {
+                  type,
+                  name: v.name,
+                  required: v.required ?? true,
+                };
+                // list 类型需要元素类型 schema（平台样本 examination_report 实测）
+                if (type === "list") {
+                  entry.schema = { type: "string" };
+                }
+                // 可选参数支持默认值（平台样本 personal_requirement 实测）
+                if (v.default !== undefined) {
+                  entry.defaultValue = v.default;
+                }
+                return entry;
+              })
+            : [{ type: "string", name: "input", required: false }];
+        data.outputs = startOutputs;
         data.trigger_parameters = [];
       }
       if (isEnd) {
@@ -246,18 +279,6 @@ export function convertToPlatformSchema(
           inputParameters,
           llmParam: [
             literal(
-              "modelType",
-              "integer",
-              String(modelTypeFor(llm.config?.model, modelTypeMap)),
-            ),
-            literal(
-              "modleName",
-              "string",
-              llm.config?.model ?? "Doubao-Seed-2.0-Lite",
-            ),
-            literal("generationDiversity", "string", "balance"),
-            literal("apiType", "integer", "1"),
-            literal(
               "temperature",
               "float",
               String(llm.config?.temperature ?? 1),
@@ -269,21 +290,79 @@ export function convertToPlatformSchema(
             ),
             literal("topP", "float", "0.95"),
             literal("responseFormat", "integer", "2"),
+            literal(
+              "modleName",
+              "string",
+              llm.config?.model ?? "Doubao-Seed-2.0-Lite",
+            ),
+            literal(
+              "modelType",
+              "integer",
+              String(modelTypeFor(llm.config?.model, modelTypeMap)),
+            ),
+            literal("generationDiversity", "string", "balance"),
             literal("supportThinking", "boolean", true),
             literal("enableThinking", "boolean", true),
+            literal("apiType", "integer", "1"),
             literal("prompt", "string", llm.userPrompt ?? ""),
             literal("enableChatHistory", "boolean", false),
             literal("chatHistoryRound", "integer", "3"),
             literal("systemPrompt", "string", llm.systemPrompt ?? ""),
           ],
+          // settingOnError 结构对照平台样本 141264（2026-08-14 实测）：
+          // switch + dataOnErr(json字符串) + processType 3=异常分支 + ext.backupLLmParam(json字符串)
           settingOnError: {
-            processType: 1,
-            timeoutMs: 600000,
-            singleTimeoutMs: 120000,
-            retryTimes: 0,
+            switch: true,
+            dataOnErr: JSON.stringify({
+              output: "",
+              reasoning_content: "",
+            }),
+            processType: 3,
+            timeoutMs: 120000,
+            singleTimeoutMs: 0,
+            retryTimes: 1,
+            ext: {
+              backupLLmParam: JSON.stringify({
+                temperature: 1,
+                maxTokens: 16384,
+                topP: 0.95,
+                responseFormat: 2,
+                modelName: "Doubao-Seed-2.0-Lite",
+                modelType: 201,
+                generationDiversity: "default_val",
+              }),
+            },
           },
         };
-        data.outputs = [{ type: "string", name: "output" }];
+        // 业务输出（来自节点声明/contract，缺失默认 output）+ 平台内置字段
+        // 内置字段（对照平台样本 + coze-studio 源码 llm.go）：
+        // - reasoning_content: 思考内容（ReasoningOutputKey）
+        // - errorBody: 异常时的保留输出（源码 SetOutputTypesForNodeSchema 跳过 readonly errorBody）
+        // - isSuccess: 执行成功标记（readonly）
+        const llmOutputs = (node as unknown as {
+          outputs?: Array<{ type?: string; name?: string; schema?: unknown }>;
+        })?.outputs;
+        const businessOutputs =
+          llmOutputs && llmOutputs.length > 0
+            ? llmOutputs.map((o) => ({
+                type: o.type ?? "string",
+                name: o.name ?? "output",
+              }))
+            : [{ type: "string", name: "output" }];
+        data.outputs = [
+          ...businessOutputs,
+          { type: "string", name: "reasoning_content" },
+          {
+            type: "object",
+            name: "errorBody",
+            schema: [
+              { type: "string", name: "errorMessage", readonly: true },
+              { type: "string", name: "errorCode", readonly: true },
+            ],
+            readonly: true,
+          },
+          { type: "boolean", name: "isSuccess", readonly: true },
+        ];
         data.version = "3";
       }
       if (node.type === "code") {
@@ -431,6 +510,58 @@ export function convertToPlatformSchema(
           inputParameters.length > 0
             ? inputParameters.map((p) => `{{${p.name}}}`).join("")
             : "{{String1}}";
+        // 平台 concat 模式完整参数（样本 1287269 实测）：
+        // concatResult（拼接结果模板）+ arrayItemConcatChar（数组项分隔符）
+        // + allArrayItemConcatChars（可选分隔符列表，list 类型带 schema）
+        const defaultConcatParams = [
+          {
+            name: "concatResult",
+            input: {
+              type: "string",
+              value: {
+                type: "literal",
+                content: inferredConcat,
+                rawMeta: { type: 1 },
+              },
+            },
+          },
+          {
+            name: "arrayItemConcatChar",
+            input: {
+              type: "string",
+              value: {
+                type: "literal",
+                content: "",
+                rawMeta: { type: 1 },
+              },
+            },
+          },
+          {
+            name: "allArrayItemConcatChars",
+            input: {
+              type: "list",
+              schema: {
+                type: "object",
+                schema: [
+                  { type: "string", name: "label", required: true },
+                  { type: "string", name: "value", required: true },
+                  { type: "boolean", name: "isDefault", required: true },
+                ],
+              },
+              value: {
+                type: "literal",
+                content: [
+                  { label: "换行", value: "\n", isDefault: true },
+                  { label: "制表符", value: "\t", isDefault: true },
+                  { label: "句号", value: "。", isDefault: true },
+                  { label: "逗号", value: "，", isDefault: true },
+                  { label: "分号", value: "；", isDefault: true },
+                  { label: "空格", value: " ", isDefault: true },
+                ],
+              },
+            },
+          },
+        ];
         data.inputs = {
           method: text.method ?? "concat",
           inputParameters,
@@ -447,19 +578,7 @@ export function convertToPlatformSchema(
                     },
                   },
                 }))
-              : [
-                  {
-                    name: "concatResult",
-                    input: {
-                      type: "string",
-                      value: {
-                        type: "literal",
-                        content: inferredConcat,
-                        rawMeta: { type: 1 },
-                      },
-                    },
-                  },
-                ],
+              : defaultConcatParams,
         };
         data.outputs = [{ type: "string", name: "output", required: true }];
       }
@@ -543,7 +662,8 @@ export function convertToPlatformSchema(
         ];
       }
       if (node.type === "http") {
-        // HTTP 请求节点（type 45）：结构未实测，先按字段推断
+        // HTTP 请求节点（type 45）：结构对照平台样本 161311（2026-08-14 实测）
+        // apiInfo/body/headers/params/auth/setting + 标准 outputs body/statusCode/headers
         const http = node as {
           method?: string;
           url?: string;
@@ -551,17 +671,50 @@ export function convertToPlatformSchema(
           body?: Record<string, unknown>;
         };
         data.inputs = {
-          method: http.method ?? "GET",
-          url: http.url ?? "",
-          headers: http.headers ?? {},
-          body: http.body ?? {},
-          settingOnError: {
-            processType: 1,
-            timeoutMs: 60000,
-            retryTimes: 0,
+          apiInfo: {
+            method: http.method ?? "GET",
+            url: http.url ?? "",
+          },
+          body: {
+            bodyType: "EMPTY", // 平台默认大写 EMPTY
+            bodyData: {
+              binary: {
+                fileURL: {
+                  type: "string",
+                  value: {
+                    type: "ref",
+                    content: {
+                      source: "block-output",
+                      blockID: "",
+                      name: "",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          headers: [],
+          params: [],
+          auth: {
+            authType: "BEARER_AUTH",
+            authData: {
+              customData: {
+                addTo: "header",
+              },
+            },
+            authOpen: false,
+          },
+          setting: {
+            timeout: 120, // 秒
+            retryTimes: 3,
           },
         };
-        data.outputs = [{ type: "object", name: "response", schema: [] }];
+        // 标准输出：body / statusCode / headers（平台样本实测，不是 response）
+        data.outputs = [
+          { type: "string", name: "body" },
+          { type: "integer", name: "statusCode" },
+          { type: "string", name: "headers" },
+        ];
       }
 
       return {
