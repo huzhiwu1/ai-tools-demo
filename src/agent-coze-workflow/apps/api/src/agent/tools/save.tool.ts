@@ -8,7 +8,8 @@
  * 流程：
  * 1. convertToPlatformSchema(workflow) → 平台内部 schema JSON 字符串
  * 2. cozeClient.createWorkflow() → 获取 workflowId
- * 3. cozeClient.saveWorkflow(workflowId, schemaJson) → 保存
+ * 3. cozeClient.validateTree() → 平台连通性校验（有错误则返回给 LLM，不继续 save）
+ * 4. cozeClient.saveWorkflow(workflowId, schemaJson) → 保存
  *
  * 关键细节：
  * - 使用共享单例 cozeClient（见 coze-client.ts），内部管理编辑锁和重试
@@ -104,6 +105,29 @@ export const saveToCozeTool = tool(
         cozeWorkflow.meta.name,
         cozeWorkflow.meta.description,
       );
+
+      // 3. 平台 validate_tree 校验（保存前提前暴露端口未连接等问题，避免"保存 → 平台报错 → 重试"往返）
+      const validationErrors = await cozeClient.validateTree(
+        workflowId,
+        schemaJson,
+      );
+      const errorMessages = validationErrors.flatMap((item) =>
+        item.errors.map((e) => e.message),
+      );
+      if (errorMessages.length > 0) {
+        // 校验失败：删除空壳工作流，避免平台上残留垃圾
+        try {
+          await cozeClient.deleteWorkflow(workflowId);
+        } catch {
+          // 删除失败不影响主流程，继续返回错误信息
+        }
+        return (
+          `保存失败: 平台 validate_tree 校验未通过，已删除空壳工作流。` +
+          `请修复节点连线后重新 save_to_coze:\n` +
+          errorMessages.map((m) => "- " + m).join("\n")
+        );
+      }
+
       await cozeClient.saveWorkflow(workflowId, schemaJson);
       resetIteration(workflowId);
       return JSON.stringify(

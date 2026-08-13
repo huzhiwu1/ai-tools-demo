@@ -6,14 +6,15 @@
  * 汇总准确率和错误明细，供 LLM 归因分析。
  *
  * 流程：
- * 1. 遍历 cases（串行，默认间隔 2s 轮询）
- * 2. 每个用例：testRun → 轮询 queryExecute（每 2s，最多 90s）→ 比对
+ * 1. 遍历 cases（串行，默认间隔 5s 轮询）
+ * 2. 每个用例：testRun → 轮询 getProcess（每 5s，最多 5min）→ 比对
  * 3. 汇总：accuracy + details + failurePatterns（归因分组）
  *
  * 关键细节：
  * - 串行执行优先（稳），避免平台限流
- * - 90 秒超时上限，超时标记 executionError 继续下一个
- * - queryExecute 接口未打通时，只做"提交成功"验证（返回 running 状态）
+ * - 5 分钟超时上限（含 LLM 的工作流运行缓慢），超时标记 executionError 继续下一个
+ * - getProcess 用 workflow_id + execute_id 查询，executeStatus=2 表示完成，
+ *   从 end 节点的 output 提取实际输出
  * - try/catch 兜底，错误以字符串返回给 LLM
  */
 
@@ -26,10 +27,10 @@ import {
   iterationLimitMessage,
 } from "./iteration-counter";
 
-/** 轮询间隔（ms） */
-const POLL_INTERVAL_MS = 2000;
-/** 轮询超时（ms） */
-const POLL_TIMEOUT_MS = 90_000;
+/** 轮询间隔（ms） — 工作流可能运行缓慢，5 秒轮询避免频繁请求 */
+const POLL_INTERVAL_MS = 5_000;
+/** 轮询超时（ms） — 一些工作流（含 LLM）运行缓慢，5 分钟超时 */
+const POLL_TIMEOUT_MS = 300_000;
 
 /**
  * 睡眠指定毫秒
@@ -118,17 +119,33 @@ export const batchValidateTool = tool(
             await sleep(POLL_INTERVAL_MS);
 
             try {
-              const result = await cozeClient.queryExecute(executeId);
+              const result = await cozeClient.getProcess(workflowId, executeId);
 
-              if (result.status === "success" || result.status === "fail") {
-                actual = extractOutputString(result.output);
-                if (result.status === "fail" && !actual) {
-                  pollError = result.error ?? "执行失败（无输出）";
+              if (result.executeStatus === 2) {
+                // 已完成：从 end 节点的 output 提取结果
+                const endNode = result.nodeResults.find(
+                  (n) => n.NodeType === "End",
+                );
+                actual = endNode ? extractOutputString(endNode.output) : "";
+                if (!actual) {
+                  pollError = "执行完成但 end 节点无输出";
                 }
                 break;
               }
-            } catch {
-              pollError = "执行结果查询接口未打通，仅确认提交成功";
+
+              if (result.executeStatus === 3) {
+                // 失败：从失败节点收集错误信息
+                const failedNode = result.nodeResults.find(
+                  (n) => n.nodeStatus === 4,
+                );
+                pollError =
+                  failedNode?.errorInfo ||
+                  result.reason ||
+                  "执行失败（无错误信息）";
+                break;
+              }
+            } catch (e) {
+              pollError = `查询执行结果失败: ${(e as Error).message}`;
               break;
             }
           }

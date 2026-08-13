@@ -9,8 +9,9 @@
  * 1. create → 建工作流骨架，拿到 workflow_id
  * 2. acquireEditLock → 获取 15 分钟编辑锁（没有它 save 会报 777777759）
  * 3. getSchema → 拉取最新 schema + submit_commit_id
- * 4. saveWorkflow → 提交 schema（每次 save 前自动重新 getSchema 拿最新 commit）
- * 5. testRun → 试运行
+ * 4. validateTree → 保存前校验节点连通性（提前暴露端口未连接等问题）
+ * 5. saveWorkflow → 提交 schema（每次 save 前自动重新 getSchema 拿最新 commit）
+ * 6. testRun → 试运行（拿 execute_id）→ getProcess → 轮询执行结果
  *
  * 关键细节：
  * - 认证方式：Cookie session_key（PAT 不被接受），附带 Agw-Js-Conv + x-requested-with
@@ -26,7 +27,8 @@ import type {
   EditLockData,
   CanvasData,
   TestRunData,
-  ExecuteDetailData,
+  ValidateTreeItem,
+  GetProcessData,
 } from "./types";
 import { Logger } from "@nestjs/common";
 
@@ -184,43 +186,55 @@ export class CozeClient {
   }
 
   /**
-   * 查询执行结果（轮询用）
+   * 校验工作流 schema 连通性（保存前校验）
    *
-   * 候选接口路径（按优先级尝试）：
-   * 1. execute_detail
-   * 2. execute_info（兜底）
+   * 接口：POST /api/workflow_api/validate_tree
+   * 在 save 之前调用，可提前发现端口未连接、节点孤立等错误，
+   * 避免"保存 → 平台报错 → 重试"的全链路往返。
    *
-   * 若候选接口均返回 404/非 0 code，抛 CozeError 提示接口未打通。
+   * 校验失败时不抛异常，而是返回错误列表（让调用方决定怎么处理）。
    *
-   * @param executeId - testRun 返回的 execute_id
-   * @returns 执行状态和输出
+   * @param workflowId - 已创建的工作流 ID
+   * @param schemaJson - 平台内部 schema JSON 字符串（与 save 的 schema 参数一致）
+   * @returns 每个工作流的校验错误列表（无错误时为空数组）
    */
-  async queryExecute(executeId: string): Promise<ExecuteDetailData> {
-    const candidates = ["execute_detail", "execute_info"];
+  async validateTree(
+    workflowId: string,
+    schemaJson: string,
+  ): Promise<ValidateTreeItem[]> {
+    const res = await this.request<ValidateTreeItem[]>("validate_tree", {
+      workflow_id: workflowId,
+      schema: schemaJson,
+    });
+    return res.data;
+  }
 
-    for (const path of candidates) {
-      try {
-        const res = await this.request<ExecuteDetailData>(path, {
-          execute_id: executeId,
-        });
-        // 接口返回了数据，提取有效字段
-        return this.normalizeExecuteResult(
-          res.data as unknown as Record<string, unknown>,
-        );
-      } catch (e) {
-        // 最后一个候选也失败，统一抛错
-        const isLast = path === candidates[candidates.length - 1];
-        if (isLast) {
-          throw new Error(
-            `CozeError: 执行详情接口未打通，需在平台 DevTools 抓包确认路径。` +
-              `已尝试: ${candidates.join(", ")}。错误: ${(e as Error).message}`,
-          );
-        }
-        // 继续尝试下一个候选
-      }
-    }
-
-    throw new Error("CozeError: queryExecute 无可用候选接口");
+  /**
+   * 查询执行过程（轮询用）
+   *
+   * 接口：GET /api/workflow_api/get_process
+   * 参数：workflow_id + execute_id（test_run 返回）+ space_id + need_async
+   *
+   * @param workflowId - 工作流 ID
+   * @param executeId - testRun 返回的 execute_id
+   * @returns 执行状态与各节点执行结果
+   */
+  async getProcess(
+    workflowId: string,
+    executeId: string,
+  ): Promise<GetProcessData> {
+    const res = await this.request<GetProcessData>(
+      "get_process",
+      {
+        workflow_id: workflowId,
+        space_id: this.spaceId,
+        execute_id: executeId,
+        need_async: true,
+      },
+      "/api/workflow_api/",
+      "GET",
+    );
+    return res.data;
   }
 
   /**
@@ -319,6 +333,22 @@ export class CozeClient {
     }));
   }
 
+  /**
+   * 删除工作流
+   *
+   * 接口：POST /api/workflow_api/delete
+   * 用于 validate_tree 校验失败时清理已创建的空壳工作流，避免平台上残留垃圾。
+   *
+   * @param workflowId - 要删除的工作流 ID
+   */
+  async deleteWorkflow(workflowId: string): Promise<void> {
+    await this.request("delete", {
+      workflow_id: workflowId,
+      space_id: this.spaceId,
+      action: 1,
+    });
+  }
+
   // ============================================
   // 私有方法
   // ============================================
@@ -327,33 +357,52 @@ export class CozeClient {
    * 统一 HTTP 请求
    *
    * @param path - API 路径（如 "create"），自动拼接 urlPrefix
-   * @param body - 请求体
+   * @param body - 请求体（GET 时作为查询参数拼接在 URL 上）
    * @param urlPrefix - 接口前缀（默认 /api/workflow_api/；资源库等外部接口传 /api/）
+   * @param method - HTTP 方法（默认 POST；GET 时不传 body，参数拼查询字符串）
    */
   private async request<T>(
     path: string,
     body: unknown,
     urlPrefix = "/api/workflow_api/",
+    method: "POST" | "GET" = "POST",
   ): Promise<CozeApiResponse<T>> {
     const start = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
+    // GET 请求：参数拼接为查询字符串（body 为普通对象时）
+    const isGet = method === "GET";
+    const queryString =
+      isGet && body && typeof body === "object"
+        ? "?" +
+          Object.entries(body as Record<string, unknown>)
+            .map(
+              ([k, v]) =>
+                `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`,
+            )
+            .join("&")
+        : "";
+
     // 请求前：info 级别（默认可见），记路径 + 完整 body（敏感字段已脱敏）
     this.logger.log(`[CozeAPI] -> ${path} body=${this.summarize(body)}`);
 
     try {
-      const res = await fetch(`${this.baseUrl}${urlPrefix}${path}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: `session_key=${this.sessionKey}`,
-          "Agw-Js-Conv": "str",
-          "x-requested-with": "XMLHttpRequest",
+      const res = await fetch(
+        `${this.baseUrl}${urlPrefix}${path}${queryString}`,
+        {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `session_key=${this.sessionKey}`,
+            "Agw-Js-Conv": "str",
+            "x-requested-with": "XMLHttpRequest",
+          },
+          // GET 不传 body，避免 Content-Type 与空 body 冲突
+          body: isGet ? undefined : JSON.stringify(body),
+          signal: controller.signal,
         },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      );
 
       const json = (await res.json()) as CozeApiResponse<T>;
 
@@ -412,70 +461,6 @@ export class CozeClient {
     return json.length > LOG_MAX_LEN
       ? `${json.slice(0, LOG_MAX_LEN)}...(len=${json.length})`
       : json;
-  }
-
-  /**
-   * 规整执行结果字段
-   *
-   * 平台返回的字段名可能不统一（如 status 可能是 execute_status、state 等），
-   * 本方法做兼容映射，并递归提取输出值。
-   */
-  private normalizeExecuteResult(
-    raw: Record<string, unknown>,
-  ): ExecuteDetailData {
-    const status =
-      (raw.status as string) ??
-      (raw.execute_status as string) ??
-      (raw.state as string) ??
-      "unknown";
-
-    const output = this.findOutput(raw);
-
-    return {
-      status,
-      output,
-      error: (raw.error as string) ?? (raw.error_msg as string),
-      duration: (raw.duration as number) ?? (raw.cost as number),
-    };
-  }
-
-  /**
-   * 递归查找第一个非空 output 值
-   *
-   * 平台可能将输出嵌套在 data.output、result.output 等路径中，
-   * 递归查找以兼容不同接口返回格式。
-   */
-  private findOutput(obj: unknown, depth = 0): unknown {
-    if (depth > 5 || obj === null || obj === undefined) return undefined;
-
-    if (typeof obj === "object" && !Array.isArray(obj)) {
-      const record = obj as Record<string, unknown>;
-
-      // 优先命中 output / result 字段
-      if (
-        "output" in record &&
-        record.output !== null &&
-        record.output !== undefined
-      ) {
-        return record.output;
-      }
-      if (
-        "result" in record &&
-        record.result !== null &&
-        record.result !== undefined
-      ) {
-        return record.result;
-      }
-
-      // 递归搜索子对象
-      for (const key of Object.keys(record)) {
-        if (key === "status" || key === "error" || key === "duration") continue;
-        const found = this.findOutput(record[key], depth + 1);
-        if (found !== undefined) return found;
-      }
-    }
-
-    return undefined;
   }
 
   /**

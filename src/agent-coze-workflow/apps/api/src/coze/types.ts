@@ -121,28 +121,81 @@ export interface UpdateMetaRequest {
 }
 
 // ============================================
-// execute_detail — 查询执行结果
+// validate_tree — 保存前校验节点连通性
 // ============================================
 
-export interface ExecuteDetailRequest {
-  execute_id: string;
+export interface ValidateTreeRequest {
+  workflow_id: string;
+  /** 平台内部 schema JSON 字符串（与 save 的 schema 参数一致） */
+  schema: string;
 }
 
-/**
- * 执行结果数据
- *
- * 注意：字段名以实测为准，当前为候选结构。
- * 若平台接口返回字段不同，需按要求调整。
- */
-export interface ExecuteDetailData {
-  /** 执行状态：running / success / fail */
-  status: string;
-  /** 执行输出（工作流 end 节点的返回值，可能嵌套在 data 里） */
-  output?: unknown;
-  /** 错误信息（status=fail 时） */
-  error?: string;
-  /** 执行耗时（ms） */
-  duration?: number;
+/** 校验错误项 */
+export interface ValidateTreeError {
+  /** 出错的节点信息（path_error 类错误时为 null） */
+  node_error: { node_id: string; node_name: string } | null;
+  /** 路径错误信息（node_error 类错误时为 null） */
+  path_error: unknown | null;
+  /** 错误描述（如 node "条件判断"'s port "true_1" not connected） */
+  message: string;
+  /** 错误类型：1=节点级错误 */
+  type: number;
+}
+
+/** 单个工作流的校验结果 */
+export interface ValidateTreeItem {
+  workflow_id: string;
+  name: string;
+  errors: ValidateTreeError[];
+}
+
+/** validate_tree 响应 data：数组，每个元素是一个工作流的校验结果 */
+export type ValidateTreeData = ValidateTreeItem[];
+
+// ============================================
+// get_process — 查询执行过程（GET）
+// ============================================
+
+/** 单个节点的执行结果 */
+export interface GetProcessNodeResult {
+  nodeId: string;
+  /** 节点类型（平台返回，首字母大写，如 Start / End / LLM） */
+  NodeType: string;
+  NodeName: string;
+  /** 节点状态：0=等待中 1=运行中 2=跳过 3=成功 4=失败 */
+  nodeStatus: number;
+  errorInfo: string;
+  /** 节点输入（JSON 字符串） */
+  input: string;
+  /** 节点输出（JSON 字符串） */
+  output: string;
+  nodeExeCost: string;
+  tokenAndCost: Record<string, string>;
+  raw_output: string;
+  errorLevel: string;
+  extra: string;
+}
+
+export interface GetProcessData {
+  workFlowId: string;
+  executeId: string;
+  /** 执行状态：0=排队中 1=运行中 2=已完成 3=失败（推测） */
+  executeStatus: number;
+  nodeResults: GetProcessNodeResult[];
+  exeHistoryStatus: number;
+  workflowExeCost: string;
+  reason: string;
+}
+
+// ============================================
+// delete — 删除工作流
+// ============================================
+
+export interface DeleteWorkflowRequest {
+  workflow_id: string;
+  space_id: string;
+  /** 操作类型：1=删除 */
+  action: number;
 }
 
 // ============================================
