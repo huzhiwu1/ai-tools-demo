@@ -4,18 +4,20 @@
  * 职责：
  * 接收用户自然语言需求，通过 DeepSeek LLM 推理生成 WorkflowPlan
  *
- * 流程：
- * 1. 接收 UserRequirement
- * 2. 调用 DeepSeekClient.chatStructured()（LangChain withStructuredOutput）
- * 3. 将 LLM 输出映射为 WorkflowPlan（模板化优先：LLM 只做语义解析，结构组装交给代码）
+ * 流程（分步生成，从架构上消除思考模型输出截断）：
+ * 1. Stage 1：调用 DeepSeekClient.chatStructured() 生成轻量骨架
+ *    （元信息 + steps 内嵌 contracts，不含 nodeConfig，输出约 1-2K）
+ * 2. Stage 2：逐节点并行生成 nodeConfig（限并发 3 防限流，单节点失败降级）
+ * 3. 合并回 LLMPlanOutput 形状后映射为 WorkflowPlan
+ *    （模板化优先：LLM 只做语义解析，结构组装交给代码）
  *
  * 关键细节：
- * - LLM 通过 PLAN_PROMPT 输出结构化需求 JSON（mode/goal/needBranch 等）
- * - 结构化输出由 zod schema + withStructuredOutput 保证，无需手写 JSON 容错
- * - 后端按映射规则组装 steps（顺序固定：start → 可选节点 → llm → end）
+ * - 骨架的 contract 内嵌在 steps 里，保证跨节点变量名全局一致
+ * - 每个 LLM 调用输出都很小，思考+JSON 远低于 max_tokens 预算，不会截断
+ * - 单节点 config 失败降级为空对象，不拖垮整体规划
  * - LLM 调用失败时由 WorkflowService 降级为 mock 计划
  *
- * 映射规则：
+ * 映射规则（mapToWorkflowPlan，与旧一次性输出完全一致）：
  * - name：goal 截断 30 字符
  * - description：goal + constraints
  * - steps：start → (database_query) → (code) → (condition) → llm → end
@@ -27,9 +29,25 @@ import type {
   PlanStep,
   WorkflowNodeType,
 } from "@coze-workflow/shared";
-import { PLAN_PROMPT } from "../prompts/plan-prompt";
+import { Logger } from "@nestjs/common";
+import {
+  PLAN_SKELETON_PROMPT,
+  NODE_CONFIG_PROMPT,
+} from "../prompts/plan-prompt";
 import type { DeepSeekClient } from "../llm/deepseek.client";
-import { LLMPlanOutputSchema, type LLMPlanOutput } from "./types";
+import {
+  PlanSkeletonSchema,
+  NodeConfigSchema,
+  type LLMPlanOutput,
+  type PlanSkeleton,
+  type NodeConfig,
+} from "./types";
+
+/** 骨架中的单个步骤（含内嵌 contract） */
+type SkeletonStep = NonNullable<PlanSkeleton["steps"]>[number];
+
+/** Stage 2 并发上限：单次批内最多并行 3 个节点 config 请求，防 429 限流 */
+const CONFIG_CONCURRENCY = 3;
 
 /**
  * 生成合法工作流名：字母开头 + 字母/数字/下划线，超长截断
@@ -56,10 +74,12 @@ function sanitizeWorkflowName(name: string): string {
 }
 
 export class WorkflowPlanner {
+  private readonly logger = new Logger("WorkflowPlanner");
+
   constructor(private readonly client: DeepSeekClient) {}
 
   /**
-   * 分析用户需求，生成 WorkflowPlan
+   * 分析用户需求，生成 WorkflowPlan（分步生成：骨架 → 逐节点 config）
    *
    * @param requirement - 用户需求描述
    * @returns 工作流规划结果
@@ -68,15 +88,141 @@ export class WorkflowPlanner {
     description: string;
     constraints?: string[];
   }): Promise<WorkflowPlan> {
-    // 1. 调用 LLM 分析需求（zod schema 自动保证输出格式和类型安全）
-    const raw = await this.client.chatStructured(
-      LLMPlanOutputSchema,
-      PLAN_PROMPT,
+    // Stage 1：轻量骨架（含 steps 内嵌 contracts，不含 nodeConfig，输出约 1-2K）
+    const skeleton = await this.client.chatStructured(
+      PlanSkeletonSchema,
+      PLAN_SKELETON_PROMPT,
       requirement.description,
     );
 
-    // 2. 映射为 WorkflowPlan
+    // 澄清路径：直接走既有映射的澄清分支，跳过 Stage 2
+    if (skeleton.needClarification) {
+      return this.mapToWorkflowPlan(skeleton as LLMPlanOutput);
+    }
+
+    // Stage 2：逐节点并行生成 nodeConfig（限并发防限流，单节点失败降级）
+    const steps = skeleton.steps ?? [];
+    const configs = await this.refineConfigs(skeleton, steps);
+
+    // 合并回 LLMPlanOutput 形状：contracts 来自骨架，nodeConfig 来自 Stage 2
+    const raw = {
+      ...skeleton,
+      // 骨架的 contract 内嵌在 steps 里，这里平铺成顶层 contracts 数组
+      // （与 mapToWorkflowPlan 的 nextContract 读取方式对齐）；无 contract 时给空对象防 TypeError
+      contracts: steps.map((s) => s.contract ?? { inputs: [], outputs: [] }),
+      nodeConfig: this.aggregateConfigs(steps, configs),
+    } as LLMPlanOutput;
     return this.mapToWorkflowPlan(raw);
+  }
+
+  /**
+   * 逐节点并行生成 nodeConfig，限并发 3 防 429 限流
+   *
+   * 分批执行：批内最多 CONFIG_CONCURRENCY 个并发，批间串行。
+   * 每次调用只输出单节点 config（约 200 token），远低于 max_tokens 预算。
+   *
+   * @param skeleton - Stage 1 骨架（作为全局上下文注入每个节点 prompt）
+   * @param steps - 骨架中的步骤列表
+   * @returns 与 steps 一一对应的 config 数组（失败项为 {}，不抛错）
+   */
+  private async refineConfigs(
+    skeleton: PlanSkeleton,
+    steps: SkeletonStep[],
+  ): Promise<NodeConfig[]> {
+    const results: NodeConfig[] = [];
+    for (let i = 0; i < steps.length; i += CONFIG_CONCURRENCY) {
+      const batch = steps.slice(i, i + CONFIG_CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map((s) => this.refineOneConfig(skeleton, s)),
+      );
+      results.push(...batchResults);
+    }
+    return results;
+  }
+
+  /**
+   * 生成单个节点的业务配置（nodeConfig）
+   *
+   * 注入完整骨架上下文 + 该节点的 contract，LLM 只需输出该节点的配置字段。
+   * 失败降级返回 {}：无 config 的节点由 generator 兜底，不拖垮整体规划。
+   *
+   * @param skeleton - 全局骨架上下文
+   * @param step - 当前节点（含内嵌 contract）
+   * @returns 该节点的扁平配置对象；失败时返回空对象
+   */
+  private async refineOneConfig(
+    skeleton: PlanSkeleton,
+    step: SkeletonStep,
+  ): Promise<NodeConfig> {
+    try {
+      // 占位符替换：完整指令作 systemPrompt，userPrompt 只做简短定位
+      const completedPrompt = NODE_CONFIG_PROMPT.replace(
+        "{SKELETON}",
+        JSON.stringify(skeleton, null, 2),
+      )
+        .replace("{nodeType}", step.nodeType)
+        .replace("{description}", step.description)
+        .replace("{inputs}", JSON.stringify(step.contract?.inputs ?? []))
+        .replace("{outputs}", JSON.stringify(step.contract?.outputs ?? []));
+
+      const cfg = await this.client.chatStructured(
+        NodeConfigSchema,
+        completedPrompt,
+        `为节点「${step.description}」生成 nodeConfig`,
+      );
+      // inputs 规范化：模型可能输出对象数组（照搬 contract 的 { name, source }），
+      // 下游 generator 需要字符串变量名列表，统一取 name
+      if (cfg.inputs) {
+        cfg.inputs = cfg.inputs.map((i) =>
+          typeof i === "string" ? i : i.name,
+        );
+      }
+      return cfg;
+    } catch (e) {
+      this.logger.warn(
+        `[Planner] 节点 config 生成失败 nodeType=${step.nodeType}: ${(e as Error).message}`,
+      );
+      return {};
+    }
+  }
+
+  /**
+   * 把各节点的扁平 config 聚合成按类型分组的 nodeConfig
+   *
+   * 与 LLMPlanOutputSchema.nodeConfig 形状对齐（{ llm: {...}, code: {...} }）。
+   * 同类型多节点时后者覆盖前者（与旧一次性输出语义一致：每类型仅一份配置）。
+   * 全部为空时返回 undefined（nodeConfig 可选）。
+   *
+   * @param steps - 骨架步骤列表
+   * @param configs - refineConfigs 返回的扁平配置数组（与 steps 一一对应）
+   * @returns 分组后的 nodeConfig；无任何配置时 undefined
+   */
+  private aggregateConfigs(
+    steps: SkeletonStep[],
+    configs: NodeConfig[],
+  ): LLMPlanOutput["nodeConfig"] {
+    // nodeType → nodeConfig 键名映射（与 mapToWorkflowPlan 的 configFor 一致）
+    const keyByType: Record<string, string> = {
+      llm: "llm",
+      code: "code",
+      condition: "condition",
+      database_query: "database",
+      http: "http",
+      text: "text",
+    };
+
+    const result: Record<string, unknown> = {};
+    steps.forEach((s, i) => {
+      const key = keyByType[s.nodeType];
+      const cfg = configs[i];
+      if (key && cfg && Object.keys(cfg).length > 0) {
+        result[key] = cfg;
+      }
+    });
+
+    return Object.keys(result).length > 0
+      ? (result as LLMPlanOutput["nodeConfig"])
+      : undefined;
   }
 
   /**
@@ -87,12 +233,11 @@ export class WorkflowPlanner {
   private mapToWorkflowPlan(input: LLMPlanOutput): WorkflowPlan {
     // 如果 LLM 认为需要澄清，返回一个只有基础信息的 plan，
     // 让调用方（Agent）通过 clarify_question 工具向用户提问
-    const clarificationQuestions = input.clarificationQuestions;
-    if (
-      input.needClarification &&
-      clarificationQuestions &&
-      clarificationQuestions.length > 0
-    ) {
+    // 规范化：schema 兼容字符串/对象两种输出，这里统一转为 { field, question }
+    const clarificationQuestions = (input.clarificationQuestions ?? []).map(
+      (q) => (typeof q === "string" ? { field: "", question: q } : q),
+    );
+    if (input.needClarification && clarificationQuestions.length > 0) {
       return {
         name: sanitizeWorkflowName(input.name || "pending"),
         description: input.goal || "待补充需求",
@@ -123,9 +268,11 @@ export class WorkflowPlanner {
     const name = sanitizeWorkflowName(input.name || input.goal);
 
     // description：goal + constraints
+    // constraints 在 PlanSkeleton 中为 optional（澄清路径可不填），
+    // superRefine 保证正常路径存在，这里再加 ?? [] 防御断言绕过后的 undefined
     const constraintsSuffix =
-      input.constraints.length > 0
-        ? `；约束：${input.constraints.join("、")}`
+      (input.constraints ?? []).length > 0
+        ? `；约束：${input.constraints!.join("、")}`
         : "";
     const description = input.goal + constraintsSuffix;
 

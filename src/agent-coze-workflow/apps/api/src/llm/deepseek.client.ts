@@ -83,14 +83,14 @@ export class DeepSeekClient {
       model: modelName,
       temperature: 0.2,
       maxRetries: 1,
-      // 思考模型的 reasoning 与正文共用 completion tokens，官网默认 4K 上限会
-      // 把长 JSON 输出截断（规划输出常超 4K），实测官网接受 8192，显式放大
+      // 关闭思考：reasoning_content 与正文共享 completion tokens，思考会吃掉
+      // 大半预算导致长 JSON 截断。thinking disabled 后预算全部留给 JSON 输出。
+      // 注意：若网关不支持该参数（静默忽略或 400），需回退为调大 maxTokens 方案。
+      modelKwargs: { thinking: { type: "disabled" } },
+      // 关闭思考后 JSON 独占预算，8192 足够规划输出（实测官网接受此值）
       maxTokens: 8192,
-      // 默认 60 秒：思考模型（deepseek-v4-flash）规划/代码生成耗时常超 10 秒
+      // 默认 60 秒：规划/代码生成耗时长，需足够超时
       timeout: config?.timeout ?? 60_000,
-      // 思考模型 reasoning_content 会吃掉大量 token 预算，必须显式调大
-      // 否则结构化输出（规划 JSON）被截断（deepseek-v4-flash 最大输出 32K）
-      maxTokens: 16384,
     });
   }
 
@@ -166,26 +166,32 @@ export class DeepSeekClient {
     if (typeof err?.status === "number") parts.push(`status=${err.status}`);
 
     // LangChain StructuredOutputParser 失败格式：Failed to parse. Text: "...". Error: xxx
-    const parseMatch = raw.match(
-      /Failed to parse\. Text: "([\s\S]*?)"(?:\. Error: ([\s\S]*))?/,
-    );
-    if (parseMatch) {
-      const text = parseMatch[1];
-      const trimmed = text.trimEnd();
-      // 截断启发式：以 { / [ 开头但未闭合 → 极可能是 max_tokens 上限截断
-      const looksTruncated =
-        (trimmed.startsWith("{") && !trimmed.endsWith("}")) ||
-        (trimmed.startsWith("[") && !trimmed.endsWith("]"));
+    // 注意：Text 是原始 JSON，内部引号未转义，不能用正则按引号配对提取，
+    // 否则会在 JSON 内部第一个引号处提前终止（实测导致 zod 失败被误报成截断）。
+    // 正确做法：以 "Failed to parse. Text: " 前缀定位 + 固定长度切片展示头部，
+    // 以 ". Error: " 后缀提取失败原因，再按原因分类。
+    const headIdx = raw.indexOf("Failed to parse. Text: ");
+    if (headIdx >= 0) {
+      const jsonHead = raw
+        .slice(headIdx + 'Failed to parse. Text: "'.length, headIdx + 120)
+        .replace(/\s+/g, " ");
+      const causeMatch = raw.match(/\. Error: ([\s\S]*)$/);
+      const cause = causeMatch
+        ? causeMatch[1].slice(0, 300).replace(/\s+/g, " ")
+        : "";
+      // JSON.parse 阶段失败（JSON 未闭合）才是截断嫌疑；
+      // zod 校验失败说明 JSON 完整但内容不符合 schema
+      const isJsonParseError =
+        /Unexpected (end|token)|in JSON at position|is not valid JSON/i.test(
+          cause,
+        );
       parts.push(
-        `jsonHead=${trimmed.slice(0, 80).replace(/\s+/g, " ")}`,
-        looksTruncated
-          ? "疑似输出被截断（max_tokens 不足）"
-          : "JSON 完整但内容不符",
+        `jsonHead=${jsonHead}`,
+        isJsonParseError
+          ? "疑似输出被截断（JSON 未闭合）"
+          : "JSON 完整但内容不符（zod 校验失败）",
       );
-      if (parseMatch[2]) {
-        // 后段是 JSON.parse 或 zod 校验的具体原因（如 zod issues）
-        parts.push(`cause=${parseMatch[2].slice(0, 300).replace(/\s+/g, " ")}`);
-      }
+      if (cause) parts.push(`cause=${cause}`);
     } else {
       parts.push(raw.slice(0, 500));
     }
