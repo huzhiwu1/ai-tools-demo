@@ -14,6 +14,23 @@ import { z } from "zod";
 
 /** LLM 规划输出 Schema */
 export const LLMPlanOutputSchema = z.object({
+  needClarification: z.boolean().optional().describe(
+    "当用户输入/输出结构不明确时为 true，此时应返回 clarificationQuestions 而非完整规划",
+  ),
+  clarificationQuestions: z
+    .array(
+      z.object({
+        field: z
+          .string()
+          .describe("需要澄清的字段（如 input_type / output_type / input_fields）"),
+        question: z.string().describe("向用户提出的具体问题"),
+        hint: z.string().optional().describe("可选的提示信息"),
+      }),
+    )
+    .optional()
+    .describe(
+      "需要向用户澄清的问题列表（1-3 个），仅 needClarification=true 时填写",
+    ),
   mode: z.string().describe("工作流模式，如 '问答'、'数据处理'、'多轮对话' 等"),
   name: z
     .string()

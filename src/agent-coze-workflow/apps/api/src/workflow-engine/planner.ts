@@ -85,6 +85,40 @@ export class WorkflowPlanner {
    * 模板化优先：LLM 只做语义解析，结构组装交给代码
    */
   private mapToWorkflowPlan(input: LLMPlanOutput): WorkflowPlan {
+    // 如果 LLM 认为需要澄清，返回一个只有基础信息的 plan，
+    // 让调用方（Agent）通过 clarify_question 工具向用户提问
+    const clarificationQuestions = input.clarificationQuestions;
+    if (
+      input.needClarification &&
+      clarificationQuestions &&
+      clarificationQuestions.length > 0
+    ) {
+      return {
+        name: sanitizeWorkflowName(input.name || "pending"),
+        description: input.goal || "待补充需求",
+        steps: [
+          {
+            order: 1,
+            description: "接收用户输入",
+            nodeType: "start" as const,
+            dependencies: [],
+          },
+          {
+            order: 2,
+            description: "返回结果",
+            nodeType: "end" as const,
+            dependencies: [1],
+          },
+        ],
+        modules: ["start", "end"],
+        estimatedComplexity: "simple" as const,
+        // 把澄清问题附在 description 上，方便 Agent 读取
+        _clarification: {
+          questions: clarificationQuestions,
+        },
+      };
+    }
+
     // name：LLM 语义英文名 + sanitize 代码兜底（平台只允许字母数字下划线）
     const name = sanitizeWorkflowName(input.name || input.goal);
 
