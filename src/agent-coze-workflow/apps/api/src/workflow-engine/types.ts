@@ -202,6 +202,16 @@ export const LLMPlanOutputSchema = z.object({
         })
         .optional()
         .describe("HTTP 节点业务配置"),
+      text: z
+        .object({
+          concatResult: z
+            .string()
+            .describe(
+              "文本节点拼接模板，如 '姓名：{{name}}，年龄：{{age}}'；用 {{变量名}} 引用上游输入",
+            ),
+        })
+        .optional()
+        .describe("文本节点业务配置"),
     })
     .optional()
     .describe("各类型节点的业务配置（按实际需要的节点填写对应字段）"),

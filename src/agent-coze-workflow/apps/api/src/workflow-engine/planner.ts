@@ -149,6 +149,7 @@ export class WorkflowPlanner {
         condition: "condition",
         database_query: "database",
         http: "http",
+        text: "text",
       };
       const key = keyByType[nodeType];
       return key && nc ? nc[key] : undefined;
