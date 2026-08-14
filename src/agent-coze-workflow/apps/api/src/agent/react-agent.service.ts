@@ -49,6 +49,8 @@ interface SSEResponse {
   write(chunk: string): boolean;
   end(): void;
   destroyed: boolean;
+  on(event: "close", listener: () => void): unknown;
+  removeListener(event: "close", listener: () => void): unknown;
 }
 
 // ============================================
@@ -329,8 +331,24 @@ export class ReactAgentService {
     res: SSEResponse,
   ): Promise<void> {
     let complete = false;
+    // 服务端主动结束标记：true 表示流由服务端正常完成（非客户端打断）
+    let finished = false;
+
+    // 监听响应 close 事件：客户端断开（打断）时立即标记脏状态
+    // 不能只靠 for await 循环里的 res.destroyed 检查：LLM 思考/工具执行期间
+    // 事件迭代器阻塞在等待下一事件，res.destroyed 检测会延迟到下一个事件
+    // 到达才执行（可能晚于用户新消息），close 事件则由事件循环立即触发
+    const onClose = () => {
+      if (!finished) {
+        session.graphDirty = true;
+      }
+    };
+    res.on("close", onClose);
 
     try {
+      // 外层 try：确保 finally 在一切退出路径（含提前 return）前执行，
+      // 移除 close 监听器避免泄漏
+      try {
       // PregelOptions extends RunnableConfig，config 字段直接平铺进 options
       const stream = graph.streamEvents(input, {
         version: "v2",
@@ -338,11 +356,23 @@ export class ReactAgentService {
       });
 
       for await (const event of stream) {
-        // 客户端断开时停止迭代
+        // 客户端断开时停止迭代（兜底检测，close 事件可能已打标）
         if (res.destroyed) {
           // 客户端断开（用户打断）：graph 执行中途放弃，checkpoint 留下脏状态
           // 标记会话，下次 chat 时重建 graph 清空 checkpoint，避免上下文混乱
           session.graphDirty = true;
+          // 主动取消底层 graph 执行：streamEvents 返回的流支持 cancel()，
+          // 通过 AbortSignal 终止后台执行。否则被放弃的执行会继续在后台跑完，
+          // 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务
+          try {
+            await (
+              stream as unknown as {
+                cancel?: (reason: string) => Promise<void>;
+              }
+            ).cancel?.("client aborted");
+          } catch {
+            // cancel 失败可忽略：脏标记已打，最坏情况是后台执行自行结束
+          }
           break;
         }
 
@@ -481,6 +511,13 @@ export class ReactAgentService {
     }
 
     res.end();
+    } finally {
+      // 无论正常结束还是中断退出：标记服务端流程已结束并移除 close 监听
+      // 注意：res.end() 到 close 事件触发之间存在异步延迟，finished 须在
+      // 函数退出（finally）前置 true，确保正常结束不会误标脏
+      finished = true;
+      res.removeListener("close", onClose);
+    }
   }
 
   /**
