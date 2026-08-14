@@ -10,7 +10,8 @@
  */
 
 export interface ToolCallItem {
-  id: number;
+  /** 渲染 key 用，必须是全局唯一值（随机 UUID），不能用自增序号（HMR/重放会撞 key） */
+  id: string;
   name: string;
   status: "running" | "done" | "error";
   time: string;

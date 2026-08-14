@@ -172,8 +172,7 @@ export default function App() {
   // 打断能力：resume 请求的 AbortController（发送新消息时中断正在进行的 resume）
   const resumeAbortRef = useRef<AbortController | null>(null);
 
-  // 工具调用序号（tool_start 时递增）与 data 数组已处理位置
-  const toolIdRef = useRef(0);
+  // data 数组已处理位置（发送新消息时归零，配合 setData(undefined) 使用）
   const processedDataCount = useRef(0);
 
   /** 当前正在累积文本的 assistant 消息 id（null = 没有开放的分段） */
@@ -267,10 +266,12 @@ export default function App() {
         currentReasoningIdRef.current = null;
 
         const name = event.name ?? "unknown";
-        toolIdRef.current += 1;
+        // 渲染 key 用随机 UUID：不能用自增序号——打断发送新消息时旧流
+        // 残留事件会重放（processedDataCount 已归零），HMR 时 ref 会随组件
+        // 重执行归零而 useState 保留，自增 id 会与旧记录撞 key（React 警告）
         setToolCalls((prev) => [
           ...prev,
-          { id: toolIdRef.current, name, status: "running", time: nowTime() },
+          { id: crypto.randomUUID(), name, status: "running", time: nowTime() },
         ]);
         break;
       }

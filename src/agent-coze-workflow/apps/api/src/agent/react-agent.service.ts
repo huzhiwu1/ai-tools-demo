@@ -122,6 +122,15 @@ const llm = new ChatOpenAI({
       "https://api.deepseek.com/v1",
   },
   temperature: 0.2,
+  // 思考模型（deepseek-v4-flash）的 reasoning 与正文共用 completion tokens，
+  // 官网默认 4K 上限会把含工具调用参数的输出截断，导致工具参数解析失败后
+  // 错误反馈给 LLM 反复重试（观感死循环）。实测官网接受 8192，显式放大。
+  // 注意：若模型切回 deepseek-chat 等非思考模型，此值同样安全。
+  maxTokens: 8192,
+  // 显式限制超时与重试：默认 maxRetries=6 会把单次失败放大为
+  // 6 次静默重试（每次等满超时），前端表现为长时间无事件、一直转圈
+  timeout: 60_000,
+  maxRetries: 1,
 });
 
 // ============================================
@@ -349,168 +358,174 @@ export class ReactAgentService {
       // 外层 try：确保 finally 在一切退出路径（含提前 return）前执行，
       // 移除 close 监听器避免泄漏
       try {
-      // PregelOptions extends RunnableConfig，config 字段直接平铺进 options
-      const stream = graph.streamEvents(input, {
-        version: "v2",
-        ...config,
-      });
+        // PregelOptions extends RunnableConfig，config 字段直接平铺进 options
+        const stream = graph.streamEvents(input, {
+          version: "v2",
+          ...config,
+        });
 
-      for await (const event of stream) {
-        // 客户端断开时停止迭代（兜底检测，close 事件可能已打标）
-        if (res.destroyed) {
-          // 客户端断开（用户打断）：graph 执行中途放弃，checkpoint 留下脏状态
-          // 标记会话，下次 chat 时重建 graph 清空 checkpoint，避免上下文混乱
-          session.graphDirty = true;
-          // 主动取消底层 graph 执行：streamEvents 返回的流支持 cancel()，
-          // 通过 AbortSignal 终止后台执行。否则被放弃的执行会继续在后台跑完，
-          // 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务
-          try {
-            await (
-              stream as unknown as {
-                cancel?: (reason: string) => Promise<void>;
-              }
-            ).cancel?.("client aborted");
-          } catch {
-            // cancel 失败可忽略：脏标记已打，最坏情况是后台执行自行结束
-          }
-          break;
-        }
-
-        switch (event.event) {
-          case "on_chat_model_stream": {
-            // LLM 文本增量
-            const chunk = event.data?.chunk as
-              | ({
-                  content?: unknown;
-                  additional_kwargs?: Record<string, unknown>;
-                } & Record<string, unknown>)
-              | undefined;
-
-            // DeepSeek 思考内容（reasoning_content，流式增量）
-            // 单独输出 reasoning_delta 事件，前端在思考气泡里流式展示
-            const reasoning = chunk?.additional_kwargs?.reasoning_content;
-            if (typeof reasoning === "string" && reasoning.length > 0) {
-              res.write(
-                `d:${JSON.stringify({ type: "reasoning_delta", content: reasoning })}\n`,
-              );
+        for await (const event of stream) {
+          // 客户端断开时停止迭代（兜底检测，close 事件可能已打标）
+          if (res.destroyed) {
+            // 客户端断开（用户打断）：graph 执行中途放弃，checkpoint 留下脏状态
+            // 标记会话，下次 chat 时重建 graph 清空 checkpoint，避免上下文混乱
+            session.graphDirty = true;
+            // 主动取消底层 graph 执行：streamEvents 返回的流支持 cancel()，
+            // 通过 AbortSignal 终止后台执行。否则被放弃的执行会继续在后台跑完，
+            // 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务
+            try {
+              await (
+                stream as unknown as {
+                  cancel?: (reason: string) => Promise<void>;
+                }
+              ).cancel?.("client aborted");
+            } catch {
+              // cancel 失败可忽略：脏标记已打，最坏情况是后台执行自行结束
             }
+            break;
+          }
 
-            if (chunk?.content) {
-              const content =
-                typeof chunk.content === "string"
-                  ? chunk.content
-                  : Array.isArray(chunk.content)
+          switch (event.event) {
+            case "on_chat_model_stream": {
+              // LLM 文本增量
+              const chunk = event.data?.chunk as
+                | ({
+                    content?: unknown;
+                    additional_kwargs?: Record<string, unknown>;
+                  } & Record<string, unknown>)
+                | undefined;
+
+              // DeepSeek 思考内容（reasoning_content，流式增量）
+              // 单独输出 reasoning_delta 事件，前端在思考气泡里流式展示
+              const reasoning = chunk?.additional_kwargs?.reasoning_content;
+              if (typeof reasoning === "string" && reasoning.length > 0) {
+                res.write(
+                  `d:${JSON.stringify({ type: "reasoning_delta", content: reasoning })}\n`,
+                );
+              }
+
+              if (chunk?.content) {
+                const content =
+                  typeof chunk.content === "string"
                     ? chunk.content
-                        .map((c: unknown) =>
-                          typeof c === "object" &&
-                          c !== null &&
-                          "text" in (c as Record<string, unknown>)
-                            ? (c as Record<string, unknown>).text
-                            : "",
-                        )
-                        .join("")
-                    : "";
-              if (content) {
-                res.write(`0:${JSON.stringify(content)}\n`);
+                    : Array.isArray(chunk.content)
+                      ? chunk.content
+                          .map((c: unknown) =>
+                            typeof c === "object" &&
+                            c !== null &&
+                            "text" in (c as Record<string, unknown>)
+                              ? (c as Record<string, unknown>).text
+                              : "",
+                          )
+                          .join("")
+                      : "";
+                if (content) {
+                  res.write(`0:${JSON.stringify(content)}\n`);
+                }
               }
+              break;
             }
-            break;
-          }
 
-          case "on_tool_start": {
-            // 工具开始
-            const toolName = event.name ?? "unknown";
-            const toolInput = event.data?.input ?? {};
-            this.logger.debug(`[Agent] tool_start ${toolName}`);
-            res.write(
-              `d:${JSON.stringify({ type: "tool_start", name: toolName, input: toolInput })}\n`,
-            );
-            break;
-          }
+            case "on_tool_start": {
+              // 工具开始
+              const toolName = event.name ?? "unknown";
+              const toolInput = event.data?.input ?? {};
+              // info 级别：默认可见，用于定位 Agent 循环/卡住的步骤（debug 不输出）
+              this.logger.log(
+                `[Agent] tool_start ${toolName} ${JSON.stringify(toolInput).slice(0, 200)}`,
+              );
+              res.write(
+                `d:${JSON.stringify({ type: "tool_start", name: toolName, input: toolInput })}\n`,
+              );
+              break;
+            }
 
-          case "on_tool_end": {
-            // 工具结束
-            const toolName = event.name ?? "unknown";
-            const output = event.data?.output;
-            const toolContent = this.extractToolContent(output);
-            this.logger.debug(
-              `[Agent] tool_end ${toolName} ${toolContent.slice(0, 200)}`,
-            );
-            res.write(
-              `d:${JSON.stringify({ type: "tool_end", name: toolName, output: toolContent })}\n`,
-            );
-            break;
+            case "on_tool_end": {
+              // 工具结束
+              const toolName = event.name ?? "unknown";
+              const output = event.data?.output;
+              const toolContent = this.extractToolContent(output);
+              // info 级别：默认可见，用于定位 Agent 循环/卡住的步骤（debug 不输出）
+              this.logger.log(
+                `[Agent] tool_end ${toolName} ${toolContent.slice(0, 200)}`,
+              );
+              res.write(
+                `d:${JSON.stringify({ type: "tool_end", name: toolName, output: toolContent })}\n`,
+              );
+              break;
+            }
           }
         }
-      }
 
-      complete = true;
-    } catch (e) {
-      // 流异常
-      const msg = (e as Error).message;
-      this.logger.error(`[Agent] ✗ ${msg}`);
-      // 识别递归上限错误 → 提示用户 Agent 循环过深
-      const isRecursion =
-        msg.includes("Recursion limit") || msg.includes("recursion_limit");
-      res.write(
-        `d:${JSON.stringify({
-          type: "error",
-          message: isRecursion
-            ? "Agent 执行步骤过多（可能陷入循环），已停止。请简化需求或提供更明确的信息后重试。"
-            : msg,
-        })}\n`,
-      );
-      res.end();
-      return;
-    }
-
-    // 客户端断开时不继续处理
-    if (res.destroyed) {
-      return;
-    }
-
-    if (!complete) {
-      return;
-    }
-
-    // 6. 流结束后检查是否处于 interrupt 状态
-    try {
-      const state = await graph.getState(config);
-      const stateValues = state.values as Record<string, unknown> | undefined;
-
-      // 检查 interrupt 值：LangGraph 将 interrupt 数据存储在 state.tasks 中
-      // （实测：state.tasks[].interrupts[].value 含 interrupt 传入的值）
-      const interruptData = this.extractInterruptData(state);
-
-      if (interruptData) {
-        // 处于 interrupt 状态，推送问题给前端
-        this.logger.log(
-          `[Agent] interrupt: ${interruptData.question.slice(0, 100)}`,
-        );
+        complete = true;
+      } catch (e) {
+        // 流异常
+        const msg = (e as Error).message;
+        this.logger.error(`[Agent] ✗ ${msg}`);
+        // 识别递归上限错误 → 提示用户 Agent 循环过深
+        const isRecursion =
+          msg.includes("Recursion limit") || msg.includes("recursion_limit");
         res.write(
-          `d:${JSON.stringify({ type: "interrupt", ...interruptData, sessionId })}\n`,
+          `d:${JSON.stringify({
+            type: "error",
+            message: isRecursion
+              ? "Agent 执行步骤过多（可能陷入循环），已停止。请简化需求或提供更明确的信息后重试。"
+              : msg,
+          })}\n`,
         );
         res.end();
         return;
       }
 
-      // 无 interrupt，提取最终消息
-      this.logger.log("[Agent] done");
-      const finalContent = this.extractFinalContent(stateValues);
-      if (session) {
-        session.messages.push({ role: "assistant", content: finalContent });
+      // 客户端断开时不继续处理
+      if (res.destroyed) {
+        return;
       }
 
-      res.write(`d:${JSON.stringify({ type: "done", final: finalContent })}\n`);
-      // 流结束标记（Data Stream 协议 e: 事件）
-      res.write(`e:${JSON.stringify({ type: "finish" })}\n`);
-    } catch (e) {
-      res.write(
-        `d:${JSON.stringify({ type: "error", message: `状态检测失败: ${(e as Error).message}` })}\n`,
-      );
-    }
+      if (!complete) {
+        return;
+      }
 
-    res.end();
+      // 6. 流结束后检查是否处于 interrupt 状态
+      try {
+        const state = await graph.getState(config);
+        const stateValues = state.values as Record<string, unknown> | undefined;
+
+        // 检查 interrupt 值：LangGraph 将 interrupt 数据存储在 state.tasks 中
+        // （实测：state.tasks[].interrupts[].value 含 interrupt 传入的值）
+        const interruptData = this.extractInterruptData(state);
+
+        if (interruptData) {
+          // 处于 interrupt 状态，推送问题给前端
+          this.logger.log(
+            `[Agent] interrupt: ${interruptData.question.slice(0, 100)}`,
+          );
+          res.write(
+            `d:${JSON.stringify({ type: "interrupt", ...interruptData, sessionId })}\n`,
+          );
+          res.end();
+          return;
+        }
+
+        // 无 interrupt，提取最终消息
+        this.logger.log("[Agent] done");
+        const finalContent = this.extractFinalContent(stateValues);
+        if (session) {
+          session.messages.push({ role: "assistant", content: finalContent });
+        }
+
+        res.write(
+          `d:${JSON.stringify({ type: "done", final: finalContent })}\n`,
+        );
+        // 流结束标记（Data Stream 协议 e: 事件）
+        res.write(`e:${JSON.stringify({ type: "finish" })}\n`);
+      } catch (e) {
+        res.write(
+          `d:${JSON.stringify({ type: "error", message: `状态检测失败: ${(e as Error).message}` })}\n`,
+        );
+      }
+
+      res.end();
     } finally {
       // 无论正常结束还是中断退出：标记服务端流程已结束并移除 close 监听
       // 注意：res.end() 到 close 事件触发之间存在异步延迟，finished 须在
