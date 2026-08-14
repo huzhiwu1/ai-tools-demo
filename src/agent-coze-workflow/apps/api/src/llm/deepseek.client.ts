@@ -88,6 +88,9 @@ export class DeepSeekClient {
       maxTokens: 8192,
       // 默认 60 秒：思考模型（deepseek-v4-flash）规划/代码生成耗时常超 10 秒
       timeout: config?.timeout ?? 60_000,
+      // 思考模型 reasoning_content 会吃掉大量 token 预算，必须显式调大
+      // 否则结构化输出（规划 JSON）被截断（deepseek-v4-flash 最大输出 32K）
+      maxTokens: 16384,
     });
   }
 
