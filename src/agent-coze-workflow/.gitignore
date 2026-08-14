@@ -5,3 +5,4 @@ uploads/
 *.log
 .turbo/
 .env.bak*
+*.tsbuildinfo

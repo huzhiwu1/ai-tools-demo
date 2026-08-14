@@ -4,7 +4,7 @@
     "description": "Coze 工作流自动生成 Agent - 基于 LangChain + LangGraph 的 AI Agent 项目",
     "packageManager": "pnpm@10.15.1",
     "scripts": {
-        "postinstall": "turbo run build --force",
+        "postinstall": "node scripts/clean-tsbuildinfo.mjs && turbo run build --force",
         "dev": "turbo run dev",
         "dev:api": "pnpm --filter @coze-workflow/api dev",
         "dev:web": "pnpm --filter @coze-workflow/web dev",
