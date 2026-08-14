@@ -75,6 +75,13 @@ export interface WorkflowPlan {
   modules: string[];
   /** 预估复杂度 */
   estimatedComplexity: "simple" | "medium" | "complex";
+  /**
+   * 澄清请求（两段式规划）：输入/输出结构不明确时由 LLM 提出，
+   * 调用方（Agent）据此通过 clarify_question 工具向用户提问。
+   */
+  _clarification?: {
+    questions: Array<{ field: string; question: string; hint?: string }>;
+  };
 }
 
 /** 规划步骤 */
