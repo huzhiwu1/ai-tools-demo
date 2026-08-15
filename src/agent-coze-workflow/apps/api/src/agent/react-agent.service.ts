@@ -174,9 +174,9 @@ export class ReactAgentService {
       tools: [...ALL_TOOLS],
       checkpointer,
       prompt: new SystemMessage(SYSTEM_PROMPT),
-      // 提高递归上限：默认 25 步，ReAct 循环含多次工具调用容易撞上限
-      // 40 步足够正常流程（plan+generate+save+validate+1~2次迭代），又不至于无限跑
-      recursionLimit: 40,
+      // 提高递归上限：默认 25 步，ReAct 循环含多次工具调用容易撞上限。
+      // 100 步容纳内部用户场景（update 失败→重建→save 超时重试→validate 多用例叠加步数），40 太紧
+      recursionLimit: 100,
     } as Parameters<typeof createReactAgent>[0] & { recursionLimit: number });
   }
 
@@ -256,7 +256,7 @@ export class ReactAgentService {
     // 5. 流式执行
     const config = {
       configurable: { thread_id: finalSessionId },
-      recursionLimit: 40,
+      recursionLimit: 100,
     } as RunnableConfig & { recursionLimit: number };
 
     await this.streamAgentEvents(
@@ -302,7 +302,7 @@ export class ReactAgentService {
 
     const config = {
       configurable: { thread_id: sessionId },
-      recursionLimit: 40,
+      recursionLimit: 100,
     } as RunnableConfig & { recursionLimit: number };
 
     // 若有 fileIds，还原文件名与磁盘路径拼入 answer 文本让 LLM 感知文件并

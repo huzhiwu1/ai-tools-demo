@@ -47,7 +47,33 @@ const CODE_SPEC_PROMPT = `你是 Coze 工作流代码节点 Python 代码生成�
 4. 输入兼容：上游可能把 object 序列化成字符串传入，用 if isinstance(x, str): json.loads(x) 防御
 5. 用户参考数据（如歌词库、歌曲列表）写成代码内常量（如 SONG_LYRICS = {...}）
 6. 输出必须是 JSON 可序列化的数据
-7. code 字段的值只包含 Python 代码本身，不要 Markdown 代码块标记、代码注释之外的文本解释`;
+7. code 字段的值只包含 Python 代码本身，不要 Markdown 代码块标记、代码注释之外的文本解释
+8. Args 和 Output 是平台内置类型，禁止自定义同名类；返回值必须用 ret: Output = {...} dict 赋值，禁止 Output(...) 构造`;
+
+/** 平台代码节点规范违规检测（生成时拦截，避免运行时 EOF/平台报错） */
+const CODE_VIOLATIONS: Array<{ pattern: RegExp; msg: string }> = [
+  {
+    pattern: /^class\s+Args\b/m,
+    msg: "禁止自定义 Args 类（平台已内置 Args）",
+  },
+  {
+    pattern: /^class\s+Output\b/m,
+    msg: "禁止自定义 Output 类（平台已内置 Output，返回值应为 dict 赋值 ret: Output = {...}）",
+  },
+  {
+    pattern: /ret\s*=\s*Output\s*\(/,
+    msg: "返回值必须是 dict 赋值（ret: Output = {...}），不能 Output(...) 构造",
+  },
+  {
+    pattern: /```/,
+    msg: "代码不能包含 Markdown 代码块围栏",
+  },
+];
+
+/** 检测代码中的平台规范违规项 */
+function findCodeViolations(code: string): string[] {
+  return CODE_VIOLATIONS.filter((v) => v.pattern.test(code)).map((v) => v.msg);
+}
 
 export class CodeGenerator {
   private readonly logger = new Logger("CodeGenerator");
@@ -84,16 +110,42 @@ export class CodeGenerator {
         CODE_SPEC_PROMPT,
         prompt,
       );
-      if (result.code && result.code.trim()) {
-        return result.code.trim();
+      let code = result.code?.trim() ?? "";
+      if (!code) {
+        // LLM 返回空代码：降级
+        this.logger.warn("[CodeGenerator] LLM 返回空代码，使用兑底模板");
+        return CodeGenerator.buildFallbackCode(inputs);
       }
-      // LLM 返回空代码：降级
-      this.logger.warn("[CodeGenerator] LLM 返回空代码，使用兜底模板");
-      return CodeGenerator.buildFallbackCode(inputs);
+
+      // 静态校验：违规 → 追加违规说明到 prompt 重试一次
+      const violations = findCodeViolations(code);
+      if (violations.length > 0) {
+        this.logger.warn(
+          `[CodeGenerator] 生成代码违规，重试: ${violations.join("; ")}`,
+        );
+        const retryPrompt = `${prompt}\n\n【上轮生成被拒绝】违规项：${violations.join("；")}\n请修正后重新生成，严格遵守平台代码节点规范（Args/Output 为平台内置类型，禁止自定义；返回值用 ret: Output = {...} dict 赋值）。`;
+        const retry = await this.client.chatStructured(
+          CodeOutputSchema,
+          CODE_SPEC_PROMPT,
+          retryPrompt,
+        );
+        const retryCode = retry.code?.trim() ?? "";
+        const retryViolations = findCodeViolations(retryCode);
+        if (retryViolations.length === 0) {
+          code = retryCode;
+        } else {
+          this.logger.warn(
+            `[CodeGenerator] 重试仍违规，使用兑底模板: ${retryViolations.join("; ")}`,
+          );
+          return CodeGenerator.buildFallbackCode(inputs);
+        }
+      }
+
+      return code;
     } catch (e) {
       // LLM 调用失败：降级为可运行模板，不影响主流程
       this.logger.warn(
-        `[CodeGenerator] 代码生成失败，使用兜底模板: ${(e as Error).message}`,
+        `[CodeGenerator] 代码生成失败，使用兑底模板: ${(e as Error).message}`,
       );
       return CodeGenerator.buildFallbackCode(inputs);
     }

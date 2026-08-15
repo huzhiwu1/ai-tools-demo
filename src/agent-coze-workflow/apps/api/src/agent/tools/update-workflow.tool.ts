@@ -34,6 +34,7 @@ import { workflowCache } from "../workflow-cache";
 import { cozeClient } from "./coze-client";
 import {
   incrementIteration,
+  peekIteration,
   MAX_ITERATIONS,
   iterationLimitMessage,
 } from "./iteration-counter";
@@ -47,11 +48,14 @@ const UpdateInstructionSchema = z.object({
       "condition",
       "threshold",
       "data",
+      "output_field",
       "other",
     ])
     .describe(
       "修改类型：llm_prompt=改 LLM 节点提示词 / code_logic=改代码节点逻辑 / " +
-        "condition=改条件分支 / threshold=调阈值 / data=更新数据常量 / other=其他",
+        "condition=改条件分支 / threshold=调阈值 / data=更新数据常量 / " +
+        "output_field=改节点输出字段名或结束节点返回变量（如把输出从 lyrics 改为 result） / " +
+        "other=其他",
     ),
   target: z
     .string()
@@ -105,7 +109,8 @@ async function parseInstruction(
     return await client.chatStructured(
       UpdateInstructionSchema,
       "你是工作流修改指令解析器。将用户的自然语言修改指令解析为结构化修改指令。" +
-        "type 必须严格从 [llm_prompt, code_logic, condition, threshold, data, other] 中选择一项；" +
+        "type 必须严格从 [llm_prompt, code_logic, condition, threshold, data, output_field, other] 中选择一项；" +
+        "output_field 用于改节点输出字段名/结束节点返回变量（如「把输出从 lyrics 改为 result」）；" +
         "target 写工作流节点摘要中存在的节点标识；" +
         "content 写完整的修改内容（不要省略）。无法归类的指令用 type=other。",
       `当前工作流节点摘要：${JSON.stringify(summarizeNodes(workflow))}\n\n` +
@@ -154,8 +159,8 @@ function replaceThresholdText(
 
 export const updateWorkflowTool = tool(
   async ({ workflow, fixInstruction, workflowId }) => {
-    // 迭代计数：每次调用 +1，超过上限直接返回错误，不执行修改
-    const iteration = incrementIteration(workflowId);
+    // 迭代计数：开头只读检查（peek，不递增），修改成功后才计数
+    const iteration = peekIteration(workflowId);
     if (iteration > MAX_ITERATIONS) {
       return iterationLimitMessage(workflowId);
     }
@@ -258,17 +263,8 @@ export const updateWorkflowTool = tool(
           if (node.type !== "code") {
             return `工作流更新失败: 节点 ${targetName} 不是代码节点（type=${String(node.type)}）`;
           }
-          // 仅当明确要求"重写逻辑/重写代码"时才允许调 CodeGenerator（防幻觉）
-          const isRewriteRequest =
-            /重写|改.*逻辑|新.*算法|替换.*逻辑|修改.*实现|rewrite|new.*algorithm/i.test(
-              instruction.content + fixInstruction,
-            );
-          if (!isRewriteRequest) {
-            return (
-              `工作流更新失败: 修改类型为 code_logic 但指令未明确要求重写逻辑。` +
-              `如只需改阈值/数据常量请用 threshold/data 类型。`
-            );
-          }
+          // 放宽：用户明确指向该代码节点并给出修改内容即执行。
+          // 原逻辑要求"重写/改逻辑"关键词，实测 LLM 说"把 Output 的 key 改掉"不触发导致失败。
           // 无 referenceData 时不重写代码节点（防止 LLM 凭空生成全新代码）
           const refDataStr = node.referenceData as
             | Record<string, string>
@@ -355,6 +351,69 @@ export const updateWorkflowTool = tool(
           changes.push(`节点 ${targetName} 数据常量已更新`);
           break;
         }
+
+        case "output_field": {
+          // 目标：改节点 outputs 声明里的字段名，或结束节点 outputVariables 引用
+          // content 格式约定：`旧字段名 -> 新字段名`（或 `改为`）
+          const match = /([\w.]+)\s*(?:->|→|改为)\s*([\w.]+)/.exec(
+            instruction.content,
+          );
+          if (!match) {
+            return (
+              `工作流更新失败: output_field 指令格式应为「旧字段名 -> 新字段名」` +
+              `（如 lyrics -> result），收到: ${instruction.content}`
+            );
+          }
+          const [, oldName, newName] = match;
+
+          // 场景 A：改节点 outputs 声明（含结束节点 outputVariables）
+          const outputs = node.outputs as Array<{ name?: string }> | undefined;
+          if (Array.isArray(outputs)) {
+            let changed = false;
+            for (const o of outputs) {
+              if (o.name === oldName) {
+                o.name = newName;
+                changed = true;
+              }
+            }
+            if (changed) {
+              changes.push(`节点 ${targetName} 输出字段 ${oldName} -> ${newName}`);
+              break;
+            }
+          }
+
+          // 结束节点：outputVariables 是 [{name, value}]，同样按 name 匹配替换
+          const outputVars = node.outputVariables as
+            | Array<{ name?: string }>
+            | undefined;
+          if (Array.isArray(outputVars)) {
+            let changed = false;
+            for (const v of outputVars) {
+              if (v.name === oldName) {
+                v.name = newName;
+                changed = true;
+              }
+            }
+            if (changed) {
+              changes.push(
+                `节点 ${targetName} 结束输出变量 ${oldName} -> ${newName}`,
+              );
+              break;
+            }
+          }
+
+          // 场景 B：改代码节点内部返回值（代码里 ret: Output = {旧字段: ...} → 新字段）
+          // 仅当节点有 code 字段时做文本替换；只替换标识符，字符串字面量里的
+          // 歌词内容由 LLM 的 content 精确控制（content 只写字段名对，不写歌词）
+          if (typeof node.code === "string" && node.code.includes(oldName)) {
+            const oldEscaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            node.code = node.code.replace(new RegExp(oldEscaped, "g"), newName);
+            changes.push(`节点 ${targetName} 代码内 ${oldName} 已替换为 ${newName}`);
+            break;
+          }
+
+          return `工作流更新失败: 节点 ${targetName} 中未找到输出字段 ${oldName}`;
+        }
       }
 
       if (changes.length === 0) {
@@ -365,6 +424,9 @@ export const updateWorkflowTool = tool(
       if (fromCache) {
         workflowCache.markDirty(workflowId);
       }
+
+      // 迭代计数：只对成功修改计（失败指令不消耗上限）
+      incrementIteration(workflowId);
 
       // 句柄化：不再返回完整 workflow，只返回 changes 摘要 + 保存提示
       return (
@@ -380,7 +442,8 @@ export const updateWorkflowTool = tool(
     description:
       "根据归因分析结果修改工作流节点。传入 workflowId + 修改指令（自然语言即可，如「把相似度阈值从 0.8 调到 0.6」），" +
       "工具会用 LLM 自动理解意图并结构化执行，支持修改 LLM 节点提示词、" +
-      "代码节点逻辑（自动生成 Python 代码）、条件分支、阈值、数据常量。" +
+      "代码节点逻辑（自动生成 Python 代码）、条件分支、阈值、数据常量、" +
+      "输出字段名/结束节点返回变量（如「把输出从 lyrics 改为 result」）。" +
       "工作流 JSON 从服务端缓存自动获取（句柄化，推荐不传 workflow 参数，避免背诵大 JSON）。" +
       "返回 changes 摘要（不再返回完整 workflow）。" +
       "修改后必须调用 save_to_coze（传 workflowId）保存，保存成功才生效（update 只改缓存不落平台）。",

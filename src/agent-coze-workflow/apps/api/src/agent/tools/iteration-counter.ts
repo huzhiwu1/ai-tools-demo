@@ -22,6 +22,11 @@ export function getIteration(workflowId: string): number {
   return iterationCounts.get(workflowId) ?? 0;
 }
 
+/** 只读检查当前迭代次数（不递增），供开头检查上限用 */
+export function peekIteration(workflowId: string): number {
+  return getIteration(workflowId);
+}
+
 /** 迭代计数 +1，返回最新次数 */
 export function incrementIteration(workflowId: string): number {
   const next = getIteration(workflowId) + 1;

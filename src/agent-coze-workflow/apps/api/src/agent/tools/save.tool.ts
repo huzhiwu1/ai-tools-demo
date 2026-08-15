@@ -46,14 +46,38 @@ function sanitizeWorkflowName(name: string): string {
 }
 
 /**
- * 创建平台工作流，遇"名称已存在"时自动加 _2/_3 后缀重试（最多 3 次）
+ * 按名称搜索平台工作流，返回第一个同名的工作流
  *
- * 名称冲突是常见场景（同一需求重复保存），兜底自动改名避免把冲突抛给 Agent
- * 瞎转；若 Agent 想保留特定名称，可用 rename_workflow 先改名再保存。
+ * 用于 save 超时/重名时复用已存在的工作流（避免残留空壳 + 平台产生 _2 副本）。
+ *
+ * @param name - 工作流名称（与创建时同名比较）
+ * @returns 同名工作流的 workflowId；查询失败或不存在返回 null（不阻塞主流程）
+ */
+async function findWorkflowByName(
+  name: string,
+): Promise<{ workflowId: string } | null> {
+  try {
+    const { workflows } = await cozeClient.listWorkflows(50);
+    const hit = workflows.find(
+      (w) => w.name.toLowerCase() === name.toLowerCase(),
+    );
+    return hit ? { workflowId: hit.workflowId } : null;
+  } catch {
+    return null; // 查询失败不阻塞，走原逻辑
+  }
+}
+
+/**
+ * 创建平台工作流：遇"名称已存在"或超时时复用同名工作流（走更新路径）
+ *
+ * 重名常见场景：同一需求重复保存，此前自动加 _2 后缀会残留多个副本；
+ * 超时场景：create 实际可能已成功，重试新建会产生第二个工作流。
+ * 两者都改为：查同名工作流，存在则复用其 workflowId（后续走全量更新）。
+ * 查不到同名（罕见：大小写/截断差异）时保留 _2 后缀兑底。
  *
  * @param name - 工作流名称
  * @param desc - 工作流描述
- * @returns 成功创建的 workflowId 与实际使用的名称
+ * @returns workflowId 与实际使用的名称（复用场景 usedName 用原名）
  */
 async function createWorkflowWithRetry(
   name: string,
@@ -64,25 +88,46 @@ async function createWorkflowWithRetry(
     return { workflowId, usedName: name };
   } catch (e) {
     const msg = (e as Error).message;
-    // 非重名错误直接抛
-    if (!/已存在|exist|duplicate/i.test(msg)) throw e;
 
-    // 名称冲突：自动加后缀重试（_2, _3, _4）
-    for (let i = 2; i <= 4; i++) {
-      const candidate = `${sanitizeWorkflowName(name)}_${i}`.slice(0, 50);
-      try {
-        const workflowId = await cozeClient.createWorkflow(candidate, desc);
-        console.warn(`[save_to_coze] 名称冲突，使用 ${candidate} 保存`);
-        return { workflowId, usedName: candidate };
-      } catch (e2) {
-        const m2 = (e2 as Error).message;
-        // 非重名错误直接抛（重名继续下一轮）
-        if (!/已存在|exist|duplicate/i.test(m2)) throw e2;
+    // 超时错误：create 可能已成功 → 查同名复用（避免残留空壳 + 第二个工作流）
+    if (/超时|timeout/i.test(msg)) {
+      const existing = await findWorkflowByName(name);
+      if (existing) {
+        console.warn(
+          `[save_to_coze] create 超时但同名工作流已存在，复用 ${existing.workflowId} 更新`,
+        );
+        return { workflowId: existing.workflowId, usedName: name };
       }
     }
-    throw new Error(
-      `工作流名称冲突且自动重试失败（${sanitizeWorkflowName(name)}_2 ~ _4 均占用），请用 rename_workflow 改名后重试`,
-    );
+
+    // 重名错误：先查同名，存在则复用（不再无脑 _2）
+    if (/已存在|exist|duplicate/i.test(msg)) {
+      const existing = await findWorkflowByName(name);
+      if (existing) {
+        console.warn(
+          `[save_to_coze] 名称冲突，复用同名工作流 ${existing.workflowId} 更新（不新建）`,
+        );
+        return { workflowId: existing.workflowId, usedName: name };
+      }
+      // 查不到同名（罕见：可能是大小写/截断差异）→ 保留原 _2 后缀兑底
+      for (let i = 2; i <= 4; i++) {
+        const candidate = `${sanitizeWorkflowName(name)}_${i}`.slice(0, 50);
+        try {
+          const workflowId = await cozeClient.createWorkflow(candidate, desc);
+          console.warn(`[save_to_coze] 名称冲突，使用 ${candidate} 保存`);
+          return { workflowId, usedName: candidate };
+        } catch (e2) {
+          const m2 = (e2 as Error).message;
+          // 非重名错误直接抛（重名继续下一轮）
+          if (!/已存在|exist|duplicate/i.test(m2)) throw e2;
+        }
+      }
+      throw new Error(
+        `工作流名称冲突且自动重试失败（${sanitizeWorkflowName(name)}_2 ~ _4 均占用），请用 rename_workflow 改名后重试`,
+      );
+    }
+
+    throw e;
   }
 }
 
