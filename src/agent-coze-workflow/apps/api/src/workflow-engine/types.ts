@@ -412,11 +412,20 @@ export const PlanSkeletonSchema = z
                         "boolean",
                       ])
                       .describe("输出变量类型"),
+                    source: z
+                      .string()
+                      .optional()
+                      .describe(
+                        "【结束节点专用】该输出的来源节点：填上游节点的描述关键词或输出变量名。" +
+                          "例如结束节点要输出代码节点的 result，source 写 result 或'代码'；" +
+                          "不填时系统默认接最后一个业务节点（不推荐，建议显式声明）",
+                      ),
                   }),
                 )
                 .optional()
                 .describe(
-                  "该节点输出的字段列表，下游节点 inputs 引用时用这些名字",
+                  "该节点输出的字段列表，下游节点 inputs 引用时用这些名字；" +
+                    "结束节点的 outputs.source 用于声明最终结果来自哪个节点",
                 ),
               batchMode: z
                 .enum(["single", "batch"])

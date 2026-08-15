@@ -77,6 +77,9 @@ export const PLAN_SKELETON_PROMPT = `你是 Coze 工作流需求分析器。
 - dependencies 用 steps 数组下标（从 0 开始），-1 表示依赖用户输入（start）
 - 每个 step 内嵌 contract（inputs/outputs）：变量名必须全局对齐，
   下游节点 inputs.name 必须与上游节点 outputs.name 一致
+- **结束节点（最后的 end step）contract.outputs 必须带 source**：声明最终结果来自哪个节点，
+  如 {name: "result", type: "string", source: "result"}（source 填上游输出变量名）。
+  这会决定结束节点引用哪个节点的输出，禁止省略（省略会默认接最后一个业务节点，可能接错）
 - startInputs 定义工作流入口参数（多输入时列出全部）
 - 不要输出 nodeConfig（节点业务配置由系统另行生成）
 - 只输出 JSON 对象，不要输出其他内容

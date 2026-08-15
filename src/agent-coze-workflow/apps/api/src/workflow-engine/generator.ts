@@ -485,27 +485,58 @@ export class WorkflowGenerator {
 
     // ⚠️ 修复（2026-08-16）：结束节点 outputVariables 的 value 引用回填。
     // schema-converter 优先读 outputVariables[0].value（"nodeId.outputName"），
-    // 没有才 fallback 找上游（可能误接 LLM）。这里把 value 指向拓扑最后一个业务节点
-    // 的输出（通常是最末端的 code/llm 节点），保证"结束节点输出 = 最终业务结果"。
-    // 仅当 outputVariables 有 name 但 value 为空时回填（显式 value 优先保留）。
+    // 没有才 fallback 找上游（可能误接 LLM）。
+    // 优先级：
+    //   1. end step 的 contract.outputs[].source 显式声明（LLM 决定接谁，如 source="result"）
+    //   2. 匹配不到时 fallback 最后一个业务节点（兜底）
     if (endNode) {
       const endVars = (endNode as unknown as {
         outputVariables?: Array<{ name?: string; value?: string }>;
       })?.outputVariables;
+      // 找 end step 的 contract（LLM 声明的输出来源）
+      const endStep = plan.steps.find((s) => s.nodeType === "end");
+      const endContractOutputs =
+        (endStep as unknown as {
+          contract?: {
+            outputs?: Array<{ name?: string; source?: string }>;
+          };
+        })?.contract?.outputs ?? [];
+
       if (endVars && endVars.length > 0) {
         const businessNodes = cozeNodes.filter(
           (n) => n.type !== "start" && n.type !== "end",
         );
         const lastBusiness = businessNodes[businessNodes.length - 1];
-        if (lastBusiness) {
-          const lastOutput =
-            (lastBusiness as unknown as {
-              outputs?: Array<{ name?: string }>;
-            })?.outputs?.[0]?.name ?? "output";
-          for (const v of endVars) {
-            if (v.name && !v.value) {
-              v.value = `${lastBusiness.id}.${lastOutput}`;
-            }
+
+        for (let i = 0; i < endVars.length; i++) {
+          const v = endVars[i];
+          if (!v.name || v.value) continue;
+
+          // 1) 优先按 source 匹配：source 是上游输出变量名（如 "result"）
+          const declaredSource = endContractOutputs[i]?.source;
+          let targetNode: CozeNode | undefined;
+          let targetOutput = "output";
+          if (declaredSource) {
+            targetNode = businessNodes.find((n) => {
+              const outs = (n as unknown as {
+                outputs?: Array<{ name?: string }>;
+              })?.outputs;
+              return outs?.some((o) => o.name === declaredSource);
+            });
+            targetOutput = declaredSource;
+          }
+
+          // 2) fallback：最后一个业务节点（无 source 或匹配不到）
+          if (!targetNode && lastBusiness) {
+            targetNode = lastBusiness;
+            targetOutput =
+              (lastBusiness as unknown as {
+                outputs?: Array<{ name?: string }>;
+              })?.outputs?.[0]?.name ?? "output";
+          }
+
+          if (targetNode) {
+            v.value = `${targetNode.id}.${targetOutput}`;
           }
         }
       }
