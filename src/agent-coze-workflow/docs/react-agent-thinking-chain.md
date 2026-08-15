@@ -1,7 +1,36 @@
 # LLM ReAct 思考链路全景图（含代码映射）
 
 > 配套《Coze 工作流 Agent 项目 · 深度阅读手册》使用。本文把「一次需求从进来到最后交付」的完整思考链路画出来，每个节点标注对应代码文件与方法名，包含澄清、失败、迭代、凭证、打断等所有分支。
-> 项目：ai-tools-demo/src/agent-coze-workflow（2026-08-15 快照）
+> 项目：ai-tools-demo/src/agent-coze-workflow（2026-08-16 更新：新增第八章「Agent 静默停止（done）故障分析」）
+
+---
+
+## 〇、ReAct 循环终止条件（源码级事实，排查一切“Agent 半路停了”的先验）
+
+**LangGraph `createReactAgent` 的循环结束只有一种可能**（@langchain/langgraph@1.4.9 `react_agent_executor.js`）：
+
+```js
+// react_agent_executor.js:300-303（shouldContinue 路由）
+const lastMessage = messages[messages.length - 1];
+if (!isAIMessage(lastMessage) || !lastMessage.tool_calls?.length) {
+    return END; // ← Agent 循环在这里结束
+}
+```
+
+**推论（排查 Agent 停止时的判定顺序）：**
+
+1. 看到 `[Agent] done`（不是 `✗` 错误、不是 interrupt）→ **LLM 正常返回了一条没有 tool_calls 的 AI 消息**，LangGraph 判定任务完成。
+2. 工具参数解析失败**不会**静默结束：`tool_node.js:216-220` 会把解析错误作为 error ToolMessage 回灌 LLM 重试（表现为反复重试或报错，而不是干净 done）。
+3. 因此“Agent 跑到一半停了”的本质是：**LLM 自己决定不再调用工具**（输出无 tool_calls 的最终消息）——不是截断、不是异常、不是中断。
+
+**什么会让 LLM 决定“不调工具了”？**（按常见度）
+
+- ① 认为任务已完成（误判：规划完 = 任务完）
+- ② 上下文过长导致指令遵循退化（模型“忘记”后续步骤）
+- ③ 下一步工具参数过大（要背诵大 JSON），模型输出时自动放弃/质量崩
+- ④ 需要更多信息但没走 clarify（提示词没约束住）
+
+具体案例分析见第八章。
 
 ---
 
@@ -226,3 +255,58 @@ flowchart TD
 - 已讨论方向：改为**行式 DSL**（WORKFLOW / INPUT / NODE / EDGE 指令，节点 id 引用，行级容错），LLM 只输出节点类型 + 输入输出 + 连接关系。
 - 状态：设计讨论已记录（memory/2026-08-15.md），**未落地**；下一步建议先用 codex 实测两种格式的 LLM 输出正确率再定方案。
 - 注意：DSL 落地只替换 planner 输出格式 + 新增 parser，本链路 N5 之后全部节点不受影响。
+
+---
+
+## 八、故障分析：Agent 在 plan_workflow 之后静默 done（2026-08-16 真实日志复盘）
+
+### 8.1 现象
+
+```
+45:35  plan_workflow 第①次（Stage1+Stage2 完成）→ name=Song_Recognition_Workflow
+45:46  plan_workflow 第②次（重新规划）→ name=audio_song_recognition_matcher
+45:52  第二次 plan 完成
+46:02  [Agent] done ← 停在这里，没有 generate_workflow / save / 澄清
+```
+
+### 8.2 链路定位（按〇章判定顺序）
+
+1. `[Agent] done` 而非 `[Agent] ✗` 或 interrupt → **LLM 正常返回了无 tool_calls 的 AI 消息**，LangGraph `shouldContinue` 返回 END。
+2. 不是工具参数解析失败（那会走 tool_node catch 回灌重试，表现为重试循环/报错）。
+3. 不是 recursionLimit（超限会走 streamAgentEvents catch 发 `d:error`）。
+4. 结论：**主 LLM 在第二次 plan 完成后，自己决定不再调用下一个工具**。
+
+### 8.3 根因链（两条叠加）
+
+**根因 A：上下文被撑爆（指令遵循退化）**
+
+- `get_platform_facts` 返回 63301 字符模型列表（platform-facts.tool.ts `result.models = models.value` 全量塞，含 model_quota/model_params/model_desc）。
+- 加上：两次 plan 完整输出 + 上传文件内容（xlsx 表格 + 歌词 md 全文）。
+- LLM 上下文非常臃肿 → 主 LLM 在“下一步该干什么”上遵循退化 → 输出收尾文本而非工具调用。
+
+**根因 B：generate_workflow 背诵模式（下一步动作过重）**
+
+- 第二次 plan 输出 WorkflowPlan 很大（含 nodeConfig）。
+- `generate_workflow` schema 要求 LLM **重新输出完整 plan JSON** 作为参数（generate.tool.ts `plan: z.record(...)`）——这正是 DSL/句柄化方案要解决、但 P1+P2 只做到 update/save 的“背诵模式”。
+- 模型面对“再背一个大 JSON”的高成本动作，叠加长上下文，选择了收尾。
+
+**根因 C：主 LLM 重复调用 plan_workflow（放大 A）**
+
+- 第一次 plan 完成后主 LLM 不满意，自己重新组织了一版更详细的 requirement 再次 plan → 上下文进一步膨胀。
+- 提示词没有“不要重复规划”约束。
+
+### 8.4 修复方案（已出任务单 docs/qoder-task-fix-agent-hang.md）
+
+| 编号 | 修复 | 对应根因 | 落地方式 |
+|---|---|---|---|
+| 1 | get_platform_facts 输出瘦身（63KB → ~2KB） | A | 只输出 name/modelType/audio/image/video，砍 model_quota/model_params/model_desc |
+| 2 | generate_workflow 句柄化（planId） | B | plan.tool.ts 生成 planId 写缓存；generate.tool.ts 加 planId 参数从缓存取 |
+| 3 | 防重复规划（planningComplete 标记 + 提示词约束） | C | plan 返回 _meta.planningComplete=true；SYSTEM_PROMPT 加“不要重复规划” |
+
+### 8.5 教训
+
+- **“Agent 半路停了”第一反应不是猜上下文，而是先看日志判定类型**：done（LLM 主动收尾）/ ✗（异常）/ interrupt（澄清）→ 再按〇章推论定位。
+- done 的本质是 LLM 决策，上下文过长只是其中一个诱因；工具参数背诵模式是另一个独立诱因。
+- 排查时看 `tool_start` 事件流：如果某个工具成功后没有下一个 `tool_start`，就是主 LLM 那一轮没有输出 tool_calls。
+
+---
