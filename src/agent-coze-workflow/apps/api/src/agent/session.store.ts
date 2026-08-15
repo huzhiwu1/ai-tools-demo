@@ -20,13 +20,27 @@
 import type { CompiledStateGraph } from "@langchain/langgraph";
 
 /**
+ * 会话消息（支持 user/assistant/tool 三种角色）
+ *
+ * tool 消息用于打断恢复记忆：用户打断后 graph 重建，checkpoint 中的
+ * ToolMessage 全丢，但 session.messages 里的 tool 摘要可注入上下文，
+ * 让 LLM 知道此前已完成的工具操作（read_file 的文件内容、save 的 workflowId 等）。
+ */
+export interface SessionMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  /** tool 消息专属：工具名（如 read_file / save_to_coze），便于重建时归类 */
+  toolName?: string;
+}
+
+/**
  * 会话数据结构
  */
 export interface Session {
   /** 编译后的 ReAct Agent graph 实例 */
   graph: CompiledStateGraph<any, any, any, any, any>;
-  /** 对话历史（简化格式，供日志和恢复使用） */
-  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  /** 对话历史（含工具结果摘要，供日志和打断恢复使用） */
+  messages: SessionMessage[];
   /**
    * 脏标记：上次流因客户端打断（「打断并发送」）而中止，
    * checkpoint 残留半截状态，下次 chat 时需重建 graph 清空 checkpoint
