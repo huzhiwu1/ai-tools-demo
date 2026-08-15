@@ -33,6 +33,13 @@ const CodeOutputSchema = z.object({
 const CODE_SPEC_PROMPT = `你是 Coze 工作流代码节点 Python 代码生成器。
 根据业务逻辑描述生成可执行的 Python 代码。
 
+你的输出必须是严格的 JSON 对象，且只包含一个字段：
+{
+  "code": "<完整的 Python 代码字符串>"
+}
+其中 code 字段的值是符合平台规范的完整可执行 Python 代码。
+禁止输出业务结果、节点配置、解释说明等任何其他内容。
+
 必须遵守 Coze 平台代码节点规范：
 1. 入口函数：async def main(args: Args) -> Output:
 2. params = args.params 取输入变量
@@ -40,7 +47,7 @@ const CODE_SPEC_PROMPT = `你是 Coze 工作流代码节点 Python 代码生成�
 4. 输入兼容：上游可能把 object 序列化成字符串传入，用 if isinstance(x, str): json.loads(x) 防御
 5. 用户参考数据（如歌词库、歌曲列表）写成代码内常量（如 SONG_LYRICS = {...}）
 6. 输出必须是 JSON 可序列化的数据
-7. 只输出代码本身，不要任何解释`;
+7. code 字段的值只包含 Python 代码本身，不要 Markdown 代码块标记、代码注释之外的文本解释`;
 
 export class CodeGenerator {
   private readonly logger = new Logger("CodeGenerator");

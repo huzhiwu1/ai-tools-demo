@@ -179,13 +179,24 @@ export const getPlatformFactsTool = tool(
       cozeClient.listDatabases(),
     ]);
 
+    // 上下文瘦身（2026-08-16）：输出越紧凑，主 LLM 上下文压力越小
+    // 1) nodeTypes 去掉 category（LLM 选节点类型用 type/name/desc 足够）
+    // 2) 整体用紧凑 JSON（无缩进），减少空白 token
     const result: Record<string, unknown> = {
-      nodeTypes: NODE_TYPES,
+      nodeTypes: NODE_TYPES.map(({ category: _category, ...rest }) => rest),
       _meta: { source: "real-time" },
     };
 
     if (models.status === "fulfilled") {
-      result.models = models.value;
+      // 瘦身：只保留 LLM 选模型需要的字段（name/modelType/audio/image/video），
+      // 防御性 map：即使底层 listModels 未来加字段也不透出给 LLM
+      result.models = models.value.map((m) => ({
+        name: m.name,
+        modelType: m.modelType,
+        audio: m.audio,
+        image: m.image,
+        video: m.video,
+      }));
     } else {
       result.models = [];
       result._warning_models = `模型列表查询失败：${models.reason?.message ?? "未知错误"}`;
@@ -198,7 +209,7 @@ export const getPlatformFactsTool = tool(
       result._warning_databases = `数据库列表查询失败：${databases.reason?.message ?? "未知错误"}`;
     }
 
-    return JSON.stringify(result, null, 2);
+    return JSON.stringify(result);
   },
   {
     name: "get_platform_facts",

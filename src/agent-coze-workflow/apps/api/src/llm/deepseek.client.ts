@@ -124,25 +124,56 @@ export class DeepSeekClient {
   }
 
   /**
-   * 生成 schema 的日志概要：顶层描述 + 顶层字段名列表
+   * 从 zod schema 提取字段描述，注入 system prompt 引导模型输出正确结构
    *
-   * toJsonSchema 转换仅作日志展示，不参与请求（请求走 withStructuredOutput）。
+   * jsonMode 不自动注入 schema，模型只看到 prompt 里的字段描述。
+   * 本方法把 zod schema 转成人类可读的字段清单（含类型、描述、嵌套子字段），
+   * 拼进 system prompt 末尾，让模型明确知道输出 JSON 应该包含哪些字段。
+   *
+   * 输出示例：
+   * - 简单字段：code: string - 完整的 Python 代码
+   * - 数组嵌套：steps: array - 步骤列表 (子字段: nodeType, description, order, dependencies, contract)
+   *
    * @param schema - zod schema
-   * @returns 如 `“LLM 规划输出” fields=[mode,name,steps,contracts]`
+   * @returns 多行字段清单；转换失败时返回空字符串
    */
-  private describeSchema(schema: z.ZodTypeAny): string {
+  private describeSchemaFields(schema: z.ZodTypeAny): string {
     try {
       const jsonSchema = toJsonSchema(schema) as {
-        description?: string;
-        properties?: Record<string, unknown>;
+        properties?: Record<
+          string,
+          {
+            type?: string | string[];
+            description?: string;
+            items?: {
+              type?: string | string[];
+              properties?: Record<string, unknown>;
+            };
+          }
+        >;
       };
-      const fields = jsonSchema.properties
-        ? Object.keys(jsonSchema.properties).join(",")
-        : "";
-      const desc = jsonSchema.description ?? "";
-      return `${desc ? `${desc} ` : ""}fields=[${fields}]`;
+      if (!jsonSchema.properties) return "";
+      const fields = Object.entries(jsonSchema.properties).map(
+        ([name, prop]) => {
+          const rawType = prop.type;
+          const type = Array.isArray(rawType)
+            ? rawType.join("|")
+            : (rawType ?? "any");
+          const desc = prop.description ? ` - ${prop.description}` : "";
+          // 嵌套对象/数组：注明关键子字段（帮助模型理解内部结构）
+          let nested = "";
+          if (prop.items?.properties) {
+            const subFields = Object.keys(prop.items.properties)
+              .slice(0, 6)
+              .join(", ");
+            nested = ` (子字段: ${subFields})`;
+          }
+          return `${name}: ${type}${desc}${nested}`;
+        },
+      );
+      return fields.join("\n");
     } catch {
-      return "schema 不可序列化";
+      return "";
     }
   }
 
@@ -227,7 +258,7 @@ export class DeepSeekClient {
 
     // 调用开始：info 摘要（caller/model/schema 概要/prompt 长度）
     this.logger.log(
-      `[DeepSeek] -> caller=${caller} model=${this.modelName} schema=${this.describeSchema(schema)} maxRetries=${maxRetries} systemLen=${systemPrompt.length} userLen=${userPrompt.length}`,
+      `[DeepSeek] -> caller=${caller} model=${this.modelName} schema=${this.describeSchemaFields(schema)} maxRetries=${maxRetries} systemLen=${systemPrompt.length} userLen=${userPrompt.length}`,
     );
     // 完整输入：verbose 级别（排查失败时查看原文）
     this.logger.verbose(
@@ -250,7 +281,8 @@ export class DeepSeekClient {
         const result = await structured.invoke([
           new SystemMessage(
             systemPrompt +
-              "\n必须输出 JSON 对象，不要输出其他内容。constraints/riskHints 必须是字符串数组；steps 节点类型字段名是 nodeType；contracts 输入字段是 inputs、输出是 outputs。",
+              "\n必须输出 JSON 对象。输出字段结构：\n" +
+              this.describeSchemaFields(schema),
           ),
           new HumanMessage(userPrompt),
         ]);
