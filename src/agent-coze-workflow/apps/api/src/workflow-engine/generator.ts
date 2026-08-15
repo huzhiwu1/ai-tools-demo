@@ -276,6 +276,10 @@ function createConditionEdges(
         targetNodeId: resolvedTarget,
         sourcePort: conditionBranchPort(i),
       });
+      // ⚠️ 同步回填 branches[].targetNodeId（2026-08-16）：
+      // 之前只解析进 edges，branches 里仍是 "TODO"，generate 输出暴露给 LLM 后
+      // 被误判为"工作流坏了"，触发反复重新设计。回填后输出完全干净。
+      branches[i].targetNodeId = resolvedTarget;
     }
 
     // 为 else/default 创建一条边，指向 end
