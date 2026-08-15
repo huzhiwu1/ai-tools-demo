@@ -79,7 +79,8 @@ export const PLAN_SKELETON_PROMPT = `你是 Coze 工作流需求分析器。
   下游节点 inputs.name 必须与上游节点 outputs.name 一致
 - **结束节点（最后的 end step）contract.outputs 必须带 source**：声明最终结果来自哪个节点，
   如 {name: "result", type: "string", source: "result"}（source 填上游输出变量名）。
-  这会决定结束节点引用哪个节点的输出，禁止省略（省略会默认接最后一个业务节点，可能接错）
+  **支持多输出**：结束节点可以声明多个返回变量（如 condition 分支：成功输出 result、失败输出 errorMsg），
+  每个 output 都带 source 指向对应上游节点。这会决定结束节点引用哪些节点的输出，禁止省略。
 - startInputs 定义工作流入口参数（多输入时列出全部）
 - 不要输出 nodeConfig（节点业务配置由系统另行生成）
 - 只输出 JSON 对象，不要输出其他内容

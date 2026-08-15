@@ -237,40 +237,61 @@ export function convertToPlatformSchema(
       if (isEnd) {
         // 优先用 outputVariables 里的显式 value 引用（"nodeId.outputName" 形式，
         // 由 generator 从 plan contract 生成）；没有才 fallback 到上游查找。
+        // ⚠️ 2026-08-16：支持多输出——结束节点可声明多个返回变量
+        // （如 condition 分支：成功输出结果、失败输出错误信息），
+        // 每个 outputVariable 生成一个 inputParameter。
         const endVars = (node as unknown as {
           outputVariables?: Array<{
             name?: string;
             value?: string;
           }>;
         })?.outputVariables;
-        const explicitRef = endVars?.[0]?.value;
-        const refMatch = explicitRef
-          ? /^([^.{}]+)\.(.+)$/.exec(explicitRef)
-          : null;
-        data.inputs = {
-          terminatePlan: "returnVariables",
-          inputParameters: [
-            {
-              name: endVars?.[0]?.name ?? "output",
-              input: {
-                type: "string",
-                value: {
-                  type: "ref",
-                  content: refMatch
-                    ? {
-                        source: "block-output",
-                        blockID: platformId(refMatch[1]),
-                        name: refMatch[2],
-                      }
-                    : {
+        const inputParameters =
+          endVars && endVars.length > 0
+            ? endVars.map((v) => {
+                const refMatch = v.value
+                  ? /^([^.{}]+)\.(.+)$/.exec(v.value)
+                  : null;
+                return {
+                  name: v.name ?? "output",
+                  input: {
+                    type: "string",
+                    value: {
+                      type: "ref",
+                      content: refMatch
+                        ? {
+                            source: "block-output",
+                            blockID: platformId(refMatch[1]),
+                            name: refMatch[2],
+                          }
+                        : {
+                            source: "block-output",
+                            blockID: upstreamId,
+                            name: upstreamOutput,
+                          },
+                    },
+                  },
+                };
+              })
+            : [
+                {
+                  name: "output",
+                  input: {
+                    type: "string",
+                    value: {
+                      type: "ref",
+                      content: {
                         source: "block-output",
                         blockID: upstreamId,
                         name: upstreamOutput,
                       },
+                    },
+                  },
                 },
-              },
-            },
-          ],
+              ];
+        data.inputs = {
+          terminatePlan: "returnVariables",
+          inputParameters,
         };
       }
       if (node.type === "llm") {
