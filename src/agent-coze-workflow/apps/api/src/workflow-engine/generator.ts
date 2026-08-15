@@ -483,6 +483,34 @@ export class WorkflowGenerator {
     // 为条件节点创建所有分支边 + else 边（带正确的 sourcePortID，避免 validate_tree 报端口未连接）
     createConditionEdges(cozeNodes, edges, endNodeId);
 
+    // ⚠️ 修复（2026-08-16）：结束节点 outputVariables 的 value 引用回填。
+    // schema-converter 优先读 outputVariables[0].value（"nodeId.outputName"），
+    // 没有才 fallback 找上游（可能误接 LLM）。这里把 value 指向拓扑最后一个业务节点
+    // 的输出（通常是最末端的 code/llm 节点），保证"结束节点输出 = 最终业务结果"。
+    // 仅当 outputVariables 有 name 但 value 为空时回填（显式 value 优先保留）。
+    if (endNode) {
+      const endVars = (endNode as unknown as {
+        outputVariables?: Array<{ name?: string; value?: string }>;
+      })?.outputVariables;
+      if (endVars && endVars.length > 0) {
+        const businessNodes = cozeNodes.filter(
+          (n) => n.type !== "start" && n.type !== "end",
+        );
+        const lastBusiness = businessNodes[businessNodes.length - 1];
+        if (lastBusiness) {
+          const lastOutput =
+            (lastBusiness as unknown as {
+              outputs?: Array<{ name?: string }>;
+            })?.outputs?.[0]?.name ?? "output";
+          for (const v of endVars) {
+            if (v.name && !v.value) {
+              v.value = `${lastBusiness.id}.${lastOutput}`;
+            }
+          }
+        }
+      }
+    }
+
     return {
       meta: {
         name: plan.name,
@@ -528,7 +556,18 @@ export class WorkflowGenerator {
           })),
         );
       case "end":
-        return createEndNode();
+        // 结束节点输出变量 = plan 的 contract.outputs（LLM 规划的数据契约）。
+        // ⚠️ 修复（2026-08-16）：之前 createEndNode() 空参导致 outputVariables=[]，
+        // schema-converter 正向转换时结束节点 inputParameters 落到默认引用（第一个上游/LLM 输出），
+        // 表现为"结束节点 output 接的是 LLM 的 output 而不是代码节点的 result"。
+        // 必须从 contract 生成，结束节点才能真正输出业务节点（如代码节点）的结果。
+        return createEndNode(
+          step.contract?.outputs?.map((o) => ({
+            name: o.name,
+            type: o.type ?? "string",
+            value: "", // 引用表达式由 buildInputMapping / schema-converter 回填
+          })),
+        );
       case "llm": {
         const cfg = step.nodeConfig?.llm;
         const contract = step.contract;

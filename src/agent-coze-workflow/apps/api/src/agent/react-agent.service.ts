@@ -142,9 +142,11 @@ const llm = new ChatOpenAI({
   // 2026-08-16 修复：主 LLM 漏了关思考配置（DeepSeekClient 已关，主 Agent 循环没关）——
   // plan_workflow 输出大 JSON 后，主 LLM 下一步要重新背诵 plan 作为工具参数，
   // reasoning 吃掉 8192 大半预算 → 正文截断 → 无 tool_calls → Agent 静默 done。
-  // 与 deepseek.client.ts 对齐：thinking disabled（网关已验证支持）+ maxTokens 放大。
+  // 已修复：maxTokens 放大到 16384 + thinking disabled。
+  // 2026-08-16 再次调整：恢复思考（去掉 thinking disabled）——16384 预算下思考+工具参数
+  // 可能够用（网关支持 32K 输出），恢复后用户能看到 LLM 推理过程（reasoning_delta）。
+  // 若重新出现工具参数截断/静默 done，再退回 disabled（前端已兜底“处理中”文案）。
   maxTokens: 16384,
-  modelKwargs: { thinking: { type: "disabled" } },
   // 显式限制超时与重试：默认 maxRetries=6 会把单次失败放大为
   // 6 次静默重试（每次等满超时），前端表现为长时间无事件、一直转圈
   timeout: 60_000,

@@ -671,7 +671,7 @@ body {
   }
 }
 
-/* LLM 思考中气泡（loading 且无流式文本/工具调用时显示） */
+/* LLM 处理中气泡（loading 且无流式文本/工具调用时显示） */
 .thinking-bubble {
   display: flex;
   align-items: center;

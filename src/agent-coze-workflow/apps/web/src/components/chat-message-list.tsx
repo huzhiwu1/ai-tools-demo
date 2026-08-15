@@ -142,7 +142,7 @@ export function ChatMessageList({
               <div className="msg-bubble thinking-bubble">
                 <div className="msg-avatar">AI</div>
                 <div className="msg-content">
-                  <div className="thinking-label">🧠 思考中</div>
+                  <div className="thinking-label">🧠 处理中</div>
                   <div className="thinking-content">
                     {msgData.content ?? ""}
                   </div>
@@ -179,7 +179,7 @@ export function ChatMessageList({
         );
       })}
 
-      {/* LLM 思考中：没有流式文本、没有 reasoning 段落、没有提问卡片时显示 */}
+      {/* LLM 处理中：没有流式文本、没有 reasoning 段落、没有提问卡片时显示 */}
       {isLoading &&
         !pendingQuestion &&
         !messages.some(
@@ -202,7 +202,7 @@ export function ChatMessageList({
                   <span className="dot" />
                   <span className="dot" />
                 </span>
-                <span className="thinking-text">思考中</span>
+                <span className="thinking-text">处理中</span>
               </div>
             </div>
           </div>

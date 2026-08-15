@@ -353,18 +353,45 @@ export const updateWorkflowTool = tool(
         }
 
         case "output_field": {
-          // 目标：改节点 outputs 声明里的字段名，或结束节点 outputVariables 引用
-          // content 格式约定：`旧字段名 -> 新字段名`（或 `改为`）
-          const match = /([\w.]+)\s*(?:->|→|改为)\s*([\w.]+)/.exec(
+          // 宽容解析：LLM 可能输出多种句式，不强制「旧 -> 新」严格格式。
+          // 支持：
+          //   - 严格简写：lyrics -> result / lyrics 改为 result
+          //   - 自然语言：从 LLM 节点的 recognized_lyrics 改为代码节点的 result 字段
+          //   - 指示式：把输出从 recognized_lyrics 改成 result
+          // 策略：提取句中所有标识符（\w+.\w+ 或 \w+），从后往前配对“旧字段/新字段”。
+          const identifiers =
+            instruction.content.match(/[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)?/g) ??
+            [];
+          // 过滤掉常见虚词（不列业务字段名，如 lyrics/result 可能是真实字段）
+          const stopWords = new Set([
+            "from", "to", "the", "of", "in", "and", "or", "for", "node",
+            "field", "output", "input", "value", "source", "节点", "从",
+            "改为", "改成", "输出", "字段",
+          ]);
+          const candidates = identifiers.filter(
+            (w) => !stopWords.has(w.toLowerCase()) && !/^node_/i.test(w),
+          );
+          // 候选不足 2 个：fallback 到严格正则
+          const strict = /([\w.]+)\s*(?:->|→|改为|改成)\s*([\w.]+)/.exec(
             instruction.content,
           );
-          if (!match) {
+          const oldName = strict
+            ? strict[1]
+            : candidates.length >= 2
+              ? candidates[candidates.length - 2]
+              : undefined;
+          const newName = strict
+            ? strict[2]
+            : candidates.length >= 2
+              ? candidates[candidates.length - 1]
+              : undefined;
+          if (!oldName || !newName) {
             return (
-              `工作流更新失败: output_field 指令格式应为「旧字段名 -> 新字段名」` +
-              `（如 lyrics -> result），收到: ${instruction.content}`
+              `工作流更新失败: 无法从指令中解析出旧字段名和新字段名。` +
+              `请用更明确的格式，例如：把输出从 recognized_lyrics 改为 result。` +
+              `收到: ${instruction.content}`
             );
           }
-          const [, oldName, newName] = match;
 
           // 场景 A：改节点 outputs 声明（含结束节点 outputVariables）
           const outputs = node.outputs as Array<{ name?: string }> | undefined;

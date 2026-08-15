@@ -161,8 +161,10 @@ export function convertToPlatformSchema(
       const isStart = node.type === "start";
       const isEnd = node.type === "end";
 
-      // end 节点：引用上游最后一个节点（edges 中指向 end 的 source，或倒数第二个节点）
-      // 上游节点若属于被跳过的数据库节点，回退为 start（100001）
+      // end 节点：优先用 outputVariables 显式契约（generator 从 plan contract 生成），
+      // 没有才 fallback 找上游（edges 指向 end 的 source，或倒数第二个节点）。
+      // ⚠️ 修复（2026-08-16）：之前只靠"找上游边"，若代码节点未连到 end 会 fallback
+      // 到倒数第二个节点（常是 LLM），表现为"结束节点 output 接了 LLM 的 output"。
       const fallbackUpstream = workflow.nodes[index - 1];
       const upstreamNode = isEnd
         ? (workflow.nodes.find(
@@ -233,20 +235,38 @@ export function convertToPlatformSchema(
         data.trigger_parameters = [];
       }
       if (isEnd) {
+        // 优先用 outputVariables 里的显式 value 引用（"nodeId.outputName" 形式，
+        // 由 generator 从 plan contract 生成）；没有才 fallback 到上游查找。
+        const endVars = (node as unknown as {
+          outputVariables?: Array<{
+            name?: string;
+            value?: string;
+          }>;
+        })?.outputVariables;
+        const explicitRef = endVars?.[0]?.value;
+        const refMatch = explicitRef
+          ? /^([^.{}]+)\.(.+)$/.exec(explicitRef)
+          : null;
         data.inputs = {
           terminatePlan: "returnVariables",
           inputParameters: [
             {
-              name: "output",
+              name: endVars?.[0]?.name ?? "output",
               input: {
                 type: "string",
                 value: {
                   type: "ref",
-                  content: {
-                    source: "block-output",
-                    blockID: upstreamId,
-                    name: upstreamOutput,
-                  },
+                  content: refMatch
+                    ? {
+                        source: "block-output",
+                        blockID: platformId(refMatch[1]),
+                        name: refMatch[2],
+                      }
+                    : {
+                        source: "block-output",
+                        blockID: upstreamId,
+                        name: upstreamOutput,
+                      },
                 },
               },
             },
