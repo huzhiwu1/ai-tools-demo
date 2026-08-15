@@ -507,10 +507,21 @@ export class WorkflowGenerator {
         })?.contract?.outputs ?? [];
 
       if (endVars && endVars.length > 0) {
+        // 业务节点：排除 start/end/condition（condition 无 outputs，作为 fallback 会接错）
         const businessNodes = cozeNodes.filter(
-          (n) => n.type !== "start" && n.type !== "end",
+          (n) =>
+            n.type !== "start" &&
+            n.type !== "end" &&
+            n.type !== "condition",
         );
-        const lastBusiness = businessNodes[businessNodes.length - 1];
+        // 兜底再过滤：无 outputs 声明的节点也排除（fallback 时要能取到真实输出名）
+        const outputNodes = businessNodes.filter((n) => {
+          const outs = (n as unknown as {
+            outputs?: Array<{ name?: string }>;
+          })?.outputs;
+          return Array.isArray(outs) && outs.length > 0;
+        });
+        const lastBusiness = outputNodes[outputNodes.length - 1];
 
         for (let i = 0; i < endVars.length; i++) {
           const v = endVars[i];
@@ -521,7 +532,7 @@ export class WorkflowGenerator {
           let targetNode: CozeNode | undefined;
           let targetOutput = "output";
           if (declaredSource) {
-            targetNode = businessNodes.find((n) => {
+            targetNode = outputNodes.find((n) => {
               const outs = (n as unknown as {
                 outputs?: Array<{ name?: string }>;
               })?.outputs;

@@ -39,7 +39,7 @@ import {
   iterationLimitMessage,
 } from "./iteration-counter";
 
-/** 结构化修改指令 schema（每个字段 describe，LLM 据此输出） */
+/** 单条修改指令（UpdateInstructionSchema 的数组元素） */
 const UpdateInstructionSchema = z.object({
   type: z
     .enum([
@@ -66,6 +66,13 @@ const UpdateInstructionSchema = z.object({
       "具体修改内容：新提示词 / 新逻辑描述 / 新条件 / 新阈值（如 0.8 改为 0.6）/ 新数据（JSON 或文本）",
     ),
 });
+
+/** 修改指令数组（兼容 LLM 输出单条 / 裸数组 / { modifications: [...] } 包裹三种形态） */
+const UpdateInstructionsSchema = z.union([
+  UpdateInstructionSchema, // 单条对象
+  z.array(UpdateInstructionSchema), // 裸数组
+  z.object({ modifications: z.array(UpdateInstructionSchema) }), // { modifications: [...] }（LLM 常见行为）
+]);
 
 /** LLM 结构化解析失败时的错误提示（让 Agent 重新组织语言） */
 const PARSE_FAIL_MESSAGE =
@@ -97,18 +104,20 @@ function summarizeNodes(
 }
 
 /**
- * 用 LLM 将自然语言修改指令解析为结构化指令
+ * 用 LLM 将自然语言修改指令解析为结构化指令数组
  *
- * @returns 解析结果；LLM 调用失败返回 null（调用方降级）
+ * @returns 解析结果（可能多条）；LLM 调用失败返回 null（调用方降级）
  */
-async function parseInstruction(
+async function parseInstructions(
   workflow: unknown,
   fixInstruction: string,
-): Promise<UpdateInstruction | null> {
+): Promise<UpdateInstruction[] | null> {
   try {
-    return await client.chatStructured(
-      UpdateInstructionSchema,
+    const result = await client.chatStructured(
+      UpdateInstructionsSchema,
       "你是工作流修改指令解析器。将用户的自然语言修改指令解析为结构化修改指令。" +
+        "**支持一次输出多条修改**：如果指令涉及多个节点或多个改动，输出数组，每条 {type, target, content}。" +
+        "单条改动也可直接输出对象（不用数组）。" +
         "type 必须严格从 [llm_prompt, code_logic, condition, threshold, data, output_field, other] 中选择一项；" +
         "output_field 用于改节点输出字段名/结束节点返回变量（如「把输出从 lyrics 改为 result」）；" +
         "target 写工作流节点摘要中存在的节点标识；" +
@@ -116,6 +125,12 @@ async function parseInstruction(
       `当前工作流节点摘要：${JSON.stringify(summarizeNodes(workflow))}\n\n` +
         `用户修改指令：${fixInstruction}`,
     );
+    // 兼容三种形态：单条对象 / 裸数组 / { modifications: [...] }
+    if (Array.isArray(result)) return result;
+    if (result && typeof result === "object" && "modifications" in result) {
+      return (result as { modifications: UpdateInstruction[] }).modifications;
+    }
+    return [result as UpdateInstruction];
   } catch (e) {
     return null;
   }
@@ -157,8 +172,225 @@ function replaceThresholdText(
   return { text: newText, changed: newText !== text };
 }
 
+/**
+ * 执行单条修改指令
+ *
+ * @param node - 目标节点（已通过 findTargetNode 定位）
+ * @param instruction - 单条指令 {type, target, content}
+ * @param targetName - 节点显示名（title）
+ * @param referenceData - 工具级参考数据（可选，code_logic 重写代码时用；
+ *   优先用工具参数，其次节点已有 referenceData）
+ * @returns changes 追加项数组；失败返回错误字符串
+ */
+async function applyOneInstruction(
+  node: Record<string, unknown>,
+  instruction: UpdateInstruction,
+  targetName: string,
+  referenceData?: Record<string, string>,
+): Promise<string[] | string> {
+  const changes: string[] = [];
+
+  switch (instruction.type) {
+    case "llm_prompt": {
+      if (node.type !== "llm") {
+        return `节点 ${targetName} 不是 LLM 节点（type=${String(node.type)}）`;
+      }
+      // system/user 判断：target 或 content 出现 system/系统 关键词 → systemPrompt
+      const isSystem =
+        /system|系统/.test(instruction.target) ||
+        /system|系统/.test(instruction.content);
+      if (isSystem) {
+        node.systemPrompt = instruction.content;
+        changes.push(`节点 ${targetName} systemPrompt 已更新`);
+      } else {
+        node.userPrompt = instruction.content;
+        changes.push(`节点 ${targetName} userPrompt 已更新`);
+      }
+      break;
+    }
+
+    case "code_logic": {
+      if (node.type !== "code") {
+        return `节点 ${targetName} 不是代码节点（type=${String(node.type)}）`;
+      }
+      // 放宽：用户明确指向该代码节点并给出修改内容即执行。
+      // 参考数据优先级：工具参数 referenceData > 节点已有 referenceData；
+      // 都没有时允许 LLM 在 content 里描述（代码节点保留原数据），不再强制失败。
+      const refDataStr =
+        (referenceData && Object.keys(referenceData).length > 0
+          ? referenceData
+          : (node.referenceData as Record<string, string> | undefined)) ??
+        undefined;
+      if (!refDataStr || Object.keys(refDataStr).length === 0) {
+        // 无参考数据：仍尝试生成（CodeGenerator 内部会降级兜底模板），
+        // 但明确提示 LLM 可能数据不完整
+        const newCode = await codeGenerator.generateCode(
+          instruction.content,
+          undefined,
+          undefined,
+        );
+        node.code = newCode;
+        node.language = "python";
+        changes.push(
+          `节点 ${targetName} 代码逻辑已重写（⚠️ 无参考数据，可能丢失原歌词库常量）`,
+        );
+        break;
+      }
+      const newCode = await codeGenerator.generateCode(
+        instruction.content,
+        undefined,
+        refDataStr,
+      );
+      node.code = newCode;
+      node.language = "python";
+      changes.push(
+        `节点 ${targetName} 代码逻辑已按新描述重写（保留参考数据）`,
+      );
+      break;
+    }
+
+    case "condition": {
+      if (node.type !== "condition") {
+        return `节点 ${targetName} 不是条件节点（type=${String(node.type)}）`;
+      }
+      node.branches = [{ label: "match", condition: instruction.content }];
+      changes.push(`节点 ${targetName} 条件分支已更新`);
+      break;
+    }
+
+    case "threshold": {
+      const threshold = replaceThresholdText(
+        (node.code as string) ?? "",
+        instruction.content,
+      );
+      if (!threshold.changed && node.type === "condition") {
+        const branches = node.branches as
+          | Array<{ label?: string; condition?: string }>
+          | undefined;
+        if (branches && branches.length > 0) {
+          const b = branches[0];
+          const replaced = replaceThresholdText(
+            b.condition ?? "",
+            instruction.content,
+          );
+          if (replaced.changed) {
+            b.condition = replaced.text;
+            changes.push(
+              `节点 ${targetName} 条件阈值已更新: ${instruction.content}`,
+            );
+            break;
+          }
+        }
+        return `节点 ${targetName} 中未找到阈值 ${instruction.content}。threshold 指令需为「旧值 改为/→ 新值」格式，且节点中需存在该旧值。`;
+      }
+      if (!threshold.changed) {
+        return `节点 ${targetName} 代码中未找到阈值 ${instruction.content}。threshold 指令需为「旧值 改为/→ 新值」格式。`;
+      }
+      node.code = threshold.text;
+      changes.push(`节点 ${targetName} 阈值已更新: ${instruction.content}`);
+      break;
+    }
+
+    case "data": {
+      if (node.type !== "code") {
+        return `节点 ${targetName} 不是代码节点（type=${String(node.type)}）`;
+      }
+      try {
+        node.data = JSON.parse(instruction.content);
+      } catch {
+        node.data = instruction.content;
+      }
+      changes.push(`节点 ${targetName} 数据常量已更新`);
+      break;
+    }
+
+    case "output_field": {
+      // 宽容解析：LLM 可能输出多种句式，不强制「旧 -> 新」严格格式。
+      const identifiers =
+        instruction.content.match(
+          /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)?/g,
+        ) ?? [];
+      const stopWords = new Set([
+        "from", "to", "the", "of", "in", "and", "or", "for", "node",
+        "field", "output", "input", "value", "source", "节点", "从",
+        "改为", "改成", "输出", "字段",
+      ]);
+      const candidates = identifiers.filter(
+        (w) => !stopWords.has(w.toLowerCase()) && !/^node_/i.test(w),
+      );
+      const strict = /([\w.]+)\s*(?:->|→|改为|改成)\s*([\w.]+)/.exec(
+        instruction.content,
+      );
+      const oldName = strict
+        ? strict[1]
+        : candidates.length >= 2
+          ? candidates[candidates.length - 2]
+          : undefined;
+      const newName = strict
+        ? strict[2]
+        : candidates.length >= 2
+          ? candidates[candidates.length - 1]
+          : undefined;
+      if (!oldName || !newName) {
+        return `无法从指令中解析出旧字段名和新字段名。请用更明确的格式，例如：把输出从 recognized_lyrics 改为 result。收到: ${instruction.content}`;
+      }
+
+      // 场景 A：改节点 outputs 声明
+      const outputs = node.outputs as Array<{ name?: string }> | undefined;
+      if (Array.isArray(outputs)) {
+        let changed = false;
+        for (const o of outputs) {
+          if (o.name === oldName) {
+            o.name = newName;
+            changed = true;
+          }
+        }
+        if (changed) {
+          changes.push(`节点 ${targetName} 输出字段 ${oldName} -> ${newName}`);
+          break;
+        }
+      }
+
+      // 结束节点：outputVariables 是 [{name, value}]
+      const outputVars = node.outputVariables as
+        | Array<{ name?: string }>
+        | undefined;
+      if (Array.isArray(outputVars)) {
+        let changed = false;
+        for (const v of outputVars) {
+          if (v.name === oldName) {
+            v.name = newName;
+            changed = true;
+          }
+        }
+        if (changed) {
+          changes.push(
+            `节点 ${targetName} 结束输出变量 ${oldName} -> ${newName}`,
+          );
+          break;
+        }
+      }
+
+      // 场景 B：改代码节点内部返回值
+      if (typeof node.code === "string" && node.code.includes(oldName)) {
+        const oldEscaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        node.code = node.code.replace(new RegExp(oldEscaped, "g"), newName);
+        changes.push(`节点 ${targetName} 代码内 ${oldName} 已替换为 ${newName}`);
+        break;
+      }
+
+      return `节点 ${targetName} 中未找到输出字段 ${oldName}`;
+    }
+  }
+
+  if (changes.length === 0) {
+    return `节点 ${targetName} 无有效修改`;
+  }
+  return changes;
+}
+
 export const updateWorkflowTool = tool(
-  async ({ workflow, fixInstruction, workflowId }) => {
+  async ({ workflow, fixInstruction, workflowId, referenceData }) => {
     // 迭代计数：开头只读检查（peek，不递增），修改成功后才计数
     const iteration = peekIteration(workflowId);
     if (iteration > MAX_ITERATIONS) {
@@ -221,230 +453,47 @@ export const updateWorkflowTool = tool(
         return "工作流更新失败: workflow 缺少 nodes 字段";
       }
 
-      // 1. LLM 结构化解析修改指令（失败降级为错误提示）
-      const instruction = await parseInstruction(wf, fixInstruction);
-      if (!instruction) {
+      // 1. LLM 结构化解析修改指令（失败降级为错误提示），支持多条
+      const instructions = await parseInstructions(wf, fixInstruction);
+      if (!instructions || instructions.length === 0) {
         return PARSE_FAIL_MESSAGE;
       }
-      if (instruction.type === "other") {
-        return `工作流更新失败: 无法归类的修改指令。${instruction.content}`;
-      }
-
-      // 2. 定位目标节点
-      const node = findTargetNode(nodes, instruction.target);
-      if (!node) {
-        return `工作流更新失败: 未找到节点: ${instruction.target}`;
+      // 过滤掉无法归类的指令（other）——不作为失败，跳过并记录
+      const valid = instructions.filter((i) => i.type !== "other");
+      if (valid.length === 0) {
+        return `工作流更新失败: 所有修改指令都无法归类。${instructions
+          .map((i) => i.content)
+          .join("; ")}`;
       }
 
       const changes: string[] = [];
-      const targetName = String(node.title ?? instruction.target);
+      const errors: string[] = [];
 
-      // 3. 按类型执行修改
-      switch (instruction.type) {
-        case "llm_prompt": {
-          if (node.type !== "llm") {
-            return `工作流更新失败: 节点 ${targetName} 不是 LLM 节点（type=${String(node.type)}）`;
-          }
-          // system/user 判断：target 或 content 出现 system/系统 关键词 → systemPrompt
-          const isSystem =
-            /system|系统/.test(instruction.target) ||
-            /system|系统/.test(instruction.content);
-          if (isSystem) {
-            node.systemPrompt = instruction.content;
-            changes.push(`节点 ${targetName} systemPrompt 已更新`);
-          } else {
-            node.userPrompt = instruction.content;
-            changes.push(`节点 ${targetName} userPrompt 已更新`);
-          }
-          break;
+      // 2. 逐条执行（部分失败不中断，汇总返回）
+      for (const instruction of valid) {
+        const node = findTargetNode(nodes, instruction.target);
+        if (!node) {
+          errors.push(`未找到节点: ${instruction.target}`);
+          continue;
         }
+        const targetName = String(node.title ?? instruction.target);
 
-        case "code_logic": {
-          if (node.type !== "code") {
-            return `工作流更新失败: 节点 ${targetName} 不是代码节点（type=${String(node.type)}）`;
-          }
-          // 放宽：用户明确指向该代码节点并给出修改内容即执行。
-          // 原逻辑要求"重写/改逻辑"关键词，实测 LLM 说"把 Output 的 key 改掉"不触发导致失败。
-          // 无 referenceData 时不重写代码节点（防止 LLM 凭空生成全新代码）
-          const refDataStr = node.referenceData as
-            | Record<string, string>
-            | undefined;
-          if (!refDataStr || Object.keys(refDataStr).length === 0) {
-            return (
-              `工作流更新失败: 代码逻辑重写需要 referenceData（原工作流的参考数据），` +
-              `否则 LLM 会幻觉编造数据。请提供原工作流的参考数据。`
-            );
-          }
-          // 复用 CodeGenerator：传入 referenceData，prompt 强调保留原数据
-          const newCode = await codeGenerator.generateCode(
-            instruction.content,
-            undefined,
-            refDataStr,
-          );
-          node.code = newCode;
-          node.language = "python";
-          changes.push(
-            `节点 ${targetName} 代码逻辑已按新描述重写（保留原 referenceData）`,
-          );
-          break;
-        }
-
-        case "condition": {
-          if (node.type !== "condition") {
-            return `工作流更新失败: 节点 ${targetName} 不是条件节点（type=${String(node.type)}）`;
-          }
-          node.branches = [{ label: "match", condition: instruction.content }];
-          changes.push(`节点 ${targetName} 条件分支已更新`);
-          break;
-        }
-
-        case "threshold": {
-          const threshold = replaceThresholdText(
-            (node.code as string) ?? "",
-            instruction.content,
-          );
-          if (!threshold.changed && node.type === "condition") {
-            // 条件节点的 branches 里替换阈值
-            const branches = node.branches as
-              | Array<{ label?: string; condition?: string }>
-              | undefined;
-            if (branches && branches.length > 0) {
-              const b = branches[0];
-              const replaced = replaceThresholdText(
-                b.condition ?? "",
-                instruction.content,
-              );
-              if (replaced.changed) {
-                b.condition = replaced.text;
-                changes.push(
-                  `节点 ${targetName} 条件阈值已更新: ${instruction.content}`,
-                );
-                break;
-              }
-            }
-            return (
-              `工作流更新失败: 节点 ${targetName} 中未找到阈值 ${instruction.content}。` +
-              `threshold 指令需为「旧值 改为/→ 新值」格式，且节点中需存在该旧值。`
-            );
-          }
-          if (!threshold.changed) {
-            return (
-              `工作流更新失败: 节点 ${targetName} 代码中未找到阈值 ${instruction.content}。` +
-              `threshold 指令需为「旧值 改为/→ 新值」格式。`
-            );
-          }
-          node.code = threshold.text;
-          changes.push(`节点 ${targetName} 阈值已更新: ${instruction.content}`);
-          break;
-        }
-
-        case "data": {
-          if (node.type !== "code") {
-            return `工作流更新失败: 节点 ${targetName} 不是代码节点（type=${String(node.type)}）`;
-          }
-          // content 优先按 JSON 解析，失败则按原文本存储
-          try {
-            node.data = JSON.parse(instruction.content);
-          } catch {
-            node.data = instruction.content;
-          }
-          changes.push(`节点 ${targetName} 数据常量已更新`);
-          break;
-        }
-
-        case "output_field": {
-          // 宽容解析：LLM 可能输出多种句式，不强制「旧 -> 新」严格格式。
-          // 支持：
-          //   - 严格简写：lyrics -> result / lyrics 改为 result
-          //   - 自然语言：从 LLM 节点的 recognized_lyrics 改为代码节点的 result 字段
-          //   - 指示式：把输出从 recognized_lyrics 改成 result
-          // 策略：提取句中所有标识符（\w+.\w+ 或 \w+），从后往前配对“旧字段/新字段”。
-          const identifiers =
-            instruction.content.match(/[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)?/g) ??
-            [];
-          // 过滤掉常见虚词（不列业务字段名，如 lyrics/result 可能是真实字段）
-          const stopWords = new Set([
-            "from", "to", "the", "of", "in", "and", "or", "for", "node",
-            "field", "output", "input", "value", "source", "节点", "从",
-            "改为", "改成", "输出", "字段",
-          ]);
-          const candidates = identifiers.filter(
-            (w) => !stopWords.has(w.toLowerCase()) && !/^node_/i.test(w),
-          );
-          // 候选不足 2 个：fallback 到严格正则
-          const strict = /([\w.]+)\s*(?:->|→|改为|改成)\s*([\w.]+)/.exec(
-            instruction.content,
-          );
-          const oldName = strict
-            ? strict[1]
-            : candidates.length >= 2
-              ? candidates[candidates.length - 2]
-              : undefined;
-          const newName = strict
-            ? strict[2]
-            : candidates.length >= 2
-              ? candidates[candidates.length - 1]
-              : undefined;
-          if (!oldName || !newName) {
-            return (
-              `工作流更新失败: 无法从指令中解析出旧字段名和新字段名。` +
-              `请用更明确的格式，例如：把输出从 recognized_lyrics 改为 result。` +
-              `收到: ${instruction.content}`
-            );
-          }
-
-          // 场景 A：改节点 outputs 声明（含结束节点 outputVariables）
-          const outputs = node.outputs as Array<{ name?: string }> | undefined;
-          if (Array.isArray(outputs)) {
-            let changed = false;
-            for (const o of outputs) {
-              if (o.name === oldName) {
-                o.name = newName;
-                changed = true;
-              }
-            }
-            if (changed) {
-              changes.push(`节点 ${targetName} 输出字段 ${oldName} -> ${newName}`);
-              break;
-            }
-          }
-
-          // 结束节点：outputVariables 是 [{name, value}]，同样按 name 匹配替换
-          const outputVars = node.outputVariables as
-            | Array<{ name?: string }>
-            | undefined;
-          if (Array.isArray(outputVars)) {
-            let changed = false;
-            for (const v of outputVars) {
-              if (v.name === oldName) {
-                v.name = newName;
-                changed = true;
-              }
-            }
-            if (changed) {
-              changes.push(
-                `节点 ${targetName} 结束输出变量 ${oldName} -> ${newName}`,
-              );
-              break;
-            }
-          }
-
-          // 场景 B：改代码节点内部返回值（代码里 ret: Output = {旧字段: ...} → 新字段）
-          // 仅当节点有 code 字段时做文本替换；只替换标识符，字符串字面量里的
-          // 歌词内容由 LLM 的 content 精确控制（content 只写字段名对，不写歌词）
-          if (typeof node.code === "string" && node.code.includes(oldName)) {
-            const oldEscaped = oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            node.code = node.code.replace(new RegExp(oldEscaped, "g"), newName);
-            changes.push(`节点 ${targetName} 代码内 ${oldName} 已替换为 ${newName}`);
-            break;
-          }
-
-          return `工作流更新失败: 节点 ${targetName} 中未找到输出字段 ${oldName}`;
+        // 执行单条修改，返回值：changes 追加项数组；失败返回错误字符串
+        const outcome = await applyOneInstruction(
+          node,
+          instruction,
+          targetName,
+          referenceData,
+        );
+        if (typeof outcome === "string") {
+          errors.push(outcome);
+        } else {
+          changes.push(...outcome);
         }
       }
 
       if (changes.length === 0) {
-        return "工作流更新失败: 无有效修改";
+        return `工作流更新失败: 无有效修改。${errors.join("; ")}`;
       }
 
       // 修改来自缓存 → 标记 dirty（save_to_coze 成功后 clearDirty）
@@ -456,8 +505,17 @@ export const updateWorkflowTool = tool(
       incrementIteration(workflowId);
 
       // 句柄化：不再返回完整 workflow，只返回 changes 摘要 + 保存提示
+      const result = {
+        changes,
+        ...(errors.length > 0 ? { errors } : {}),
+        workflowId,
+        dirty: true,
+      };
       return (
-        JSON.stringify({ changes, workflowId, dirty: true }, null, 2) +
+        JSON.stringify(result, null, 2) +
+        (errors.length > 0
+          ? `\n\n⚠️ 部分修改未生效: ${errors.join("; ")}`
+          : "") +
         "\n\n修改已应用，请调用 save_to_coze（传 workflowId）保存后生效"
       );
     } catch (e) {
@@ -489,7 +547,13 @@ export const updateWorkflowTool = tool(
       fixInstruction: z
         .string()
         .describe(
-          "修改指令（自然语言），如「把『相似度计算』节点的阈值从 0.8 改为 0.6」",
+          "修改指令（自然语言），如「把『相似度计算』节点的阈值从 0.8 改为 0.6」。支持一次描述多处修改（工具会解析为多条并逐条执行）",
+        ),
+      referenceData: z
+        .record(z.string(), z.any())
+        .optional()
+        .describe(
+          "可选。参考数据（如歌词库 {歌名: 歌词}）。重写代码节点逻辑时传入，防止 LLM 幻觉编造数据。不传时用节点已有的 referenceData",
         ),
     }),
   },
