@@ -94,6 +94,7 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
   - update_workflow 返回「线上工作流已被修改，已重新拉取」时，说明平台侧有人工修改，需基于最新版本重新描述修改指令
 - **plan 句柄化**：plan_workflow 返回 planId 后，generate_workflow 只传 planId 即可（不传完整 plan JSON）
 - **不要重复规划**：plan_workflow 返回 planningComplete=true 后，直接进入 generate_workflow（传 planId）。除非规划结果与用户需求明显不符（如漏了关键步骤/选错模型），否则不要再次调用 plan_workflow
+- **线上工作流找回**：如果用户提到"之前的工作流/已经保存的/改一下刚才那个"，但当前上下文没有 workflowId，先 list_workflows 按名称搜索找回，不要重新创建
 
 ## 系统级约束（由代码强制，收到错误时遵守）
 - batch_validate / update_workflow 有系统级迭代上限（3 轮），达到后工具会返回"已达迭代上限"错误，此时必须停止并汇报结果，不要尝试绕过或继续修改
@@ -220,11 +221,26 @@ export class ReactAgentService {
     session.messages.push({ role: "user", content: message });
 
     // 3. 将历史消息转换为 LangChain BaseMessage 数组
-    const langchainMessages: BaseMessage[] = session.messages.map((m) =>
-      m.role === "user"
-        ? new HumanMessage(m.content)
-        : new AIMessage(m.content),
-    );
+    const langchainMessages: BaseMessage[] = [];
+
+    // 打断恢复记忆：把此前会话的工具结果摘要作为上下文注入（纯文本 SystemMessage，
+    // 不做 ToolMessage，避免 LangGraph 消息配对校验失败）。
+    // 所有 chat 请求都注入（正常链路 tool 消息不存在，代价可忽略）。
+    const toolSummaries = session.messages.filter((m) => m.role === "tool");
+    if (toolSummaries.length > 0) {
+      const contextText =
+        "【系统记录：以下是此前会话已完成的工具操作结果（用于恢复上下文，不是用户新消息）】\n" +
+        toolSummaries.map((m) => `- ${m.content}`).join("\n");
+      langchainMessages.push(new SystemMessage(contextText));
+    }
+
+    // 原有 user/assistant 消息
+    for (const m of session.messages) {
+      if (m.role === "user")
+        langchainMessages.push(new HumanMessage(m.content));
+      if (m.role === "assistant")
+        langchainMessages.push(new AIMessage(m.content));
+    }
 
     // 4. 设置 SSE 响应头
     this.setSSEHeaders(res);
@@ -469,6 +485,15 @@ export class ReactAgentService {
               res.write(
                 `d:${JSON.stringify({ type: "tool_end", name: toolName, output: toolContent })}\n`,
               );
+              // 打断恢复记忆：关键工具结果以摘要形式记入 session.messages（role:"tool"）
+              const summary = this.summarizeToolResult(toolName, toolContent);
+              if (summary) {
+                session.messages.push({
+                  role: "tool",
+                  toolName,
+                  content: summary,
+                });
+              }
               break;
             }
           }
@@ -604,6 +629,171 @@ export class ReactAgentService {
     }
 
     return JSON.stringify(output ?? "");
+  }
+
+  /**
+   * 为打断恢复记忆生成工具结果摘要
+   *
+   * 按工具名定制摘要策略，控制体积（≤1500 字符），只保留 LLM 恢复上下文
+   * 必需的关键信息（如 save 的 workflowId、read_file 的内容前几行）。
+   * 返回 null 表示该工具结果不需要记忆（如 get_platform_facts 每次可重查）。
+   *
+   * @param toolName - 工具名（如 read_file / save_to_coze）
+   * @param toolContent - 工具返回的完整文本（由 extractToolContent 提取）
+   * @returns 摘要字符串；无需记忆时返回 null
+   */
+  private summarizeToolResult(
+    toolName: string,
+    toolContent: string,
+  ): string | null {
+    const MAX_LEN = 1500;
+    const trunc = (s: string, max: number) =>
+      s.length > max ? s.slice(0, max) + "…（已截断）" : s;
+
+    // 尝试 JSON 解析，提取关键字段
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(toolContent) as Record<string, unknown>;
+    } catch {
+      // 不是 JSON，走纯文本截断
+    }
+
+    switch (toolName) {
+      case "read_file": {
+        // 保留文件内容前 1500 字符
+        return trunc(`[read_file] ${toolContent.slice(0, MAX_LEN)}`, MAX_LEN);
+      }
+
+      case "get_platform_facts":
+        // 平台事实每次可重查，且本身已瘦身，无需记忆
+        return null;
+
+      case "plan_workflow": {
+        if (parsed?.steps && Array.isArray(parsed.steps)) {
+          const steps = parsed.steps as Array<{
+            nodeType?: string;
+            description?: string;
+          }>;
+          const stepSummary = steps
+            .map((s) => `${s.nodeType ?? "?"}(${s.description ?? ""})`)
+            .join("→");
+          return `[plan_workflow] ${(parsed.name as string) ?? "?"}，${steps.length} 步: ${stepSummary}`;
+        }
+        return trunc(`[plan_workflow] ${toolContent.slice(0, 800)}`, MAX_LEN);
+      }
+
+      case "generate_workflow": {
+        if (parsed?.workflow) {
+          const wf = parsed.workflow as Record<string, unknown>;
+          const meta = wf.meta as Record<string, unknown> | undefined;
+          const name = meta?.name ?? "?";
+          const valid = (parsed.validation as Record<string, boolean>)
+            ?.valid
+            ? "通过"
+            : "失败";
+          return `[generate_workflow] ${name} 生成完成，结构校验${valid}`;
+        }
+        return trunc(
+          `[generate_workflow] ${toolContent.slice(0, 500)}`,
+          MAX_LEN,
+        );
+      }
+
+      case "save_to_coze": {
+        // 最关键：必须完整保留 workflowId + name + saved 状态
+        if (parsed) {
+          const id = parsed.workflowId ?? parsed.id ?? "?";
+          const name = parsed.name ?? "?";
+          const saved = parsed.saved ?? true;
+          return `[save_to_coze] workflowId=${id} name=${name} saved=${saved}`;
+        }
+        return trunc(`[save_to_coze] ${toolContent}`, MAX_LEN);
+      }
+
+      case "update_workflow": {
+        if (parsed?.changes) {
+          const changes =
+            typeof parsed.changes === "string"
+              ? parsed.changes
+              : JSON.stringify(parsed.changes);
+          return trunc(`[update_workflow] ${changes}`, MAX_LEN);
+        }
+        return trunc(`[update_workflow] ${toolContent.slice(0, 500)}`, MAX_LEN);
+      }
+
+      case "batch_validate": {
+        if (parsed) {
+          const accuracy = parsed.accuracy ?? "?";
+          const failed = parsed.failedCount ?? parsed.failed ?? "?";
+          const total = parsed.totalCount ?? parsed.total ?? "?";
+          return `[batch_validate] 通过 ${total}，accuracy=${accuracy}，${failed} 个失败`;
+        }
+        return trunc(
+          `[batch_validate] ${toolContent.slice(0, 500)}`,
+          MAX_LEN,
+        );
+      }
+
+      case "test_run_workflow": {
+        if (parsed?.executeId) {
+          return `[test_run_workflow] executeId=${parsed.executeId}`;
+        }
+        return trunc(
+          `[test_run_workflow] ${toolContent.slice(0, 300)}`,
+          MAX_LEN,
+        );
+      }
+
+      case "read_workflow": {
+        // 说明书内容很长，只取概览信息
+        const nodeMatch = toolContent.match(/节点数[：:]\s*(\d+)/);
+        const nameMatch = toolContent.match(
+          /^#\s*工作流说明书[：:]\s*(.+)/m,
+        );
+        const name = nameMatch?.[1]?.trim() ?? "?";
+        const nodeCount = nodeMatch?.[1] ?? "?";
+        return `[read_workflow] 已读取 ${name}（${nodeCount} 节点）`;
+      }
+
+      case "list_workflows": {
+        if (parsed?.workflows && Array.isArray(parsed.workflows)) {
+          const wfs = parsed.workflows as Array<{
+            workflowId?: string;
+            name?: string;
+          }>;
+          const names = wfs
+            .slice(0, 5)
+            .map((w) => w.name ?? w.workflowId)
+            .join(", ");
+          return `[list_workflows] 找到 ${wfs.length} 个工作流: ${names}`;
+        }
+        return trunc(
+          `[list_workflows] ${toolContent.slice(0, 500)}`,
+          MAX_LEN,
+        );
+      }
+
+      case "clarify_question":
+        // interrupt 场景不走 on_tool_end 正常流，无需记录
+        return null;
+
+      case "rename_workflow": {
+        if (parsed?.name) {
+          return `[rename_workflow] 已改名 ${parsed.name}`;
+        }
+        return trunc(
+          `[rename_workflow] ${toolContent.slice(0, 300)}`,
+          MAX_LEN,
+        );
+      }
+
+      default:
+        // 未知工具：截断 500 字符
+        return trunc(
+          `[${toolName}] ${toolContent.slice(0, 500)}`,
+          MAX_LEN,
+        );
+    }
   }
 
   /**
