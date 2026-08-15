@@ -79,7 +79,20 @@ export const PLAN_SKELETON_PROMPT = `你是 Coze 工作流需求分析器。
   下游节点 inputs.name 必须与上游节点 outputs.name 一致
 - startInputs 定义工作流入口参数（多输入时列出全部）
 - 不要输出 nodeConfig（节点业务配置由系统另行生成）
-- 只输出 JSON 对象，不要输出其他内容`;
+- 只输出 JSON 对象，不要输出其他内容
+
+## 节点类型选择规则（必须遵守，选错节点类型会导致工作流无法执行）
+- 音频/图像/视频等多媒体内容的理解（如听音频识别歌词、看图描述）→ **必须用 llm 节点**：
+  Coze 平台只有大模型节点能读取媒体内容，代码节点在沙箱中无法访问外部音频/图片链接。
+  禁止把“识别音频/识别图片/读视频”设计成 code 节点。
+- 纯数据操作（字符串匹配/相似度计算/数据清洗/JSON 解析/阈值判断后返回）→ 用 code 节点：
+  代码节点在平台沙箱跑 Python，适合确定性计算，但**不能调外部 API 获取媒体内容**。
+- 分支判断 → condition 节点；文本拼接/格式化 → text 节点；调用外部 HTTP 接口 → http 节点；
+  查平台数据库 → database_query 节点；合并多路输出 → merge 节点。
+- 判断方法：需要模型“理解内容”（听懂/看懂/理解语义）→ llm；
+  只是“加工数据”（算、比、拼、查）→ code 或其他具体节点。
+- 典型错误示例：把“识别音频中的歌词”设计成 code 节点（❌，应选 llm 多模态）；
+  把“歌词匹配”设计成 llm 节点（❌，纯计算应选 code）。`;
 
 /**
  * Stage 2 节点配置提示词（分步生成第 2 步）
@@ -108,4 +121,7 @@ export const NODE_CONFIG_PROMPT = `你是 Coze 工作流节点配置生成器。
   http 节点输出 { method, url, description }
   text 节点输出 { concatResult }
 - 禁止编造平台不存在的模型名（如 gpt-4o）
+- llm 节点若处理音频/视频/图片（骨架 description 提到识别音频/看图等），
+  model 必须选平台 audio=true 的多模态模型（如 Qwen3.5-Omni-Plus、Doubao-Seed-2.0-Lite），
+  禁止选纯文本模型
 - 只输出 JSON 对象，不要输出其他内容`;
