@@ -98,12 +98,17 @@ export class CozeClient {
   /**
    * 获取工作流最新 schema + submit_commit_id
    *
-   * 内部自动检查编辑锁，过期则重新 acquire。
+   * 默认内部检查编辑锁（过期则重新 acquire）；
+   * 传 opts.noLock=true 时跳过锁检查（只读场景：read_workflow 拉 schema 展示用，
+   * 避免读操作拿 15 分钟编辑锁阻塞其他会话的 save）。
    */
   async getSchema(
     workflowId: string,
+    opts?: { noLock?: boolean },
   ): Promise<{ schemaJson: string; submitCommitId: string }> {
-    await this.ensureLock(workflowId);
+    if (!opts?.noLock) {
+      await this.ensureLock(workflowId);
+    }
 
     const res = await this.request<CanvasData>("canvas", {
       workflow_id: workflowId,
@@ -121,8 +126,13 @@ export class CozeClient {
    * 流程：ensureLock → getSchema（拿最新 commit）→ save。
    * 若返回 777777759（commit 过期）或 777777770（资源变更通知失败），
    * 自动重试（最多 3 次），重试前清除锁状态并等待 2 秒。
+   *
+   * @returns 保存成功后返回最新 submit_commit_id（供调用方写入缓存，stale 检测用）
    */
-  async saveWorkflow(workflowId: string, schemaJson: string): Promise<void> {
+  async saveWorkflow(
+    workflowId: string,
+    schemaJson: string,
+  ): Promise<string> {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
@@ -137,7 +147,7 @@ export class CozeClient {
           submit_commit_id: submitCommitId,
           ignore_status_transfer: true,
         });
-        return; // 成功
+        return submitCommitId; // 成功，返回最新 commit id
       } catch (e) {
         lastError = e as Error;
         const errMsg = (e as Error).message;
@@ -292,17 +302,65 @@ export class CozeClient {
 
   /**
    * 获取工作流列表
+   *
+   * 接口：POST /api/plugin_api/library_resource_list（res_type_filter=[2]=工作流）
+   * 2026-08-16 实测：旧接口 workflow_list 平台不支持；
+   * 正确接口返回 resource_list[]，workflowId 在 res_id 字段，
+   * 分页用 cursor + has_more（不是 page/size）。
+   *
+   * @param size - 每页条数（默认 15）
+   * @param cursor - 分页游标（上页返回；不传=第一页）
+   * @returns 工作流摘要列表 + 游标 + 是否还有下一页
    */
-  async listWorkflows(page = 1, size = 20): Promise<unknown[]> {
-    const res = await this.request<{ workflow_list: unknown[] }>(
-      "workflow_list",
+  async listWorkflows(
+    size = 15,
+    cursor?: string,
+  ): Promise<{
+    workflows: Array<{ workflowId: string; name: string; desc: string }>;
+    cursor: string;
+    hasMore: boolean;
+  }> {
+    const res = (await this.request<unknown>(
+      "plugin_api/library_resource_list",
       {
+        user_filter: 0,
+        res_type_filter: [2],
+        name: "",
+        publish_status_filter: 0,
         space_id: this.spaceId,
-        page,
         size,
+        is_get_imageflow: true,
+        owner_ids: [],
+        desc: "",
+        res_id: "",
+        ...(cursor ? { cursor } : {}),
       },
-    );
-    return res.data.workflow_list;
+      "/api/",
+    )) as unknown as {
+      data?: unknown;
+      cursor?: string;
+      has_more?: boolean;
+      resource_list?: Array<{
+        res_id?: string; // ⚠️ 工作流 ID 在 res_id，不是 id
+        name?: string;
+        desc?: string;
+        res_type?: number; // 2=工作流
+        publish_status?: number;
+      }>;
+    };
+    // 实测（2026-08-16）该接口响应为顶层平铺（resource_list/cursor/has_more），
+    // 无 data 包裹；若平台改回标准 CozeApiResponse 结构（data 嵌套），则读 res.data
+    const raw = res.data as typeof res | undefined;
+    const data = raw?.resource_list !== undefined ? raw : res;
+    return {
+      workflows: (data.resource_list ?? []).map((item) => ({
+        workflowId: item.res_id ?? "",
+        name: item.name ?? "",
+        desc: item.desc ?? "",
+      })),
+      cursor: data.cursor ?? "",
+      hasMore: data.has_more ?? false,
+    };
   }
 
   /**

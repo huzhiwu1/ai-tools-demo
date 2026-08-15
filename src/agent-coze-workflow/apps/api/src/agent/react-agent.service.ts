@@ -64,17 +64,23 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
 2. read_file: 通用文件读取，返回文件原始内容。文件的具体用途、列含义、数据如何参与工作流，由你（LLM）根据用户需求判断
 3. plan_workflow: 将用户需求分析为结构化工作流规划（WorkflowPlan）
 4. generate_workflow: 将规划结果映射为 Coze 平台可部署的工作流 JSON
-5. save_to_coze: 将工作流部署到 Coze 平台
+5. save_to_coze: 将工作流部署到 Coze 平台（workflow JSON 参数可选，优先用 workflowId 句柄）
 6. test_run_workflow: 试运行已部署的工作流
 7. batch_validate: 批量试运行已部署的工作流，对照期望值验证准确性，返回准确率 + 错误明细 + 归因分组
-8. update_workflow: 根据归因分析结果修改工作流节点（阈值/代码/逻辑/prompt/提示词/数据/常量），返回修改后的完整 workflow
+8. update_workflow: 根据归因分析结果修改工作流节点（阈值/代码/逻辑/prompt/提示词/数据/常量），返回 changes 摘要（不再返回完整 workflow）
 9. rename_workflow: 修改已创建工作流的名称/描述（不走 save，不影响工作流内容）
+10. list_workflows: 搜索平台已有工作流（按名称关键词），返回摘要列表（workflowId/name/desc）
+11. read_workflow: 读取平台已有工作流，输出人类可读说明书（拓扑图/节点清单/数据流/配置详情）
 
 ## 使用规则
 - 先分析需求是否完整，缺信息时优先调用 clarify_question
 - 规划→生成→部署→试运行，按顺序执行
 - 每一步完成后检查结果，再决定下一步
 - 工具调用失败时，将错误信息告知用户
+- **读工作流规则**：
+  - 用户没给 workflowId 时，先 list_workflows 按名称搜索拿 ID
+  - 用户问「工作流长什么样/为什么错」、或准备修改线上已有工作流时，先 read_workflow 读说明书（读后写入服务端缓存）
+  - read_workflow 默认 scope=overview（概览+节点清单+数据流，省 token）；需要完整配置与验证报告时用 scope=full
 - **save_to_coze 规则（重要）**：
   - **首次保存**：不传 workflowId，创建新工作流
   - **修复迭代**（校验失败/试运行失败/批量验证失败后 update_workflow 修改过）：
@@ -82,6 +88,10 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
   - 只有第一次创建工作流本身失败时才重新创建
   - save_to_coze 提示"工作流名称已存在"时：工具会自动加后缀重试；若仍需指定名称，用 rename_workflow 改名后重新保存
 - rename_workflow 只改名称/描述，不影响工作流内容
+- **句柄化（重要）**：update_workflow / save_to_coze 的 workflow JSON 参数现在可选。
+  - 推荐流程：save_to_coze 后拿 workflowId → update_workflow 只传 workflowId + fixInstruction（不传大 JSON）→ 再 save_to_coze 传 workflowId 保存
+  - update_workflow 只改服务端缓存不落平台，**修改后必须 save_to_coze（传 workflowId）保存，保存成功才生效**
+  - update_workflow 返回「线上工作流已被修改，已重新拉取」时，说明平台侧有人工修改，需基于最新版本重新描述修改指令
 
 ## 系统级约束（由代码强制，收到错误时遵守）
 - batch_validate / update_workflow 有系统级迭代上限（3 轮），达到后工具会返回"已达迭代上限"错误，此时必须停止并汇报结果，不要尝试绕过或继续修改
@@ -126,7 +136,12 @@ const llm = new ChatOpenAI({
   // 官网默认 4K 上限会把含工具调用参数的输出截断，导致工具参数解析失败后
   // 错误反馈给 LLM 反复重试（观感死循环）。实测官网接受 8192，显式放大。
   // 注意：若模型切回 deepseek-chat 等非思考模型，此值同样安全。
-  maxTokens: 8192,
+  // 2026-08-16 修复：主 LLM 漏了关思考配置（DeepSeekClient 已关，主 Agent 循环没关）——
+  // plan_workflow 输出大 JSON 后，主 LLM 下一步要重新背诵 plan 作为工具参数，
+  // reasoning 吃掉 8192 大半预算 → 正文截断 → 无 tool_calls → Agent 静默 done。
+  // 与 deepseek.client.ts 对齐：thinking disabled（网关已验证支持）+ maxTokens 放大。
+  maxTokens: 16384,
+  modelKwargs: { thinking: { type: "disabled" } },
   // 显式限制超时与重试：默认 maxRetries=6 会把单次失败放大为
   // 6 次静默重试（每次等满超时），前端表现为长时间无事件、一直转圈
   timeout: 60_000,

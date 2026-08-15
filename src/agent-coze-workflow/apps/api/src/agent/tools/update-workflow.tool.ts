@@ -1,5 +1,5 @@
 /**
- * [Tool] update_workflow - 工作流更新
+ * [Tool] update_workflow - 工作流更新（句柄化）
  *
  * 职责：
  * 根据 LLM 归因分析后的修改指令，修改工作流中的节点字段。
@@ -7,12 +7,17 @@
  * （type/target/content），再按类型精确执行，替代原来的关键词猜谜。
  *
  * 流程：
- * 1. chatStructured 解析 fixInstruction → { type, target, content }
- * 2. 按 type 在 workflow.nodes 中查找目标节点（title 或 id）
- * 3. 修改对应字段，返回完整 workflow + changes 列表
+ * 1. iteration 计数（保留现状上限约束）
+ * 2. 解析工作流来源：参数 workflow ?? workflowCache.get(workflowId)，缓存/参数都没有则报错
+ * 3. stale 检测（缓存命中时）：比对平台 submit_commit_id，线上被外部修改则刷新缓存并提示
+ * 4. chatStructured 解析 fixInstruction → { type, target, content }
+ * 5. 按 type 在 workflow.nodes 中查找目标节点（title 或 id）
+ * 6. 修改对应字段，标记缓存 dirty，返回 changes 摘要（不再返回完整 workflow）
  *
  * 关键细节：
- * - 本工具不调平台 API（save_to_coze 负责保存）
+ * - 本工具不调平台保存 API（save_to_coze 负责保存），仅 stale 检测时调 getSchema
+ * - 句柄化：LLM 不传大 JSON，只传 workflowId + fixInstruction，从服务端缓存取工作流
+ * - stale 检测失败（拿不到平台最新版本）直接报错，防止旧缓存覆盖平台侧人工修改
  * - target 优先匹配节点 title（中文名），其次 id，最后 title 包含
  * - code_logic 复用 CodeGenerator（LLM 生成平台规范 Python 代码）
  * - LLM 解析失败降级：返回明确错误字符串，让 Agent 重新组织语言
@@ -24,6 +29,9 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { DeepSeekClient } from "../../llm/deepseek.client";
 import { CodeGenerator } from "../../workflow-engine/code-generator";
+import { platformToProject } from "../../workflow-engine/platform-to-project";
+import { workflowCache } from "../workflow-cache";
+import { cozeClient } from "./coze-client";
 import {
   incrementIteration,
   MAX_ITERATIONS,
@@ -97,7 +105,8 @@ async function parseInstruction(
     return await client.chatStructured(
       UpdateInstructionSchema,
       "你是工作流修改指令解析器。将用户的自然语言修改指令解析为结构化修改指令。" +
-        "type 从枚举中选择最合适的一项；target 写工作流节点摘要中存在的节点标识；" +
+        "type 必须严格从 [llm_prompt, code_logic, condition, threshold, data, other] 中选择一项；" +
+        "target 写工作流节点摘要中存在的节点标识；" +
         "content 写完整的修改内容（不要省略）。无法归类的指令用 type=other。",
       `当前工作流节点摘要：${JSON.stringify(summarizeNodes(workflow))}\n\n` +
         `用户修改指令：${fixInstruction}`,
@@ -152,14 +161,63 @@ export const updateWorkflowTool = tool(
     }
 
     try {
-      const wf = workflow as unknown as Record<string, unknown>;
+      // 句柄化：优先参数 workflow，其次服务端缓存按 workflowId 取
+      const cached = workflowCache.get(workflowId);
+      let wf: Record<string, unknown> | undefined;
+      let fromCache = false;
+      if (workflow) {
+        wf = workflow as unknown as Record<string, unknown>;
+      } else if (cached) {
+        wf = cached.workflow;
+        fromCache = true;
+      } else {
+        return (
+          `工作流更新失败: 未找到工作流缓存（workflowId=${workflowId}）。` +
+          `请先调用 read_workflow 或 save_to_coze 后再修改，或在参数中传入 workflow`
+        );
+      }
+
+      // stale 检测（仅缓存命中时）：比对平台 submit_commit_id，
+      // 防止用户（或其它会话）在平台侧人工修改后被旧缓存覆盖
+      if (fromCache) {
+        try {
+          const { schemaJson, submitCommitId } =
+            await cozeClient.getSchema(workflowId);
+          const entry = workflowCache.get(workflowId);
+          if (entry && !entry.commitId) {
+            // 缓存尚无 commitId（首次 save 后未记录）：补记，不刷新内容
+            entry.commitId = submitCommitId;
+          } else if (
+            entry &&
+            entry.commitId &&
+            entry.commitId !== submitCommitId
+          ) {
+            // 线上已被外部修改：反转换刷新缓存，要求 LLM 基于最新版本重新描述
+            const converted = platformToProject(schemaJson, {
+              workflowName: (
+                entry.workflow.meta as { name?: string } | undefined
+              )?.name,
+            });
+            workflowCache.set(
+              workflowId,
+              converted.workflow as unknown as Record<string, unknown>,
+              { commitId: submitCommitId },
+            );
+            return "线上工作流已被修改，已从平台重新拉取最新版本，请基于最新版本重新描述修改指令";
+          }
+        } catch (e) {
+          // stale 检测失败：不冒覆盖风险，报错让 LLM 稍后重试
+          return `工作流更新失败: 无法获取平台最新版本（stale 检测失败）: ${(e as Error).message}`;
+        }
+      }
+
       const nodes = wf.nodes as Array<Record<string, unknown>> | undefined;
       if (!nodes || !Array.isArray(nodes)) {
         return "工作流更新失败: workflow 缺少 nodes 字段";
       }
 
       // 1. LLM 结构化解析修改指令（失败降级为错误提示）
-      const instruction = await parseInstruction(workflow, fixInstruction);
+      const instruction = await parseInstruction(wf, fixInstruction);
       if (!instruction) {
         return PARSE_FAIL_MESSAGE;
       }
@@ -303,7 +361,16 @@ export const updateWorkflowTool = tool(
         return "工作流更新失败: 无有效修改";
       }
 
-      return JSON.stringify({ workflow: wf, changes }, null, 2);
+      // 修改来自缓存 → 标记 dirty（save_to_coze 成功后 clearDirty）
+      if (fromCache) {
+        workflowCache.markDirty(workflowId);
+      }
+
+      // 句柄化：不再返回完整 workflow，只返回 changes 摘要 + 保存提示
+      return (
+        JSON.stringify({ changes, workflowId, dirty: true }, null, 2) +
+        "\n\n修改已应用，请调用 save_to_coze（传 workflowId）保存后生效"
+      );
     } catch (e) {
       return `工作流更新失败: ${(e as Error).message}`;
     }
@@ -311,24 +378,28 @@ export const updateWorkflowTool = tool(
   {
     name: "update_workflow",
     description:
-      "根据归因分析结果修改工作流节点。传入当前 workflow JSON + 归因分析结论 + " +
-      "想要的修改（自然语言即可，如「把相似度阈值从 0.8 调到 0.6」），" +
+      "根据归因分析结果修改工作流节点。传入 workflowId + 修改指令（自然语言即可，如「把相似度阈值从 0.8 调到 0.6」），" +
       "工具会用 LLM 自动理解意图并结构化执行，支持修改 LLM 节点提示词、" +
       "代码节点逻辑（自动生成 Python 代码）、条件分支、阈值、数据常量。" +
-      "返回修改后的完整 workflow 和 changes 列表。修改后需调用 save_to_coze 重新保存，" +
-      "**保存时必须带上本工具的 workflowId 参数**（在原工作流上更新，不要新建）。",    schema: z.object({
+      "工作流 JSON 从服务端缓存自动获取（句柄化，推荐不传 workflow 参数，避免背诵大 JSON）。" +
+      "返回 changes 摘要（不再返回完整 workflow）。" +
+      "修改后必须调用 save_to_coze（传 workflowId）保存，保存成功才生效（update 只改缓存不落平台）。",
+    schema: z.object({
       workflow: z
         .record(z.string(), z.any())
+        .optional()
         .describe(
-          "当前工作流 JSON（含 meta、nodes、edges），通常从 generate_workflow 的输出中获取",
+          "可选。当前工作流 JSON。不传时从服务端缓存按 workflowId 获取（推荐：句柄化，避免背诵大 JSON）",
         ),
       workflowId: z
         .string()
-        .describe("save_to_coze 返回的 workflowId，用于迭代计数"),
+        .describe(
+          "工作流 ID（save_to_coze 返回的 platformWorkflowId），用于从缓存取工作流和迭代计数",
+        ),
       fixInstruction: z
         .string()
         .describe(
-          "LLM 归因分析后给出的修改指令（自然语言），包含要改的节点名称和具体修改内容，如「把『相似度计算』节点的阈值从 0.8 改为 0.6」",
+          "修改指令（自然语言），如「把『相似度计算』节点的阈值从 0.8 改为 0.6」",
         ),
     }),
   },

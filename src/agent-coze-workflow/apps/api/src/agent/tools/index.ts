@@ -20,6 +20,8 @@ export { getPlatformFactsTool } from "./platform-facts.tool";
 export { batchValidateTool } from "./batch-validate.tool";
 export { updateWorkflowTool } from "./update-workflow.tool";
 export { renameWorkflowTool } from "./rename-workflow.tool";
+export { listWorkflowsTool } from "./list-workflows.tool";
+export { readWorkflowTool } from "./read-workflow.tool";
 
 import { Logger } from "@nestjs/common";
 import type { StructuredToolInterface } from "@langchain/core/tools";
@@ -34,6 +36,8 @@ import { getPlatformFactsTool } from "./platform-facts.tool";
 import { batchValidateTool } from "./batch-validate.tool";
 import { updateWorkflowTool } from "./update-workflow.tool";
 import { renameWorkflowTool } from "./rename-workflow.tool";
+import { listWorkflowsTool } from "./list-workflows.tool";
+import { readWorkflowTool } from "./read-workflow.tool";
 
 const toolLogger = new Logger("Tool");
 
@@ -48,7 +52,7 @@ function stringifyToolOutput(result: unknown): string {
  * 包装工具 invoke：统一记录入参 / 出参 / 耗时日志
  *
  * 通过覆盖实例 invoke 方法实现（StructuredTool 原型方法可被实例属性遮蔽），
- * 在 ALL_TOOLS 注册时统一包装，9 个工具自动覆盖，无需逐文件埋点。
+ * 在 ALL_TOOLS 注册时统一包装，12 个工具自动覆盖，无需逐文件埋点。
  *
  * 特殊处理：clarify_question 触发的 GraphInterrupt 是正常的 interrupt 暂停，
  * 记为 debug 而非 error，避免误报工具失败。
@@ -107,6 +111,8 @@ export const ALL_TOOLS = [
   withToolLog(planWorkflowTool, "plan_workflow"),
   withToolLog(generateWorkflowTool, "generate_workflow"),
   withToolLog(saveToCozeTool, "save_to_coze"),
+  withToolLog(listWorkflowsTool, "list_workflows"),
+  withToolLog(readWorkflowTool, "read_workflow"),
   withToolLog(testRunWorkflowTool, "test_run_workflow"),
   withToolLog(batchValidateTool, "batch_validate"),
   withToolLog(updateWorkflowTool, "update_workflow"),

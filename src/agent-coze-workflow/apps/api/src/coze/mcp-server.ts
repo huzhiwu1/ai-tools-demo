@@ -179,15 +179,15 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
   server.registerTool(
     "coze_list_workflows",
     {
-      description: "获取工作流列表",
+      description: "获取工作流列表（library_resource_list 接口，cursor 分页）",
       inputSchema: {
-        page: z.number().int().positive().default(1),
-        size: z.number().int().positive().default(20),
+        size: z.number().int().positive().default(15),
+        cursor: z.string().optional(),
       },
     },
-    async ({ page, size }) => {
+    async ({ size, cursor }) => {
       try {
-        const list = await coze.listWorkflows(page, size);
+        const list = await coze.listWorkflows(size, cursor);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(list) }],
         };

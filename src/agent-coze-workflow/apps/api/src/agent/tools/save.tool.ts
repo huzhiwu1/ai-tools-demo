@@ -1,18 +1,21 @@
 /**
- * [Tool] save_to_coze - 部署工作流到 Coze 平台
+ * [Tool] save_to_coze - 部署工作流到 Coze 平台（句柄化）
  *
  * 职责：
- * 将 generate_workflow 输出的工作流 JSON 转换为平台内部 schema，
+ * 将工作流 JSON（参数或服务端缓存）转换为平台内部 schema，
  * 创建 Coze 工作流并保存。
  *
  * 流程：
- * 1. convertToPlatformSchema(workflow) → 平台内部 schema JSON 字符串
- * 2. cozeClient.createWorkflow() → 获取 workflowId
- * 3. cozeClient.validateTree() → 平台连通性校验（有错误则返回给 LLM，不继续 save）
- * 4. cozeClient.saveWorkflow(workflowId, schemaJson) → 保存
+ * 1. 解析目标工作流：参数 workflow ?? workflowCache.get(workflowId)（句柄化，缓存 miss 且无参数则报错）
+ * 2. convertToPlatformSchema(workflow) → 平台内部 schema JSON 字符串
+ * 3. cozeClient.createWorkflow() → 获取 workflowId（首次创建）；传 workflowId 则更新
+ * 4. cozeClient.validateTree() → 平台连通性校验（有错误则返回给 LLM，不继续 save）
+ * 5. cozeClient.saveWorkflow(workflowId, schemaJson) → 保存
+ * 6. 成功后维护缓存：来自缓存的更新 → clearDirty；首次创建 → 写入缓存供后续句柄化复用
  *
  * 关键细节：
  * - 使用共享单例 cozeClient（见 coze-client.ts），内部管理编辑锁和重试
+ * - save 失败回滚（dirty 缓存来源）：save 前快照，失败后恢复快照并保持 dirty（修改仍待保存）
  * - try/catch 兜底，错误以字符串返回给 LLM
  * - COZE_API_BASE_URL / COZE_SESSION_KEY / COZE_SPACE_ID 配置集中在 coze-client.ts 中读取
  */
@@ -24,6 +27,7 @@ import { validateWorkflow } from "@coze-workflow/workflow-schema";
 import { checkPlatformCompatibility } from "../../workflow-engine/platform-validator";
 import { convertToPlatformSchema } from "../../coze/schema-converter";
 import { cozeClient } from "./coze-client";
+import { workflowCache } from "../workflow-cache";
 import { resetIteration } from "./iteration-counter";
 
 /**
@@ -84,16 +88,44 @@ async function createWorkflowWithRetry(
 
 export const saveToCozeTool = tool(
   async ({ workflow, workflowId }) => {
-    try {
-      const cozeWorkflow = workflow as unknown as CozeWorkflow;
+    // 1. 解析目标工作流来源：缓存条目（供句柄化取值 + dirty 快照用）
+    const cached =
+      typeof workflowId === "string" && workflowId.length > 0
+        ? workflowCache.get(workflowId)
+        : undefined;
 
-      // 1. 结构校验（现有 validateWorkflow，来自 packages/workflow-schema）
+    // save 失败回滚快照（缓存来源且 dirty 时）：失败后恢复缓存对象、dirty 保持 true
+    let snapshot: Record<string, unknown> | undefined;
+    if (cached && cached.dirty) {
+      snapshot = JSON.parse(JSON.stringify(cached.workflow)) as Record<
+        string,
+        unknown
+      >;
+    }
+    const rollbackCache = () => {
+      if (cached && snapshot) {
+        workflowCache.set(workflowId!, snapshot, {
+          commitId: cached.commitId,
+        });
+        workflowCache.markDirty(workflowId!);
+      }
+    };
+
+    try {
+      // 2. 目标工作流：参数 workflow ?? 服务端缓存（句柄化）
+      const source = workflow ?? cached?.workflow;
+      if (!source) {
+        return "保存失败: 未提供 workflow 且缓存中无此工作流。请先 generate_workflow 生成后再保存";
+      }
+      const cozeWorkflow = source as unknown as CozeWorkflow;
+
+      // 3. 结构校验（现有 validateWorkflow，来自 packages/workflow-schema）
       const structValidation = validateWorkflow(cozeWorkflow);
       if (!structValidation.valid) {
         return `保存失败: 工作流结构校验未通过，请先修复:\n${structValidation.errors.map((e) => "- " + e.message).join("\n")}`;
       }
 
-      // 2. 平台兼容性校验（新增，针对已知平台坑）
+      // 4. 平台兼容性校验（新增，针对已知平台坑）
       const compatResult = checkPlatformCompatibility(cozeWorkflow);
       if (!compatResult.valid) {
         return `保存失败: 平台兼容性校验未通过:\n${compatResult.errors.join("\n")}`;
@@ -112,10 +144,7 @@ export const saveToCozeTool = tool(
         // 拉取失败不阻塞保存：converter 内部查不到时默认 201
       }
 
-      const schemaJson = convertToPlatformSchema(
-        cozeWorkflow,
-        modelTypeMap,
-      );
+      const schemaJson = convertToPlatformSchema(cozeWorkflow, modelTypeMap);
 
       // 目标工作流：传了 workflowId → 更新已有工作流（修复迭代用，不新建）；
       // 没传 → 首次创建（名称冲突自动加后缀重试 _2/_3/_4）
@@ -134,7 +163,7 @@ export const saveToCozeTool = tool(
         usedName = created.usedName;
       }
 
-      // 3. 平台 validate_tree 校验（保存前提前暴露端口未连接等问题，避免"保存 → 平台报错 → 重试"往返）
+      // 4. 平台 validate_tree 校验（保存前提前暴露端口未连接等问题，避免"保存 → 平台报错 → 重试"往返）
       const validationErrors = await cozeClient.validateTree(
         platformWorkflowId,
         schemaJson,
@@ -151,44 +180,74 @@ export const saveToCozeTool = tool(
             // 删除失败不影响主流程，继续返回错误信息
           }
         }
+        // save 失败回滚：恢复缓存快照（dirty 保持 true，修改仍待保存）
+        rollbackCache();
         return (
           `${isUpdate ? "更新" : "保存"}失败: 平台 validate_tree 校验未通过` +
-          (isUpdate ? "（原工作流已保留，修复后重新 save_to_coze 并带上原 workflowId）" : "，已删除空壳工作流") +
+          (isUpdate
+            ? "（原工作流已保留，修复后重新 save_to_coze 并带上原 workflowId）"
+            : "，已删除空壳工作流") +
           `。请修复节点连线后重新保存:\n` +
           errorMessages.map((m) => "- " + m).join("\n")
         );
       }
 
-      await cozeClient.saveWorkflow(platformWorkflowId, schemaJson);
+      const submitCommitId = await cozeClient.saveWorkflow(
+        platformWorkflowId,
+        schemaJson,
+      );
       resetIteration(platformWorkflowId);
+
+      // 5. 缓存维护：来自缓存的更新 → clearDirty + 刷新 commitId；
+      // 首次创建 → 写缓存（带 commitId，stale 检测基线）
+      if (cached) {
+        workflowCache.clearDirty(platformWorkflowId);
+        workflowCache.set(platformWorkflowId, cozeWorkflow as unknown as Record<string, unknown>, {
+          commitId: submitCommitId,
+        });
+      } else {
+        workflowCache.set(
+          platformWorkflowId,
+          cozeWorkflow as unknown as Record<string, unknown>,
+          { commitId: submitCommitId },
+        );
+      }
+
       return JSON.stringify(
-        { workflowId: platformWorkflowId, saved: true, name: usedName, updated: isUpdate },
+        {
+          workflowId: platformWorkflowId,
+          saved: true,
+          name: usedName,
+          updated: isUpdate,
+        },
         null,
         2,
       );
     } catch (e) {
+      // save 异常失败：恢复缓存快照（dirty 保持 true，修改仍待保存）
+      rollbackCache();
       return `保存失败: ${(e as Error).message}`;
     }
   },
   {
     name: "save_to_coze",
     description:
-      "将工作流 JSON 部署到 Coze 平台。**不传 workflowId 时创建新的工作流并保存**；" +
+      "将工作流部署到 Coze 平台。**不传 workflowId 时创建新的工作流并保存**；" +
       "**传 workflowId 时更新该已有工作流**（修复迭代场景：update_workflow 修改后重新保存，" +
       "必须把原 workflowId 传入，避免每次修复都新建工作流）。" +
-      "返回平台分配的 workflowId。",
+      "workflow 参数可选（句柄化）：不传时自动从服务端缓存按 workflowId 获取，" +
+      "LLM 无需背诵大 JSON。返回平台分配的 workflowId。",
     schema: z.object({
       workflow: z
         .record(z.string(), z.any())
+        .optional()
         .describe(
-          "generate_workflow 返回的工作流 JSON 中的 workflow 字段（含 meta、nodes、edges）",
+          "可选。工作流 JSON。不传时从服务端缓存按 workflowId 获取（句柄化）",
         ),
       workflowId: z
         .string()
         .optional()
-        .describe(
-          "已有工作流的 workflowId（可选）。修复迭代时传入，更新该工作流而非新建；首次创建时不要传",
-        ),
+        .describe("已有工作流 ID（可选）。传了=更新该工作流；不传=首次创建"),
     }),
   },
 );
