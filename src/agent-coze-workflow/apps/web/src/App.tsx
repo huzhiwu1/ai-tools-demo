@@ -124,9 +124,7 @@ export default function App() {
       }: {
         messages: Array<{ role: string; content: unknown }>;
       }) => {
-        const lastUser = [...msgs]
-          .reverse()
-          .find((m) => m.role === "user");
+        const lastUser = [...msgs].reverse().find((m) => m.role === "user");
         return {
           // JSONValue 不允许 undefined，无会话时用 null 占位
           sessionId: sessionId ?? null,
@@ -191,171 +189,177 @@ export default function App() {
    *
    * 使用函数式 setState，回调内无外部依赖。
    */
-  const handleDataEvent = useCallback((event: DataStreamEvent) => {
-    switch (event.type) {
-      case "session": {
-        if (typeof event.sessionId === "string") {
-          setSessionId(event.sessionId);
+  const handleDataEvent = useCallback(
+    (event: DataStreamEvent) => {
+      switch (event.type) {
+        case "session": {
+          if (typeof event.sessionId === "string") {
+            setSessionId(event.sessionId);
+          }
+          break;
         }
-        break;
-      }
 
-      case "text_delta": {
-        const content = event.content ?? "";
-        if (!content) break;
+        case "text_delta": {
+          const content = event.content ?? "";
+          if (!content) break;
 
-        // 正式输出开始 → 思考段落封存（固化到消息流，不再累积）
-        currentReasoningIdRef.current = null;
+          // 正式输出开始 → 思考段落封存（固化到消息流，不再累积）
+          currentReasoningIdRef.current = null;
 
-        setMessages((prev) => {
-          // 没有开放分段 → 新建一条 assistant 消息
-          if (!currentAssistantIdRef.current) {
-            const newId = crypto.randomUUID();
-            currentAssistantIdRef.current = newId;
-            return [...prev, { id: newId, role: "assistant", content }];
-          }
-          // 有开放分段 → 追加文本
-          return prev.map((m) =>
-            m.id === currentAssistantIdRef.current
-              ? { ...m, content: m.content + content }
-              : m,
-          );
-        });
-        break;
-      }
-
-      case "reasoning_delta": {
-        // LLM 思考内容增量（DeepSeek reasoning_content）
-        // 固化到消息流（data.type="reasoning"），让用户看到完整决策过程
-        // （遇到什么问题、为什么这么做、准备怎么处理）
-        const content = event.content ?? "";
-        if (!content) break;
-        setMessages((prev) => {
-          // 没有开放的思考段落 → 新建一条 reasoning 消息
-          if (!currentReasoningIdRef.current) {
-            const newId = crypto.randomUUID();
-            currentReasoningIdRef.current = newId;
-            return [
-              ...prev,
-              {
-                id: newId,
-                role: "assistant",
-                content: "",
-                data: { type: "reasoning", content },
-              },
-            ];
-          }
-          // 有开放段落 → 追加内容
-          return prev.map((m) => {
-            if (m.id !== currentReasoningIdRef.current) return m;
-            const cur = (m.data as { content?: string } | undefined)
-              ?.content ?? "";
-            return {
-              ...m,
-              data: { type: "reasoning", content: cur + content },
-            };
+          setMessages((prev) => {
+            // 没有开放分段 → 新建一条 assistant 消息
+            if (!currentAssistantIdRef.current) {
+              const newId = crypto.randomUUID();
+              currentAssistantIdRef.current = newId;
+              return [...prev, { id: newId, role: "assistant", content }];
+            }
+            // 有开放分段 → 追加文本
+            return prev.map((m) =>
+              m.id === currentAssistantIdRef.current
+                ? { ...m, content: m.content + content }
+                : m,
+            );
           });
-        });
-        break;
-      }
-
-      case "tool_start": {
-        // 分段边界：封存当前文本分段，后续文本进新气泡
-        currentAssistantIdRef.current = null;
-        // 工具调用前的思考段落封存（固化到消息流，用户能看到为什么调这个工具）
-        currentReasoningIdRef.current = null;
-
-        const name = event.name ?? "unknown";
-        // 渲染 key 用随机 UUID：不能用自增序号——打断发送新消息时旧流
-        // 残留事件会重放（processedDataCount 已归零），HMR 时 ref 会随组件
-        // 重执行归零而 useState 保留，自增 id 会与旧记录撞 key（React 警告）
-        setToolCalls((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), name, status: "running", time: nowTime() },
-        ]);
-        break;
-      }
-
-      case "tool_end": {
-        // 工具结束后 AI 若继续说话 → 新气泡
-        currentAssistantIdRef.current = null;
-
-        const name = event.name ?? "unknown";
-        const output = event.output ?? "";
-        // 判断工具是否真正失败（靠输出格式 + 错误前缀，不靠 contains "失败"）
-        const failed = isToolOutputFailed(output);
-        setToolCalls((prev) => {
-          // 从后往前匹配最近的同名 running 记录
-          for (let i = prev.length - 1; i >= 0; i--) {
-            if (prev[i].name === name && prev[i].status === "running") {
-              return prev.map((t, idx) =>
-                idx === i
-                  ? { ...t, status: failed ? "error" : "done" }
-                  : t,
-              );
-            }
-          }
-          return prev;
-        });
-
-        // generate_workflow 输出 → 工作流 JSON / 校验结果（右侧面板）
-        if (name === "generate_workflow") {
-          const parsed = parseGenerateOutput(output);
-          if (parsed.workflow) setWorkflow(parsed.workflow);
-          if (parsed.validation) setValidation(parsed.validation);
+          break;
         }
 
-        // plan_workflow 输出 → 工作流草图（右侧面板）
-        if (name === "plan_workflow") {
-          try {
-            const plan = JSON.parse(output) as WorkflowPlan;
-            if (plan && Array.isArray(plan.steps)) {
-              setSketch(planToSketch(plan));
+        case "reasoning_delta": {
+          // LLM 思考内容增量（DeepSeek reasoning_content）
+          // 固化到消息流（data.type="reasoning"），让用户看到完整决策过程
+          // （遇到什么问题、为什么这么做、准备怎么处理）
+          const content = event.content ?? "";
+          if (!content) break;
+          setMessages((prev) => {
+            // 没有开放的思考段落 → 新建一条 reasoning 消息
+            if (!currentReasoningIdRef.current) {
+              const newId = crypto.randomUUID();
+              currentReasoningIdRef.current = newId;
+              return [
+                ...prev,
+                {
+                  id: newId,
+                  role: "assistant",
+                  content: "",
+                  data: { type: "reasoning", content },
+                },
+              ];
             }
-          } catch {
-            // 解析失败忽略（非关键路径）
-          }
+            // 有开放段落 → 追加内容
+            return prev.map((m) => {
+              if (m.id !== currentReasoningIdRef.current) return m;
+              const cur =
+                (m.data as { content?: string } | undefined)?.content ?? "";
+              return {
+                ...m,
+                data: { type: "reasoning", content: cur + content },
+              };
+            });
+          });
+          break;
         }
-        break;
-      }
 
-      case "interrupt": {
-        const question = event.question ?? "请补充信息";
-        const context = event.context;
-        setPendingQuestion({ question, context });
-        // 封存思考段落
-        currentReasoningIdRef.current = null;
-        // 底部输入框切换为回复模式
-        setReplyMode(true);
-        // 把问题固化到消息流（回答后仍保留，不会消失）
-        // 渲染时通过 data.type==="question" 显示提问卡片
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "",
-            data: { type: "question", question, context: context ?? null },
-          },
-        ]);
-        // 分段边界：封存当前文本分段
-        currentAssistantIdRef.current = null;
-        break;
-      }
+        case "tool_start": {
+          // 分段边界：封存当前文本分段，后续文本进新气泡
+          currentAssistantIdRef.current = null;
+          // 工具调用前的思考段落封存（固化到消息流，用户能看到为什么调这个工具）
+          currentReasoningIdRef.current = null;
 
-      case "done": {
-        // 一次对话完成，关闭当前分段
-        currentAssistantIdRef.current = null;
-        currentReasoningIdRef.current = null;
-        break;
-      }
+          const name = event.name ?? "unknown";
+          // 渲染 key 用随机 UUID：不能用自增序号——打断发送新消息时旧流
+          // 残留事件会重放（processedDataCount 已归零），HMR 时 ref 会随组件
+          // 重执行归零而 useState 保留，自增 id 会与旧记录撞 key（React 警告）
+          setToolCalls((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              name,
+              status: "running",
+              time: nowTime(),
+            },
+          ]);
+          break;
+        }
 
-      case "error": {
-        setGlobalError(event.message ?? "发生错误");
-        break;
+        case "tool_end": {
+          // 工具结束后 AI 若继续说话 → 新气泡
+          currentAssistantIdRef.current = null;
+
+          const name = event.name ?? "unknown";
+          const output = event.output ?? "";
+          // 判断工具是否真正失败（靠输出格式 + 错误前缀，不靠 contains "失败"）
+          const failed = isToolOutputFailed(output);
+          setToolCalls((prev) => {
+            // 从后往前匹配最近的同名 running 记录
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].name === name && prev[i].status === "running") {
+                return prev.map((t, idx) =>
+                  idx === i ? { ...t, status: failed ? "error" : "done" } : t,
+                );
+              }
+            }
+            return prev;
+          });
+
+          // generate_workflow 输出 → 工作流 JSON / 校验结果（右侧面板）
+          if (name === "generate_workflow") {
+            const parsed = parseGenerateOutput(output);
+            if (parsed.workflow) setWorkflow(parsed.workflow);
+            if (parsed.validation) setValidation(parsed.validation);
+          }
+
+          // plan_workflow 输出 → 工作流草图（右侧面板）
+          if (name === "plan_workflow") {
+            try {
+              const plan = JSON.parse(output) as WorkflowPlan;
+              if (plan && Array.isArray(plan.steps)) {
+                setSketch(planToSketch(plan));
+              }
+            } catch {
+              // 解析失败忽略（非关键路径）
+            }
+          }
+          break;
+        }
+
+        case "interrupt": {
+          const question = event.question ?? "请补充信息";
+          const context = event.context;
+          setPendingQuestion({ question, context });
+          // 封存思考段落
+          currentReasoningIdRef.current = null;
+          // 底部输入框切换为回复模式
+          setReplyMode(true);
+          // 把问题固化到消息流（回答后仍保留，不会消失）
+          // 渲染时通过 data.type==="question" 显示提问卡片
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              data: { type: "question", question, context: context ?? null },
+            },
+          ]);
+          // 分段边界：封存当前文本分段
+          currentAssistantIdRef.current = null;
+          break;
+        }
+
+        case "done": {
+          // 一次对话完成，关闭当前分段
+          currentAssistantIdRef.current = null;
+          currentReasoningIdRef.current = null;
+          break;
+        }
+
+        case "error": {
+          setGlobalError(event.message ?? "发生错误");
+          break;
+        }
       }
-    }
-  }, [setMessages]);
+    },
+    [setMessages],
+  );
 
   // data 数组变化时增量处理新事件（避免重复处理已消费的事件）
   useEffect(() => {
@@ -439,7 +443,11 @@ export default function App() {
     setMessages((prev) => [
       ...prev,
       // 纯文件上传（无文字回答）时显示兜底文案
-      { id: crypto.randomUUID(), role: "user", content: answer || "[仅上传文件]" },
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: answer || "[仅上传文件]",
+      },
     ]);
 
     setResuming(true);

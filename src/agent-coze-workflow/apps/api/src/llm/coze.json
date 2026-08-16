@@ -1,0 +1,486 @@
+{
+    "nodes": [
+        {
+            "id": "100001",
+            "type": "1",
+            "meta": {
+                "position": {
+                    "x": -305,
+                    "y": 62
+                }
+            },
+            "data": {
+                "nodeMeta": {
+                    "title": "开始",
+                    "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Start-v2.jpg",
+                    "description": "接收用户输入，作为工作流的入口",
+                    "mainColor": "#52c41a",
+                    "subTitle": ""
+                },
+                "outputs": [
+                    {
+                        "type": "string",
+                        "name": "audio_url",
+                        "required": true
+                    }
+                ],
+                "trigger_parameters": []
+            }
+        },
+        {
+            "id": "node_1786820867691_lxzuhg1",
+            "type": "3",
+            "meta": {
+                "position": {
+                    "x": -164,
+                    "y": 39.599999999999994
+                }
+            },
+            "data": {
+                "nodeMeta": {
+                    "title": "LLM 处理",
+                    "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-LLM-v2.jpg",
+                    "description": "使用多模态大模型读取音频链接，识别并提取歌词文本",
+                    "mainColor": "#5C62FF",
+                    "subTitle": "大模型"
+                },
+                "inputs": {
+                    "inputParameters": [
+                        {
+                            "name": "audio_url",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "ref",
+                                    "content": {
+                                        "source": "block-output",
+                                        "blockID": "100001",
+                                        "name": "audio_url"
+                                    },
+                                    "rawMeta": {
+                                        "type": 1
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "llmParam": [
+                        {
+                            "name": "temperature",
+                            "input": {
+                                "type": "float",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "0.2",
+                                    "rawMeta": {
+                                        "type": 4
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "maxTokens",
+                            "input": {
+                                "type": "integer",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "4096",
+                                    "rawMeta": {
+                                        "type": 2
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "topP",
+                            "input": {
+                                "type": "float",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "0.95",
+                                    "rawMeta": {
+                                        "type": 4
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "responseFormat",
+                            "input": {
+                                "type": "integer",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "2",
+                                    "rawMeta": {
+                                        "type": 2
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "modleName",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "Qwen3.5-Omni-Plus",
+                                    "rawMeta": {
+                                        "type": 1
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "modelType",
+                            "input": {
+                                "type": "integer",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "230",
+                                    "rawMeta": {
+                                        "type": 2
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "generationDiversity",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "balance",
+                                    "rawMeta": {
+                                        "type": 1
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "prompt",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "请读取以下音频链接中的内容，识别并提取出完整的歌词文本。音频链接：{{audio_url}}。请只输出歌词文本，不要添加任何额外说明或格式。",
+                                    "rawMeta": {
+                                        "type": 1
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "enableChatHistory",
+                            "input": {
+                                "type": "boolean",
+                                "value": {
+                                    "type": "literal",
+                                    "content": false,
+                                    "rawMeta": {
+                                        "type": 3
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "chatHistoryRound",
+                            "input": {
+                                "type": "integer",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "3",
+                                    "rawMeta": {
+                                        "type": 2
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "systemPrompt",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "literal",
+                                    "content": "你是一个专业的音频歌词识别助手。你的任务是从给定的音频链接中准确识别并提取歌词文本。请确保输出内容仅为歌词，不包含任何其他文字。",
+                                    "rawMeta": {
+                                        "type": 1
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "settingOnError": {
+                        "switch": true,
+                        "dataOnErr": "{\"output\":\"\",\"reasoning_content\":\"\"}",
+                        "processType": 3,
+                        "timeoutMs": 120000,
+                        "singleTimeoutMs": 0,
+                        "retryTimes": 1,
+                        "ext": {
+                            "backupLLmParam": "{\"temperature\":1,\"maxTokens\":16384,\"topP\":0.95,\"responseFormat\":2,\"modelName\":\"Doubao-Seed-2.0-Lite\",\"modelType\":201,\"generationDiversity\":\"default_val\"}"
+                        }
+                    }
+                },
+                "outputs": [
+                    {
+                        "type": "string",
+                        "name": "lyrics"
+                    },
+                    {
+                        "type": "string",
+                        "name": "reasoning_content"
+                    },
+                    {
+                        "type": "object",
+                        "name": "errorBody",
+                        "schema": [
+                            {
+                                "type": "string",
+                                "name": "errorMessage",
+                                "readonly": true
+                            },
+                            {
+                                "type": "string",
+                                "name": "errorCode",
+                                "readonly": true
+                            }
+                        ],
+                        "readonly": true
+                    },
+                    {
+                        "type": "boolean",
+                        "name": "isSuccess",
+                        "readonly": true
+                    }
+                ],
+                "version": "3"
+            }
+        },
+        {
+            "id": "node_1786820867691_yjwmmqu",
+            "type": "5",
+            "meta": {
+                "position": {
+                    "x": 318,
+                    "y": -64
+                }
+            },
+            "data": {
+                "nodeMeta": {
+                    "title": "代码处理",
+                    "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Code-v2.jpg",
+                    "description": "将识别出的歌词与内置8首歌曲的参考歌词进行匹配，返回匹配结果（歌曲名称或特殊标记）",
+                    "mainColor": "#722ed1",
+                    "subTitle": "代码"
+                },
+                "inputs": {
+                    "inputParameters": [
+                        {
+                            "name": "input",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "ref",
+                                    "content": {
+                                        "source": "block-output",
+                                        "blockID": "node_1786820867691_lxzuhg1",
+                                        "name": "lyrics"
+                                    },
+                                    "rawMeta": {
+                                        "type": 1
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "code": "import json\n\nSONG_LYRICS = {\n    \"映山红\": \"夜半三更哟盼天明，寒冬腊月呦盼春风，若要盼得呦红军来，岭上开遍呦映山红。\",\n    \"天边\": \"天边有一对双星，那是我梦中的眼睛，心中有一片晨雾，那是你昨夜的柔情，我要登上，登上山顶，去寻觅雾中的身影，我要跨上，跨上骏马，去追逐遥远的，星星，星星。天边有一棵大树，那是我心中的绿荫，远方有一座高山，那是你博大的胸襟，我要树下，树下采拮，去编织美丽的憧憬。\",\n    \"花非花\": \"花非花，雾非雾，夜半来，天明去。来如春梦不多时，去似朝云无觅处。花非花，雾非雾，夜半来，天明去。来如春梦不多时，去似朝云无觅处。\",\n    \"花又落\": \"岁月长河，纷繁终寂寞，淘尽浪花千万朵，有你也有我。时光蹉跎，时光蹉跎。驻足却漂泊，水复山重总沉默，懂你也懂我。深情凝眸几多，雨露滋润几多，星辉斑斓几多，尘缘牵绊几多。爱已过，梦已过，昨日春满园，今夕花又落。叶凋零，花又落，缘来有因果，缘去无对错。\",\n    \"珊瑚颂\": \"一树红花照碧海，一团火焰出水来，珊瑚树红春常在，风里浪里花常开。云来遮，雾来盖，云里雾里放光彩，风吹来，浪打来，风吹浪打花常开。一盏红灯照碧海，一团火焰出水来，红灯高照云天外，火焰熊熊把路开。\",\n    \"在那遥远的地方\": \"在那遥远的地方，有位好姑娘，人们走过她的帐房，都要回头留恋地张望。她那粉红的笑脸，好像红太阳，她那美丽动人的眼睛，好像晚上明媚的月亮。我愿流浪在草原，跟她去放羊，每天看着那粉红的笑脸，和那美丽金边的衣裳。\",\n    \"画你\": \"把你的倩影画在，家乡的山顶。甜蜜的笑容，定格在我心里。深情的歌声，描绘你的美丽。只为让你，永驻我心里，我用爱画一个，温柔可爱的你。让我在梦中，无数次见到你，梦你的夜晚，我不愿醒来，只为把你，画在我心里。\",\n    \"绒花\": \"世上有朵美丽的花，那是青春吐芳华，铮铮硬骨绽花开，漓漓鲜血染红它。绒花，绒花，一路芬芳满山崖。世上有朵英雄的花，那是青春放光华，花载亲人上高山，顶天立地映彩霞。绒花，绒花，一路芬芳满山崖。\"\n}\n\nSONG_LIST = ['映山红', '天边', '花非花', '花又落', '珊瑚颂', '在那遥远的地方', '画你', '绒花']\n\ndef jaccard_similarity(s1: str, s2: str) -> float:\n    set1 = set(s1)\n    set2 = set(s2)\n    if not set1 and not set2:\n        return 1.0\n    intersection = set1 & set2\n    union = set1 | set2\n    return len(intersection) / len(union)\n\ndef edit_distance_similarity(s1: str, s2: str) -> float:\n    m, n = len(s1), len(s2)\n    dp = [[0] * (n + 1) for _ in range(m + 1)]\n    for i in range(m + 1):\n        dp[i][0] = i\n    for j in range(n + 1):\n        dp[0][j] = j\n    for i in range(1, m + 1):\n        for j in range(1, n + 1):\n            if s1[i-1] == s2[j-1]:\n                dp[i][j] = dp[i-1][j-1]\n            else:\n                dp[i][j] = min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]) + 1\n    max_len = max(m, n)\n    if max_len == 0:\n        return 1.0\n    return 1 - dp[m][n] / max_len\n\ndef compute_similarity(s1: str, s2: str) -> float:\n    return (jaccard_similarity(s1, s2) + edit_distance_similarity(s1, s2)) / 2.0\n\nasync def main(args: Args) -> Output:\n    params = args.params\n    lyrics = params.get('input', '')\n    if isinstance(lyrics, str):\n        try:\n            parsed = json.loads(lyrics)\n            if isinstance(parsed, str):\n                lyrics = parsed\n        except (json.JSONDecodeError, TypeError):\n            pass\n    if not isinstance(lyrics, str):\n        lyrics = str(lyrics)\n    lyrics = lyrics.strip()\n    if len(lyrics) < 5:\n        ret: Output = {\"result\": \"recognition_failed\"}\n        return ret\n    best_song = \"not_found\"\n    best_score = 0.0\n    for song in SONG_LIST:\n        ref_lyrics = SONG_LYRICS[song]\n        score = compute_similarity(lyrics, ref_lyrics)\n        if score > best_score:\n            best_score = score\n            best_song = song\n    if best_score > 0.8:\n        ret: Output = {\"result\": best_song}\n    else:\n        ret: Output = {\"result\": \"not_found\"}\n    return ret",
+                    "language": 3,
+                    "settingOnError": {
+                        "processType": 1,
+                        "timeoutMs": 60000,
+                        "retryTimes": 0
+                    }
+                },
+                "outputs": [
+                    {
+                        "type": "string",
+                        "name": "match_result"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "node_1786820867691_t4d1jub",
+            "type": "8",
+            "meta": {
+                "position": {
+                    "x": 700,
+                    "y": 100
+                }
+            },
+            "data": {
+                "nodeMeta": {
+                    "title": "条件判断",
+                    "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-Condition-v2.jpg",
+                    "description": "根据match_result的值进行分支",
+                    "mainColor": "#fa8c16",
+                    "subTitle": "选择器"
+                },
+                "inputs": {
+                    "branches": [
+                        {
+                            "condition": {
+                                "logic": 2,
+                                "conditions": [
+                                    {
+                                        "operator": 11,
+                                        "left": {
+                                            "input": {
+                                                "type": "string",
+                                                "value": {
+                                                    "type": "ref",
+                                                    "content": {
+                                                        "source": "block-output",
+                                                        "blockID": "node_1786820867691_yjwmmqu",
+                                                        "name": "match_result"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "condition": {
+                                "logic": 2,
+                                "conditions": [
+                                    {
+                                        "operator": 11,
+                                        "left": {
+                                            "input": {
+                                                "type": "string",
+                                                "value": {
+                                                    "type": "ref",
+                                                    "content": {
+                                                        "source": "block-output",
+                                                        "blockID": "node_1786820867691_yjwmmqu",
+                                                        "name": "match_result"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "condition": {
+                                "logic": 2,
+                                "conditions": [
+                                    {
+                                        "operator": 11,
+                                        "left": {
+                                            "input": {
+                                                "type": "string",
+                                                "value": {
+                                                    "type": "ref",
+                                                    "content": {
+                                                        "source": "block-output",
+                                                        "blockID": "node_1786820867691_yjwmmqu",
+                                                        "name": "match_result"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": "900001",
+            "type": "2",
+            "meta": {
+                "position": {
+                    "x": 1134,
+                    "y": 115
+                }
+            },
+            "data": {
+                "nodeMeta": {
+                    "title": "结束",
+                    "icon": "https://lf3-static.bytednsdoc.com/obj/eden-cn/dvsmryvd_avi_dvsm/ljhwZthlaukjlkulzlp/icon/icon-End-v2.jpg",
+                    "description": "返回最终结果",
+                    "mainColor": "#ff4d4f",
+                    "subTitle": ""
+                },
+                "inputs": {
+                    "terminatePlan": "returnVariables",
+                    "inputParameters": [
+                        {
+                            "name": "output",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "ref",
+                                    "content": {
+                                        "source": "block-output",
+                                        "blockID": "node_1786820867691_lxzuhg1",
+                                        "name": "lyrics"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "edges": [
+        {
+            "sourceNodeID": "100001",
+            "targetNodeID": "node_1786820867691_lxzuhg1"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_lxzuhg1",
+            "targetNodeID": "node_1786820867691_yjwmmqu",
+            "sourcePortID": "default"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_lxzuhg1",
+            "targetNodeID": "900001",
+            "sourcePortID": "branch_error"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_yjwmmqu",
+            "targetNodeID": "node_1786820867691_t4d1jub"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_t4d1jub",
+            "targetNodeID": "900001",
+            "sourcePortID": "true"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_t4d1jub",
+            "targetNodeID": "900001",
+            "sourcePortID": "true_1"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_t4d1jub",
+            "targetNodeID": "900001",
+            "sourcePortID": "true_2"
+        },
+        {
+            "sourceNodeID": "node_1786820867691_t4d1jub",
+            "targetNodeID": "900001",
+            "sourcePortID": "false"
+        }
+    ],
+    "versions": {
+        "loop": "v2"
+    }
+}
