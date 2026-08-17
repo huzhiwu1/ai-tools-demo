@@ -106,3 +106,12 @@
 
 - `apps/api/src/coze/database-client.ts`：DatabaseClient 封装（与 CozeClient 同构）
 - skill 侧：`~/.openclaw/workspace/skills/coze-workflow-skill/scripts/coze-cli.mjs` 的 `db-*` / `spaces` 命令
+
+## 9. 发布工作流（type9 子工作流调用前置）
+
+`POST /api/workflow_api/publish`，body：
+```json
+{"workflow_id":"...","space_id":"...","has_collaborator":false,"force":true,"workflow_version":"v0.0.1","version_description":"发布"}
+```
+- ⚠️ **子工作流（type9）必须发布后才能被调用**（未发布报 720702004 not found；workflowVersion 留空或 "latest" 均无效）
+- 发布后 workflowVersion 填真实版本号（如 "v0.0.1"）

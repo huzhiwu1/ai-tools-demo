@@ -415,6 +415,31 @@ export class CozeClient {
   }
 
   /**
+   * 发布工作流（子工作流（type9）调用需要版本号）
+   *
+   * 接口：POST /api/workflow_api/publish（2026-08-18 实测）
+   * @param workflowId - 工作流 ID
+   * @param version - 版本号（如 v0.0.1）
+   * @param description - 版本描述
+   */
+  async publishWorkflow(
+    workflowId: string,
+    version = "v0.0.1",
+    description = "发布",
+    spaceId?: string,
+  ): Promise<void> {
+    const sid = spaceId ?? this.spaceId;
+    await this.request("publish", {
+      workflow_id: workflowId,
+      space_id: sid,
+      has_collaborator: false,
+      force: true,
+      workflow_version: version,
+      version_description: description,
+    });
+  }
+
+  /**
    * 删除工作流
    *
    * 接口：POST /api/workflow_api/delete
