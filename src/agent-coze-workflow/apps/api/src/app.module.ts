@@ -24,12 +24,11 @@
 import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
-import { LegacyModule } from "./legacy/workflow.module";
 import { CozeModule } from "./coze/coze.module";
 import { ReactAgentModule } from "./agent/react-agent.module";
 
 @Module({
-  imports: [LegacyModule, CozeModule, ReactAgentModule],
+  imports: [CozeModule, ReactAgentModule],
   controllers: [AppController],
   providers: [AppService],
 })
