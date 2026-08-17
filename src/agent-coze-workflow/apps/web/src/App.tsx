@@ -46,6 +46,44 @@ interface PendingQuestion {
 }
 
 /**
+ * 用分段累积文本重建 AI 气泡（done/interrupt 补偿）
+ *
+ * 背景：useChat 每收到一个 data 事件，都会用「发送时的消息快照 + 它自己累积的
+ * assistant 消息」重置 messages。本应用把所有 0: 文本行都转成了 2: data 事件，
+ * useChat 自己累积的消息恒为空 → 每次重置都会覆盖掉 text_delta 期间 setMessages
+ * 添加的 AI 气泡（前端表现为 AI 回复完全不可见）。done/interrupt 是流的最后
+ * 一个 data 事件，此时重建不会再被覆盖。
+ *
+ * 泛型 T 兼容 AI SDK 的 Message 与本地 ChatMessage 两种消息形态。
+ *
+ * @param prev - 当前消息列表
+ * @param segments - 本轮累积的文本分段（每个分段 = 一个气泡）
+ * @returns 重建后的消息列表
+ */
+function rebuildAssistantSegments<T extends { id: string; content: string }>(
+  prev: T[],
+  segments: Array<{ id: string; content: string }>,
+): T[] {
+  let next = prev;
+  for (const seg of segments) {
+    const idx = next.findIndex((m) => m.id === seg.id);
+    if (idx === -1) {
+      // 气泡被快照重置覆盖 → 重建
+      next = [
+        ...next,
+        { id: seg.id, role: "assistant", content: seg.content } as unknown as T,
+      ];
+    } else if (next[idx].content !== seg.content) {
+      // 部分残留（覆盖竞态中间态）→ 补齐完整文本
+      next = next.map((m) =>
+        m.id === seg.id ? { ...m, content: seg.content } : m,
+      );
+    }
+  }
+  return next;
+}
+
+/**
  * 把 WorkflowPlan 映射为 WorkflowSketch 形态（供 WorkflowCanvas 展示）
  *
  * Agent 的 plan_workflow 产出 WorkflowPlan（步骤列表），旧 UI 的草图组件
@@ -136,6 +174,8 @@ export default function App() {
       },
       [sessionId],
     ),
+    // useChat 内部错误兜底：前端未解构 error 状态，这里至少打进 console 便于定位
+    onError: (e) => console.error("[useChat error]", e),
     // 自定义 fetch：把后端 Data Stream（0:/d:/e:）适配为 AI SDK 标准协议
     fetch: useCallback(
       async (url: RequestInfo | URL, options?: RequestInit) => {
@@ -177,6 +217,13 @@ export default function App() {
   const currentAssistantIdRef = useRef<string | null>(null);
   /** 当前正在累积的思考段落消息 id（reasoning_delta 流式写入，工具调用/正式输出时封存） */
   const currentReasoningIdRef = useRef<string | null>(null);
+  /**
+   * 本轮文本分段累积（每个分段 = 一个 AI 气泡的完整文本）
+   *
+   * 用于 done/interrupt 时的覆盖竞态补偿重建（详见 rebuildAssistantSegments）。
+   * 分段边界（tool_start/tool_end/interrupt）不截断数组，只切新分段。
+   */
+  const textSegmentsRef = useRef<Array<{ id: string; content: string }>>([]);
 
   const busy = isLoading || resuming;
 
@@ -206,20 +253,30 @@ export default function App() {
           // 正式输出开始 → 思考段落封存（固化到消息流，不再累积）
           currentReasoningIdRef.current = null;
 
-          setMessages((prev) => {
-            // 没有开放分段 → 新建一条 assistant 消息
-            if (!currentAssistantIdRef.current) {
-              const newId = crypto.randomUUID();
-              currentAssistantIdRef.current = newId;
-              return [...prev, { id: newId, role: "assistant", content }];
-            }
-            // 有开放分段 → 追加文本
-            return prev.map((m) =>
-              m.id === currentAssistantIdRef.current
-                ? { ...m, content: m.content + content }
-                : m,
-            );
-          });
+          // 分段累积（done 补偿重建用）
+          const segments = textSegmentsRef.current;
+          const lastSeg = segments[segments.length - 1];
+          const openId = currentAssistantIdRef.current;
+
+          if (!openId || lastSeg?.id !== openId) {
+            // 没有开放分段 → 新建分段 + assistant 消息
+            const newId = crypto.randomUUID();
+            currentAssistantIdRef.current = newId;
+            segments.push({ id: newId, content });
+            setMessages((prev) => [
+              ...prev,
+              { id: newId, role: "assistant", content },
+            ]);
+            break;
+          }
+
+          // 有开放分段 → 追加文本
+          lastSeg.content += content;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === openId ? { ...m, content: m.content + content } : m,
+            ),
+          );
           break;
         }
 
@@ -329,24 +386,40 @@ export default function App() {
           currentReasoningIdRef.current = null;
           // 底部输入框切换为回复模式
           setReplyMode(true);
-          // 把问题固化到消息流（回答后仍保留，不会消失）
+          // interrupt 是流结束前最后一个 data 事件：先重建被覆盖的文本气泡，
+          // 再把问题固化到消息流（回答后仍保留，不会消失）
           // 渲染时通过 data.type==="question" 显示提问卡片
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: "",
-              data: { type: "question", question, context: context ?? null },
-            },
-          ]);
+          const segments = textSegmentsRef.current;
+          setMessages((prev) => {
+            const base =
+              segments.length > 0
+                ? rebuildAssistantSegments(prev, segments)
+                : prev;
+            return [
+              ...base,
+              {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: "",
+                data: { type: "question", question, context: context ?? null },
+              },
+            ];
+          });
+          textSegmentsRef.current = [];
           // 分段边界：封存当前文本分段
           currentAssistantIdRef.current = null;
           break;
         }
 
         case "done": {
-          // 一次对话完成，关闭当前分段
+          // 一次对话完成。done 是流的最后一个 data 事件，此处用分段累积文本
+          // 重建被 useChat 快照重置覆盖的 AI 气泡（此后流结束，不再有覆盖）
+          const segments = textSegmentsRef.current;
+          if (segments.length > 0) {
+            setMessages((prev) => rebuildAssistantSegments(prev, segments));
+          }
+          textSegmentsRef.current = [];
+          // 关闭当前分段
           currentAssistantIdRef.current = null;
           currentReasoningIdRef.current = null;
           break;
@@ -419,6 +492,7 @@ export default function App() {
     // 发新消息时重置分段状态
     currentAssistantIdRef.current = null;
     currentReasoningIdRef.current = null;
+    textSegmentsRef.current = [];
     append({ role: "user", content: text });
   }
 
