@@ -179,7 +179,7 @@ const POLL_TIMEOUT_MS = 120_000;
 
 ### Harness 关键设计
 
-源码位置：`~/workspace/deepseek-harness-study/source/packages/core/agent-loop/src/agent.ts`（496 行）
+源码位置：`C:\Users\Administrator\Desktop\deepseek-harness\packages\core\agent-loop\src\agent.ts`（496 行）
 
 **核心架构**：
 
@@ -354,7 +354,7 @@ type AgentErrorCode =
 | `apps/api/scripts/ab-test-update-schema.ts` | 需求 1 删除目标 |
 | `apps/api/src/legacy/` | 需求 2 删除目标目录 |
 | `apps/api/test-plan.ts` | 需求 2 删除目标 |
-| DeepSeek Harness `agent.ts` | 参考 `~/workspace/deepseek-harness-study/source/packages/core/agent-loop/src/agent.ts`（496 行） |
+| DeepSeek Harness `agent.ts` | 参考 `C:\Users\Administrator\Desktop\deepseek-harness\packages\core\agent-loop\src\agent.ts`（496 行） |
 
 ---
 

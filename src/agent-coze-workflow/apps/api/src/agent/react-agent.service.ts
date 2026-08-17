@@ -208,20 +208,39 @@ export class ReactAgentService {
       sessionId = newId;
     }
 
-    // 1.5 打断残留检测：上次流被用户打断（脏 checkpoint），重建 graph
-    // 对话记忆由 session.messages 保留，AI 仍记得之前的对话
-    if (session.graphDirty) {
+    // 2. Phase 状态机：如果 session 正在 running（上一轮还没跑完），
+    // 先 abort 旧 driver 并等它收敛退出，保证同一时刻只有一个 driver。
+    // （借鉴 DeepSeek Harness 的 kick/wake 模式：steer = 打断当前步，立刻处理新消息）
+    const wasInterrupted = session.phase === "running";
+    if (wasInterrupted) {
+      this.logger.log(`[Agent] 打断旧 driver (session=${sessionId})`);
+      // 发出 abort 信号：AbortSignal 全程传递到 LLM 调用/工具调用边界
+      session.abortController?.abort("user-interrupt");
+      // 等待旧 driver 完全退出（最多等 5 秒，防止卡死在无法 abort 的系统调用中）
+      try {
+        await Promise.race([
+          session.runningPromise ?? Promise.resolve(),
+          new Promise((r) => setTimeout(r, 5000)),
+        ]);
+      } catch {
+        // 旧 driver 可能已经抛异常，忽略
+      }
+      // 重建 graph：旧 execution 被 abort，checkpoint 残留半截状态，必须重建清空；
+      // 对话记忆由 session.messages 保留，AI 仍记得之前的对话
       session.graph = this.createGraph();
-      session.graphDirty = false;
       this.logger.log(
-        `[Agent] 检测到中断残留，已重建 graph (session=${sessionId})`,
+        `[Agent] 旧 driver 已退出，graph 已重建 (session=${sessionId})`,
       );
     }
 
-    // 2. 添加用户消息到历史
+    // 3. 设置新 driver 的 phase 和 AbortController
+    session.phase = "running";
+    session.abortController = new AbortController();
+
+    // 4. 添加用户消息到历史
     session.messages.push({ role: "user", content: message });
 
-    // 3. 将历史消息转换为 LangChain BaseMessage 数组
+    // 5. 将历史消息转换为 LangChain BaseMessage 数组
     const langchainMessages: BaseMessage[] = [];
 
     // 打断恢复记忆：把此前会话的工具结果摘要作为上下文注入（纯文本 SystemMessage，
@@ -243,7 +262,7 @@ export class ReactAgentService {
         langchainMessages.push(new AIMessage(m.content));
     }
 
-    // 4. 设置 SSE 响应头
+    // 6. 设置 SSE 响应头
     this.setSSEHeaders(res);
 
     // 会话创建后 sessionId 必存在
@@ -254,20 +273,48 @@ export class ReactAgentService {
       `d:${JSON.stringify({ type: "session", sessionId: finalSessionId })}\n`,
     );
 
-    // 5. 流式执行
-    const config = {
+    // 7. 打断场景：告知前端上一轮任务已被打断，正在处理新消息
+    if (wasInterrupted) {
+      res.write(
+        `d:${JSON.stringify({ type: "aborted", message: "已打断上一轮任务，正在处理新消息..." })}\n`,
+      );
+    }
+
+    // 8. 发送 turn 事件（前端可展示「第 N 轮对话」）
+    const turnCount = session.messages.filter((m) => m.role === "user").length;
+    res.write(`d:${JSON.stringify({ type: "turn_start", turn: turnCount })}\n`);
+
+    // 9. 创建 runningPromise：下一个 handleChat 打断时用它等旧 driver 退出
+    let resolvePromise: () => void;
+    session.runningPromise = new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    });
+
+    // 关键：把 AbortSignal 传给 LangGraph，config.signal 会传递到
+    // 底层 LLM 调用/工具调用边界，打断时立即中止而非等当前步跑完
+    const config: RunnableConfig = {
       configurable: { thread_id: finalSessionId },
       recursionLimit: 100,
-    } as RunnableConfig & { recursionLimit: number };
+      signal: session.abortController.signal,
+    };
 
-    await this.streamAgentEvents(
-      session.graph,
-      { messages: langchainMessages },
-      config,
-      session,
-      finalSessionId,
-      res,
-    );
+    // 10. 流式执行：无论正常结束还是异常退出，都收敛到 idle
+    try {
+      await this.streamAgentEvents(
+        session.graph,
+        { messages: langchainMessages },
+        config,
+        session,
+        finalSessionId,
+        res,
+      );
+    } finally {
+      // 收敛：phase 回 idle、释放 AbortController、resolve runningPromise
+      // （等待中的下一个 handleChat 由此被唤醒）
+      session.phase = "idle";
+      session.abortController = null;
+      resolvePromise!();
+    }
   }
 
   /**
@@ -299,12 +346,27 @@ export class ReactAgentService {
       return;
     }
 
-    this.setSSEHeaders(res);
+    // Phase 状态机：如果 session 正在 running（用户在上一轮还没跑完时
+    // 又发了新消息/新回答），先 abort 旧 driver 并等它收敛，再重建 graph
+    if (session.phase === "running") {
+      this.logger.log(`[Agent] resume 打断旧 driver (session=${sessionId})`);
+      session.abortController?.abort("user-interrupt");
+      try {
+        await Promise.race([
+          session.runningPromise ?? Promise.resolve(),
+          new Promise((r) => setTimeout(r, 5000)),
+        ]);
+      } catch {
+        // 旧 driver 可能已经抛异常，忽略
+      }
+      session.graph = this.createGraph();
+    }
 
-    const config = {
-      configurable: { thread_id: sessionId },
-      recursionLimit: 100,
-    } as RunnableConfig & { recursionLimit: number };
+    // 设置新 phase 与 AbortController
+    session.phase = "running";
+    session.abortController = new AbortController();
+
+    this.setSSEHeaders(res);
 
     // 若有 fileIds，还原文件名与磁盘路径拼入 answer 文本让 LLM 感知文件并
     // 用 read_file 直接读取；纯文件上传时不以空文本开头
@@ -328,14 +390,33 @@ export class ReactAgentService {
     // 使用 Command API 恢复执行
     const command = new Command({ resume: resumeText });
 
-    await this.streamAgentEvents(
-      session.graph,
-      command,
-      config,
-      session,
-      sessionId,
-      res,
-    );
+    // 创建 runningPromise：下一个打断者用 await 等旧 driver 退出
+    let resolvePromise: () => void;
+    session.runningPromise = new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    });
+
+    const config: RunnableConfig = {
+      configurable: { thread_id: sessionId },
+      recursionLimit: 100,
+      signal: session.abortController.signal,
+    };
+
+    try {
+      await this.streamAgentEvents(
+        session.graph,
+        command,
+        config,
+        session,
+        sessionId,
+        res,
+      );
+    } finally {
+      // 收敛：phase 回 idle、释放 AbortController、resolve runningPromise
+      session.phase = "idle";
+      session.abortController = null;
+      resolvePromise!();
+    }
   }
 
   // ============================================
@@ -373,17 +454,20 @@ export class ReactAgentService {
     sessionId: string,
     res: SSEResponse,
   ): Promise<void> {
+    // 主路径打断信号：handleChat/handleResume 打断时 abort 此 signal，
+    // AbortSignal 会全程传递到 LLM 调用/工具调用边界
+    const signal = config.signal;
     let complete = false;
     // 服务端主动结束标记：true 表示流由服务端正常完成（非客户端打断）
     let finished = false;
 
-    // 监听响应 close 事件：客户端断开（打断）时立即标记脏状态
-    // 不能只靠 for await 循环里的 res.destroyed 检查：LLM 思考/工具执行期间
-    // 事件迭代器阻塞在等待下一事件，res.destroyed 检测会延迟到下一个事件
-    // 到达才执行（可能晚于用户新消息），close 事件则由事件循环立即触发
+    // close 事件兑底：用户直接关浏览器标签页时没有新的 handleChat 调用来发
+    // abort，close 事件由事件循环立即触发（for await 循环里等下一事件时
+    // res.destroyed 检测会延迟），这里只负责补发 abort 信号。
+    // 不再依赖它打 graphDirty 标记——脏状态检测已被 phase 状态机替代。
     const onClose = () => {
       if (!finished) {
-        session.graphDirty = true;
+        session.abortController?.abort("client-disconnect");
       }
     };
     res.on("close", onClose);
@@ -399,22 +483,36 @@ export class ReactAgentService {
         });
 
         for await (const event of stream) {
-          // 客户端断开时停止迭代（兜底检测，close 事件可能已打标）
-          if (res.destroyed) {
-            // 客户端断开（用户打断）：graph 执行中途放弃，checkpoint 留下脏状态
-            // 标记会话，下次 chat 时重建 graph 清空 checkpoint，避免上下文混乱
-            session.graphDirty = true;
+          // 检查点 1：AbortSignal（主路径，比 res.destroyed 更及时）——
+          // 「打断并发送」时 handleChat 先 abort 再等旧 driver 退出，
+          // 这里立即停止迭代
+          if (signal?.aborted) {
             // 主动取消底层 graph 执行：streamEvents 返回的流支持 cancel()，
-            // 通过 AbortSignal 终止后台执行。否则被放弃的执行会继续在后台跑完，
+            // 终止后台执行。否则被放弃的执行会继续在后台跑完，
             // 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务
             try {
               await (
                 stream as unknown as {
                   cancel?: (reason: string) => Promise<void>;
                 }
-              ).cancel?.("client aborted");
+              ).cancel?.(String(signal.reason ?? "aborted"));
             } catch {
-              // cancel 失败可忽略：脏标记已打，最坏情况是后台执行自行结束
+              // cancel 失败可忽略：signal 已发，底层 LLM 调用也会响应 abort
+            }
+            break;
+          }
+
+          // 检查点 2：res.destroyed（兑底，客户端已经断开但没发 abort）
+          if (res.destroyed) {
+            session.abortController?.abort("client-disconnect");
+            try {
+              await (
+                stream as unknown as {
+                  cancel?: (reason: string) => Promise<void>;
+                }
+              ).cancel?.("client-disconnect");
+            } catch {
+              // cancel 失败可忽略
             }
             break;
           }
@@ -502,6 +600,14 @@ export class ReactAgentService {
 
         complete = true;
       } catch (e) {
+        // 被 abort 打断视为正常打断：发送 aborted 事件，不报错
+        if (signal?.aborted || (e as Error).name === "AbortError") {
+          if (!res.destroyed) {
+            res.write(`d:${JSON.stringify({ type: "aborted" })}\n`);
+            res.end();
+          }
+          return;
+        }
         // 流异常
         const msg = (e as Error).message;
         this.logger.error(`[Agent] ✗ ${msg}`);
@@ -517,6 +623,16 @@ export class ReactAgentService {
           })}\n`,
         );
         res.end();
+        return;
+      }
+
+      // 被 abort 打断的流：发送 aborted 事件并退出
+      // （新消息由新的 handleChat 响应处理，这里只负责收尾旧流）
+      if (signal?.aborted) {
+        if (!res.destroyed) {
+          res.write(`d:${JSON.stringify({ type: "aborted" })}\n`);
+          res.end();
+        }
         return;
       }
 
@@ -688,8 +804,7 @@ export class ReactAgentService {
           const wf = parsed.workflow as Record<string, unknown>;
           const meta = wf.meta as Record<string, unknown> | undefined;
           const name = meta?.name ?? "?";
-          const valid = (parsed.validation as Record<string, boolean>)
-            ?.valid
+          const valid = (parsed.validation as Record<string, boolean>)?.valid
             ? "通过"
             : "失败";
           return `[generate_workflow] ${name} 生成完成，结构校验${valid}`;
@@ -729,10 +844,7 @@ export class ReactAgentService {
           const total = parsed.totalCount ?? parsed.total ?? "?";
           return `[batch_validate] 通过 ${total}，accuracy=${accuracy}，${failed} 个失败`;
         }
-        return trunc(
-          `[batch_validate] ${toolContent.slice(0, 500)}`,
-          MAX_LEN,
-        );
+        return trunc(`[batch_validate] ${toolContent.slice(0, 500)}`, MAX_LEN);
       }
 
       case "test_run_workflow": {
@@ -748,9 +860,7 @@ export class ReactAgentService {
       case "read_workflow": {
         // 说明书内容很长，只取概览信息
         const nodeMatch = toolContent.match(/节点数[：:]\s*(\d+)/);
-        const nameMatch = toolContent.match(
-          /^#\s*工作流说明书[：:]\s*(.+)/m,
-        );
+        const nameMatch = toolContent.match(/^#\s*工作流说明书[：:]\s*(.+)/m);
         const name = nameMatch?.[1]?.trim() ?? "?";
         const nodeCount = nodeMatch?.[1] ?? "?";
         return `[read_workflow] 已读取 ${name}（${nodeCount} 节点）`;
@@ -768,10 +878,7 @@ export class ReactAgentService {
             .join(", ");
           return `[list_workflows] 找到 ${wfs.length} 个工作流: ${names}`;
         }
-        return trunc(
-          `[list_workflows] ${toolContent.slice(0, 500)}`,
-          MAX_LEN,
-        );
+        return trunc(`[list_workflows] ${toolContent.slice(0, 500)}`, MAX_LEN);
       }
 
       case "clarify_question":
@@ -782,18 +889,12 @@ export class ReactAgentService {
         if (parsed?.name) {
           return `[rename_workflow] 已改名 ${parsed.name}`;
         }
-        return trunc(
-          `[rename_workflow] ${toolContent.slice(0, 300)}`,
-          MAX_LEN,
-        );
+        return trunc(`[rename_workflow] ${toolContent.slice(0, 300)}`, MAX_LEN);
       }
 
       default:
         // 未知工具：截断 500 字符
-        return trunc(
-          `[${toolName}] ${toolContent.slice(0, 500)}`,
-          MAX_LEN,
-        );
+        return trunc(`[${toolName}] ${toolContent.slice(0, 500)}`, MAX_LEN);
     }
   }
 

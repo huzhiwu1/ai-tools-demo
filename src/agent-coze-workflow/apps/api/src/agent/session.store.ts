@@ -41,11 +41,12 @@ export interface Session {
   graph: CompiledStateGraph<any, any, any, any, any>;
   /** 对话历史（含工具结果摘要，供日志和打断恢复使用） */
   messages: SessionMessage[];
-  /**
-   * 脏标记：上次流因客户端打断（「打断并发送」）而中止，
-   * checkpoint 残留半截状态，下次 chat 时需重建 graph 清空 checkpoint
-   */
-  graphDirty?: boolean;
+  /** Phase 状态机：idle 或 running，同一时刻只有一个 driver 在执行 */
+  phase: "idle" | "running";
+  /** 当前活跃 driver 的 AbortController，用于从外部打断执行 */
+  abortController: AbortController | null;
+  /** 当前活跃 driver 的完成 Promise，handleChat 用 await 等旧 driver 退出 */
+  runningPromise: Promise<void> | null;
   /** 创建时间戳 */
   createdAt: number;
 }
@@ -70,6 +71,9 @@ class SessionStore {
     this.sessions.set(id, {
       graph,
       messages: [],
+      phase: "idle",
+      abortController: null,
+      runningPromise: null,
       createdAt: Date.now(),
     });
     return id;

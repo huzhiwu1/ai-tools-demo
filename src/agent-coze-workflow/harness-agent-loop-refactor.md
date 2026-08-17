@@ -25,7 +25,7 @@ DeepSeek Harness 的 `ReactLoopAgent`（496 行）是生产级的 Agent 主循�
 
 ## 参考源码
 
-文件：`~/workspace/deepseek-harness-study/source/packages/core/agent-loop/src/agent.ts`
+文件：`C:\Users\Administrator\Desktop\deepseek-harness\packages\core\agent-loop\src\agent.ts`
 
 完整源码已附在本文末尾。
 
@@ -370,7 +370,7 @@ interface AgentEvent {
 
 ## 参考源码：DeepSeek Harness ReactLoopAgent 完整代码
 
-文件：`~/workspace/deepseek-harness-study/source/packages/core/agent-loop/src/agent.ts`
+文件：`C:\Users\Administrator\Desktop\deepseek-harness\packages\core\agent-loop\src\agent.ts`
 
 完整的 496 行 TypeScript 源码请直接读取该文件。以下是关键部分的行号索引：
 

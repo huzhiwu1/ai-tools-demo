@@ -23,7 +23,7 @@
 
 ## 参考设计：DeepSeek Harness 的 kick/wake 模型
 
-源码：`~/workspace/deepseek-harness-study/source/packages/core/agent-loop/src/agent.ts`（496 行）
+源码：`C:\Users\Administrator\Desktop\deepseek-harness\packages\core\agent-loop\src\agent.ts`（496 行）
 
 ### 核心架构
 
