@@ -16,6 +16,7 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import type { WorkflowPlan } from "@coze-workflow/shared";
 import { validateWorkflow } from "@coze-workflow/workflow-schema";
 import { WorkflowGenerator } from "../../workflow-engine/generator";
@@ -55,13 +56,23 @@ export const generateWorkflowTool = tool(
       // 调用本地校验，避免无效 API 调用
       const validation = validateWorkflow(workflow);
 
+      // 句柄化：生成的 workflow 写入缓存，save_to_coze 只传 workflowHandle 即可
+      const workflowHandle = `wf_${randomUUID()}`;
+      workflowCache.set(
+        workflowHandle,
+        workflow as unknown as Record<string, unknown>,
+      );
+
+      // 返回瘦身：warnings 置空——平台格式类 warnings（如 MISSING_TEMP）
+      // 是导出格式约定而非真实问题，返回给 LLM 只会诱导它“继续修”
       return JSON.stringify(
         {
           workflow,
+          workflowHandle,
           validation: {
             valid: validation.valid,
             errors: validation.errors,
-            warnings: validation.warnings,
+            warnings: [],
           },
         },
         null,
@@ -77,6 +88,7 @@ export const generateWorkflowTool = tool(
       "将 plan_workflow 输出的工作流规划结果（WorkflowPlan）映射为 Coze 平台可部署的" +
       "工作流 JSON，并在返回前自动校验结构完整性。" +
       "plan 参数可选：优先传 planId 句柄（plan_workflow 返回），避免背诵大 JSON。" +
+      "返回 workflowHandle 句柄：后续 save_to_coze 直接传 workflowHandle，无需背诵 workflow。" +
       "如果规划中有参考数据（如歌词库、歌曲列表），必须从 read_file 读取后传入 referenceData。",
     schema: z.object({
       planId: z
@@ -96,7 +108,7 @@ export const generateWorkflowTool = tool(
         .optional()
         .describe(
           "参考数据（如歌词库 {歌名: 歌词}、歌曲列表），用于代码节点生成时内嵌为常量。" +
-          "必须来自 read_file 读取的文件内容，禁止凭空编造。",
+            "必须来自 read_file 读取的文件内容，禁止凭空编造。",
         ),
     }),
   },

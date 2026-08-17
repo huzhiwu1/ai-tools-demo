@@ -19,6 +19,7 @@ export const PLAN_PROMPT = `你是 Coze 工作流需求分析器。
 
 ## 工作流命名规则
 name 必须是英文：只允许字母、数字、下划线，以字母开头，长度 ≤ 50。
+工作名称后面加上随机字符串，确保全局唯一。
 
 ## 节点类型
 llm | code | condition | http | database_query | text | merge

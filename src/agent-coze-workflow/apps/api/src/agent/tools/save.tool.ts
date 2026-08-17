@@ -28,7 +28,6 @@ import { checkPlatformCompatibility } from "../../workflow-engine/platform-valid
 import { convertToPlatformSchema } from "../../coze/schema-converter";
 import { cozeClient } from "./coze-client";
 import { workflowCache } from "../workflow-cache";
-import { resetIteration } from "./iteration-counter";
 
 /**
  * 清洗工作流名称：平台只允许字母开头 + 字母/数字/下划线，长度 ≤ 50
@@ -132,7 +131,7 @@ async function createWorkflowWithRetry(
 }
 
 export const saveToCozeTool = tool(
-  async ({ workflow, workflowId }) => {
+  async ({ workflow, workflowId, workflowHandle }) => {
     // 1. 解析目标工作流来源：缓存条目（供句柄化取值 + dirty 快照用）
     const cached =
       typeof workflowId === "string" && workflowId.length > 0
@@ -157,8 +156,13 @@ export const saveToCozeTool = tool(
     };
 
     try {
-      // 2. 目标工作流：参数 workflow ?? 服务端缓存（句柄化）
-      const source = workflow ?? cached?.workflow;
+      // 2. 目标工作流：参数 workflow ?? 服务端缓存（句柄化，workflowId 或 generate 返回的 workflowHandle）
+      const source =
+        workflow ??
+        cached?.workflow ??
+        (typeof workflowHandle === "string" && workflowHandle.length > 0
+          ? workflowCache.get(workflowHandle)?.workflow
+          : undefined);
       if (!source) {
         return "保存失败: 未提供 workflow 且缓存中无此工作流。请先 generate_workflow 生成后再保存";
       }
@@ -241,15 +245,21 @@ export const saveToCozeTool = tool(
         platformWorkflowId,
         schemaJson,
       );
-      resetIteration(platformWorkflowId);
 
       // 5. 缓存维护：来自缓存的更新 → clearDirty + 刷新 commitId；
-      // 首次创建 → 写缓存（带 commitId，stale 检测基线）
+      // 首次创建 → 写缓存（带 commitId，stale 检测基线）；handle 条目用后即删
+      if (typeof workflowHandle === "string" && workflowHandle.length > 0) {
+        workflowCache.remove(workflowHandle);
+      }
       if (cached) {
         workflowCache.clearDirty(platformWorkflowId);
-        workflowCache.set(platformWorkflowId, cozeWorkflow as unknown as Record<string, unknown>, {
-          commitId: submitCommitId,
-        });
+        workflowCache.set(
+          platformWorkflowId,
+          cozeWorkflow as unknown as Record<string, unknown>,
+          {
+            commitId: submitCommitId,
+          },
+        );
       } else {
         workflowCache.set(
           platformWorkflowId,
@@ -280,14 +290,20 @@ export const saveToCozeTool = tool(
       "将工作流部署到 Coze 平台。**不传 workflowId 时创建新的工作流并保存**；" +
       "**传 workflowId 时更新该已有工作流**（修复迭代场景：update_workflow 修改后重新保存，" +
       "必须把原 workflowId 传入，避免每次修复都新建工作流）。" +
-      "workflow 参数可选（句柄化）：不传时自动从服务端缓存按 workflowId 获取，" +
-      "LLM 无需背诵大 JSON。返回平台分配的 workflowId。",
+      "workflow 参数可选（句柄化）：优先传 generate_workflow 返回的 workflowHandle，" +
+      "或修复迭代时只传 workflowId 从服务端缓存获取。返回平台分配的 workflowId。",
     schema: z.object({
       workflow: z
         .record(z.string(), z.any())
         .optional()
         .describe(
-          "可选。工作流 JSON。不传时从服务端缓存按 workflowId 获取（句柄化）",
+          "可选。工作流 JSON。不传时从服务端缓存按 workflowId / workflowHandle 获取（句柄化）",
+        ),
+      workflowHandle: z
+        .string()
+        .optional()
+        .describe(
+          "generate_workflow 返回的 workflowHandle 句柄（推荐首次保存时传，工具从缓存取工作流）",
         ),
       workflowId: z
         .string()

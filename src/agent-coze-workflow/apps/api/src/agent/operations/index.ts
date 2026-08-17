@@ -13,8 +13,6 @@
 export {
   UpdateOperationSchema,
   UpdateOperationsSchema,
-  UpdateOperationsParseSchema,
-  normalizeOperations,
   FIELD_PATHS,
   STRING_FIELDS,
   ARRAY_FIELDS,

@@ -185,38 +185,5 @@ export const UpdateOperationSchema = z.discriminatedUnion("op", [
 /** 操作数组 schema（LLM 一次可输出多条操作） */
 export const UpdateOperationsSchema = z.array(UpdateOperationSchema);
 
-/**
- * fixInstruction 解析专用宽松 schema（A/B 实测校准）
- *
- * DeepSeek jsonMode 不注入 schema，模型对"顶层必须是数组"这一约束
- * 遵守不稳定（实测 26 条样本出现单个对象 / {"ops":[...]} 包裹壳两种
- * 形状偏离，裸 z.array 全部失败）。旧 schema 的 union 形状容错是它
- * 100% 成功率的关键，新 schema 对齐同等容错：单个操作 / 操作数组 /
- * {ops:[...]} / {operations:[...]} 四种形状，解析后统一归一化为数组。
- * 仅 fixInstruction 兼容路径使用；operations 参数直传主路径仍用
- * UpdateOperationsSchema（工具 schema 层强制数组，形状不偏离）。
- */
-export const UpdateOperationsParseSchema = z.union([
-  UpdateOperationSchema,
-  UpdateOperationsSchema,
-  z.object({ ops: UpdateOperationsSchema }),
-  z.object({ operations: UpdateOperationsSchema }),
-]);
-
-/**
- * 归一化：宽松解析结果 → 操作数组
- *
- * @param parsed - UpdateOperationsParseSchema 的解析结果（4 种形状之一）
- * @returns 操作数组
- */
-export function normalizeOperations(parsed: unknown): UpdateOperation[] {
-  if (Array.isArray(parsed)) return parsed as UpdateOperation[];
-  const obj = parsed as Record<string, unknown>;
-  if (Array.isArray(obj.ops)) return obj.ops as UpdateOperation[];
-  if (Array.isArray(obj.operations))
-    return obj.operations as UpdateOperation[];
-  return [parsed as UpdateOperation];
-}
-
 /** 操作指令类型 */
 export type UpdateOperation = z.infer<typeof UpdateOperationSchema>;

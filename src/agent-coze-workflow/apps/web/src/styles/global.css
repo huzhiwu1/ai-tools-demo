@@ -718,6 +718,33 @@ body {
 }
 
 /* 思考内容（DeepSeek reasoning_content 流式显示） */
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+.thinking-toggle:disabled {
+  cursor: default;
+}
+
+.thinking-toggle-icon {
+  font-size: 10px;
+  color: var(--color-text-secondary, #999);
+}
+
+.thinking-collapsed-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary, #bbb);
+  margin-left: 2px;
+}
+
 .thinking-label {
   font-size: 12px;
   color: var(--color-text-secondary, #999);

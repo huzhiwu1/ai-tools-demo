@@ -13,10 +13,15 @@
  * 2. driver = 本次 HTTP 请求的生命周期：claim 用户消息 → step 循环 → SSE 收尾
  * 3. handleResume：回答写回占位 ToolMessage → 重启 driver 继续原 turn
  *
- * 输出协议：Vercel AI SDK Data Stream Protocol（与旧实现完全一致，前端零改动）
- * - 0:"text"   → LLM 文本增量
+ * 输出协议：Vercel AI SDK Data Stream Protocol
  * - d:{...}    → 结构化数据（session/tool_start/tool_end/interrupt/done/error/aborted）
  * - e:{...}    → 流结束标记
+ *
+ * 文本分段协议（每个 step 的 LLM 文本独立成段，前端按段渲染气泡）：
+ * - d:{"type":"step_text_start", step} → 新段开始（前端开新气泡）
+ * - d:{"type":"reasoning_delta", content, step} → 文本/思考增量（过程气泡流式打字）
+ * - d:{"type":"final_answer", step} → 该段是最终回复（前端升级为正文气泡）
+ *   中间步骤叙述走过程气泡（可折叠），最终回复单独正文气泡，不再混在一个气泡
  *
  * 关键细节：
  * - driver 收敛用 identity guard（finally 里 session.phase === phase 才收敛），
@@ -67,39 +72,45 @@ interface SSEResponse {
 // 系统提示词
 // ============================================
 
-const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，使用工具自主完成工作流的设计、生成、部署、试运行和验证迭代。
+const SYSTEM_PROMPT = `你是 Coze 工作流构建助手。根据用户需求完成工作流的设计、生成、部署与交付；只有用户明确要求验证时才进行批量验证。
 
 ## 可用工具
 1. clarify_question: 当用户需求信息不完整时调用（缺少数据源、格式约定、输出要求等），暂停等待用户回答
 2. read_file: 通用文件读取，返回文件原始内容。文件的具体用途、列含义、数据如何参与工作流，由你（LLM）根据用户需求判断
 3. plan_workflow: 将用户需求分析为结构化工作流规划（WorkflowPlan）
 4. generate_workflow: 将规划结果映射为 Coze 平台可部署的工作流 JSON（plan 参数可选，优先传 planId 句柄，不背完整 plan）
-5. save_to_coze: 将工作流部署到 Coze 平台（workflow JSON 参数可选，优先用 workflowId 句柄）
+5. save_to_coze: 将工作流部署到 Coze 平台（workflow JSON 参数可选，优先用 workflowId / workflowHandle 句柄）
 6. test_run_workflow: 试运行已部署的工作流
 7. batch_validate: 批量试运行已部署的工作流，对照期望值验证准确性，返回准确率 + 错误明细 + 归因分组
-8. update_workflow: 根据归因分析结果修改工作流节点（阈值/代码/逻辑/prompt/提示词/数据/常量），返回 changes 摘要（不再返回完整 workflow）
+8. update_workflow: 根据归因分析结果修改工作流节点（阈值/代码/逻辑/prompt/提示词/数据/常量），只接受 operations 结构化操作数组
 9. rename_workflow: 修改已创建工作流的名称/描述（不走 save，不影响工作流内容）
 10. list_workflows: 搜索平台已有工作流（按名称关键词），返回摘要列表（workflowId/name/desc）
 11. read_workflow: 读取平台已有工作流，输出人类可读说明书（拓扑图/节点清单/数据流/配置详情）
 
+## 交付优先（最重要，必须遵守）
+- **保存成功即交付**：save_to_coze 返回 saved: true 后，立即向用户总结交付（含 workflowId），停止一切验证与修改
+- 除非用户明确要求验证（如「验证一下/测一下/看准确率」），不要调用 batch_validate / test_run_workflow
+- 用户要求验证后：若 accuracy < 100%，最多修复 1 次（update_workflow → save_to_coze），然后无论结果如何都必须向用户汇报（准确率 + 失败分析 + 建议），不得自动进入第二轮修复
+- 收到「已达迭代上限」错误：必须停止，向用户汇报当前结果，不要尝试绕过或继续修改
+- 收到「[系统拦截]」提示：说明任务已完成或不应继续当前操作，请遵守提示直接总结交付
+
 ## 使用规则
 - 先分析需求是否完整，缺信息时优先调用 clarify_question
-- 规划→生成→部署→试运行，按顺序执行
-- 每一步完成后检查结果，再决定下一步
+- 规划→生成→部署→交付，按顺序执行；用户要求验证时才追加验证步骤
 - 工具调用失败时，将错误信息告知用户
 - **读工作流规则**：
   - 用户没给 workflowId 时，先 list_workflows 按名称搜索拿 ID
   - 用户问「工作流长什么样/为什么错」、或准备修改线上已有工作流时，先 read_workflow 读说明书（读后写入服务端缓存）
   - read_workflow 默认 scope=overview（概览+节点清单+数据流，省 token）；需要完整配置与验证报告时用 scope=full
 - **save_to_coze 规则（重要）**：
-  - **首次保存**：不传 workflowId，创建新工作流
+  - **首次保存**：不传 workflowId，创建新工作流（generate_workflow 返回 workflowHandle 时直接传它，不背大 JSON）
   - **修复迭代**（校验失败/试运行失败/批量验证失败后 update_workflow 修改过）：
     重新 save_to_coze 时**必须带上原 workflowId**，在原工作流上更新，不要新建！
   - 只有第一次创建工作流本身失败时才重新创建
   - save_to_coze 提示"工作流名称已存在"时：工具会自动加后缀重试；若仍需指定名称，用 rename_workflow 改名后重新保存
 - rename_workflow 只改名称/描述，不影响工作流内容
-- **句柄化（重要）**：update_workflow / save_to_coze 的 workflow JSON 参数现在可选。
-  - 推荐流程：save_to_coze 后拿 workflowId → update_workflow 只传 workflowId + fixInstruction（不传大 JSON）→ 再 save_to_coze 传 workflowId 保存
+- **句柄化（重要）**：
+  - update_workflow 只传 workflowId + operations（结构化操作数组，主路径），不要传大 JSON、不要用自然语言修改指令
   - update_workflow 只改服务端缓存不落平台，**修改后必须 save_to_coze（传 workflowId）保存，保存成功才生效**
   - update_workflow 返回「线上工作流已被修改，已重新拉取」时，说明平台侧有人工修改，需基于最新版本重新描述修改指令
 - **plan 句柄化**：plan_workflow 返回 planId 后，generate_workflow 只传 planId 即可（不传完整 plan JSON）
@@ -118,11 +129,10 @@ const SYSTEM_PROMPT = `你是 Coze 工作流构建助手，根据用户需求，
    - 不确定 → 调用 clarify_question 向用户询问
 3. 完全理解需求后，再 plan_workflow 设计工作流
 4. generate_workflow 生成 → 检查 validation。⚠️ 若文件内容是需要内嵌到工作流的参考数据（如歌词库、歌曲列表、常量表），必须将文件内容作为 referenceData 参数传入 generate_workflow（格式：{歌名/键: 内容}），禁止编造或省略——否则代码节点会凭空生成错误数据
-5. save_to_coze 保存 → 拿 workflowId
-6. batch_validate 批量试运行（cases 由 LLM 根据文件内容构造）→ 看 accuracy
-7. 若 accuracy < 100%：分析 failurePatterns → 给出 fixInstruction → update_workflow → 重新 save → batch_validate
+5. save_to_coze 保存 → 拿 workflowId → **向用户交付（默认流程到此结束）**
+6. 仅当用户明确要求验证时：batch_validate 批量试运行（cases 由 LLM 根据文件内容构造）→ 看 accuracy
+7. 若 accuracy < 100%：最多 1 次 update_workflow（传 operations）→ save_to_coze（传 workflowId）→ 然后无论结果如何都向用户汇报（准确率 + 失败分析 + 建议），不再自动重复验证
 8. 若收到"已达迭代上限"错误：停止迭代，向用户汇报当前结果（准确率 + 失败分析）
-9. 验证通过：总结交付（含最终 workflowId 和 accuracy）
 
 ## 输出格式
 - 思考过程：用自然语言解释当前步骤
@@ -169,8 +179,8 @@ const modelWithTools = llm.bindTools([...ALL_TOOLS]);
 // 常量
 // ============================================
 
-/** 每 turn 最多 LLM 步数（死循环保护上限） */
-const MAX_STEPS_PER_TURN = 25;
+/** 每 turn 最多 LLM 步数（死循环保护上限；交付优先策略下 15 步足够覆盖创建 + 1 轮验证修复） */
+const MAX_STEPS_PER_TURN = 15;
 /** 发给 LLM 的历史消息滑动窗口上限 */
 const MAX_HISTORY_MESSAGES = 40;
 /** 等待旧 driver 收敛的超时（ms），超时后强制接管（identity guard 保证安全） */
@@ -181,6 +191,22 @@ const MAX_EVENTS = 1000;
 const LOOP_REPEAT_LIMIT = 3;
 /** 截断工具调用的补位结果文本（对齐 Harness appendSkippedToolCall） */
 const TOOL_ABORTED_TEXT = "Error: tool call aborted before dispatch";
+/** 同一工具连续失败达到该值拦截（第 3 次失败停止重试，防止失败重试循环） */
+const FAIL_REPEAT_LIMIT = 3;
+/** 本 turn 最多允许的 plan_workflow 调用次数（超出拦截，防重复规划） */
+const PLAN_CALL_LIMIT = 2;
+/** save 成功后默认拦截的迭代工具（交付优先：保存成功即停） */
+const DELIVERY_BLOCK_TOOLS = new Set([
+  "plan_workflow",
+  "generate_workflow",
+  "batch_validate",
+  "update_workflow",
+]);
+/** 用户明确要求验证时，save 后仅拦截重复规划/生成（验证修复由迭代计数器兜底） */
+const DELIVERY_BLOCK_TOOLS_VALIDATION = new Set([
+  "plan_workflow",
+  "generate_workflow",
+]);
 
 // ============================================
 // 类型定义
@@ -198,6 +224,22 @@ interface LoopGuard {
   lastToolName: string;
   lastToolInput: string;
   repeatCount: number;
+  /** 上一轮同工具是否执行失败（连续失败拦截用） */
+  lastFailed: boolean;
+  /** 同一工具连续失败次数 */
+  failStreak: number;
+}
+
+/** turn 级交付守卫状态（跨 step 共享，save 成功后拦截迭代工具） */
+interface TurnGuardState {
+  /** 本 turn 是否已有工作流保存成功（交付信号） */
+  saveSucceeded: boolean;
+  /** save 成功后拦截迭代工具的累计次数（第 2 次拦截强制收尾） */
+  iterationBlockCount: number;
+  /** 本 turn 的 plan_workflow 调用次数 */
+  planCallCount: number;
+  /** 用户是否明确要求验证（决定 save 后拦截范围） */
+  validationRequested: boolean;
 }
 
 /** 模型顺序提交的工具调用（参数为原始 JSON 字符串） */
@@ -212,6 +254,8 @@ type StepOutcome =
   | { kind: "completed" }
   | { kind: "max_tokens" }
   | { kind: "loop_detected"; name: string; input: unknown }
+  | { kind: "repeat_failure"; name: string; input: unknown }
+  | { kind: "forced_delivery" }
   | { kind: "clarify"; question: string; context?: string }
   | null;
 
@@ -222,13 +266,34 @@ type StepOutcome =
 /**
  * 解析工具参数：JSON 字符串 → 对象；解析失败保文本（对齐 Harness parseArguments）
  *
+ * 防御解包：模型可能模仿 OpenAI 请求格式输出 {"arguments": "<json>"}
+ * 包装（历史上下文污染时尤甚），单键 arguments 且内层可解析为对象时
+ * 还原为真实参数对象，避免 zod schema 校验失败。
+ *
  * @param raw - LLM 输出的原始参数（流式组装后为完整 JSON 字符串）
  * @returns 参数对象；非法 JSON 时以 _invalid_json 键保文本，供工具感知解析失败
  */
 function parseToolArguments(raw: unknown): Record<string, unknown> {
   if (typeof raw !== "string") return raw as Record<string, unknown>;
   try {
-    return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      typeof parsed.arguments === "string" &&
+      Object.keys(parsed).length === 1
+    ) {
+      try {
+        const inner = JSON.parse(parsed.arguments);
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+          return inner;
+        }
+      } catch {
+        // 内层不是 JSON（合法业务参数），保留原样
+      }
+    }
+    return parsed;
   } catch {
     return { _invalid_json: raw };
   }
@@ -571,12 +636,17 @@ export class ReactAgentService {
     signal.throwIfAborted();
 
     let turn: number;
+    let validationRequested = false;
     if (resume) {
       // resume 继续原 turn（回答已写回 ToolMessage），不递增 turn 计数
       turn = phase.turn;
     } else {
       const claimed = session.inbox.claimTurn();
       if (claimed.length === 0) return; // 队列空（异常边缘），driver 直接退出
+      // 用户是否明确要求验证：决定 save 后拦截范围（要求验证时放行 batch_validate/update_workflow，由迭代计数器兜底）
+      validationRequested = claimed.some((m) =>
+        /验证|校验|准确率|测一下|测测|对一下|检查一下|跑一下用例/.test(m),
+      );
       turn = phase.turn + 1;
       phase.turn = turn;
       phase.step = 0;
@@ -607,6 +677,15 @@ export class ReactAgentService {
       lastToolName: "",
       lastToolInput: "",
       repeatCount: 0,
+      lastFailed: false,
+      failStreak: 0,
+    };
+    // 交付守卫：save 成功后拦截迭代工具（防止"修到满意为止"式无限循环）
+    const guardState: TurnGuardState = {
+      saveSucceeded: false,
+      iterationBlockCount: 0,
+      planCallCount: 0,
+      validationRequested,
     };
 
     try {
@@ -617,7 +696,13 @@ export class ReactAgentService {
           turnEnd = { kind: "step_limit", maxSteps: MAX_STEPS_PER_TURN };
           break;
         }
-        const outcome = await this.step(session, phase, res, loopGuard);
+        const outcome = await this.step(
+          session,
+          phase,
+          res,
+          loopGuard,
+          guardState,
+        );
         if (outcome === null) continue; // 工具执行完，继续下一步
 
         switch (outcome.kind) {
@@ -650,6 +735,20 @@ export class ReactAgentService {
               code: "loop_detected",
               message: `检测到工具 ${outcome.name} 连续 4 次以相同参数被调用（疑似死循环），已停止执行。请简化需求或提供更明确的信息后重试。`,
             };
+            break;
+          case "repeat_failure":
+            turnEnd = {
+              kind: "error",
+              code: "repeat_failure",
+              message: `工具 ${outcome.name} 连续失败 ${FAIL_REPEAT_LIMIT} 次，已停止重试。请向用户说明错误情况并等待用户指示。`,
+            };
+            break;
+          case "forced_delivery":
+            // 保存成功后模型仍尝试继续验证/修改：强制收尾交付
+            this.logger.warn(
+              `[Agent] turn=${turn} 强制交付（save 成功后拦截 ${guardState.iterationBlockCount} 次迭代尝试）`,
+            );
+            turnEnd = { kind: "completed" };
             break;
           case "clarify":
             // 挂起：interrupt 事件已在 step 内发送，turn 不记结束、不发收尾事件
@@ -747,6 +846,7 @@ export class ReactAgentService {
    * @param phase - 本 driver 的 running phase
    * @param res - SSE 响应
    * @param loopGuard - 死循环检测状态
+   * @param guardState - turn 级交付守卫状态（save 成功后拦截迭代工具）
    * @returns StepOutcome（null = 继续下一步）
    */
   private async step(
@@ -754,6 +854,7 @@ export class ReactAgentService {
     phase: Extract<Phase, { kind: "running" }>,
     res: SSEResponse,
     loopGuard: LoopGuard,
+    guardState: TurnGuardState,
   ): Promise<StepOutcome> {
     const signal = phase.abort.signal;
     signal.throwIfAborted();
@@ -769,6 +870,14 @@ export class ReactAgentService {
 
     // LLM 流式调用：chunk 累积进 full（AIMessageChunk.concat 组装完整 tool_calls）
     let full: AIMessageChunk | null = null;
+    // 每步首个文本/思考 chunk 前发段开始标记（前端按 step 分段渲染气泡）
+    let stepTextStarted = false;
+    const ensureStepTextStarted = (): void => {
+      if (!stepTextStarted) {
+        stepTextStarted = true;
+        this.sseEvent(res, { type: "step_text_start", step });
+      }
+    };
     const stream = await modelWithTools.stream(messages, { signal });
     for await (const chunk of stream) {
       // 检查点 1：AbortSignal（「打断并发送」的主路径，比 res.destroyed 更及时）
@@ -783,12 +892,19 @@ export class ReactAgentService {
       // 思考内容增量（DeepSeek reasoning_content；当前模型已关思考，防御保留）
       const reasoning = chunk.additional_kwargs?.reasoning_content;
       if (typeof reasoning === "string" && reasoning.length > 0) {
-        this.sseEvent(res, { type: "reasoning_delta", content: reasoning });
+        ensureStepTextStarted();
+        this.sseEvent(res, {
+          type: "reasoning_delta",
+          content: reasoning,
+          step,
+        });
       }
-      // 文本增量
+      // 文本增量（走 reasoning_delta 通道：中间叙述显示在过程气泡，
+      // step 结束判定为最终回复时由 final_answer 事件升级为正文气泡）
       const text = extractTextContent(chunk.content);
       if (text) {
-        this.sseLine(res, `0:${JSON.stringify(text)}`);
+        ensureStepTextStarted();
+        this.sseEvent(res, { type: "reasoning_delta", content: text, step });
       }
     }
     signal.throwIfAborted();
@@ -802,6 +918,10 @@ export class ReactAgentService {
         typeof tc.args === "string" ? tc.args : JSON.stringify(tc.args ?? {}),
     }));
     const content = full?.content ?? "";
+    // 落 history 的 tool_calls.args 必须是对象（LangChain 约定）：
+    // 存字符串会在下一轮 convertLangChainToolCallToOpenAI 中被再次
+    // JSON.stringify，产生双转义畸形格式污染上下文，诱导模型模仿输出
+    // {"arguments": "..."} 包装导致 zod 校验失败。
     session.history.push(
       new AIMessage({
         content,
@@ -810,7 +930,7 @@ export class ReactAgentService {
             ? toolCalls.map((c) => ({
                 id: c.id,
                 name: c.name,
-                args: c.args as unknown as Record<string, unknown>,
+                args: parseToolArguments(c.args),
               }))
             : undefined,
       }),
@@ -843,10 +963,23 @@ export class ReactAgentService {
       return { kind: "max_tokens" };
     }
 
-    if (toolCalls.length === 0) return { kind: "completed" };
+    if (toolCalls.length === 0) {
+      // 最终回复：无工具调用的步骤文本升级为正文气泡
+      if (textContent) {
+        this.sseEvent(res, { type: "final_answer", step });
+      }
+      return { kind: "completed" };
+    }
 
     // 顺序执行工具（对齐 Harness executeToolCalls 的模型顺序提交）
-    return this.executeToolCalls(session, phase, res, toolCalls, loopGuard);
+    return this.executeToolCalls(
+      session,
+      phase,
+      res,
+      toolCalls,
+      loopGuard,
+      guardState,
+    );
   }
 
   /**
@@ -860,6 +993,7 @@ export class ReactAgentService {
    * @param res - SSE 响应
    * @param toolCalls - 模型顺序的工具调用
    * @param loopGuard - 死循环检测状态
+   * @param guardState - turn 级交付守卫状态
    * @returns StepOutcome（null = 全部执行完，继续下一步）
    */
   private async executeToolCalls(
@@ -868,6 +1002,7 @@ export class ReactAgentService {
     res: SSEResponse,
     toolCalls: PlannedCall[],
     loopGuard: LoopGuard,
+    guardState: TurnGuardState,
   ): Promise<StepOutcome> {
     const signal = phase.abort.signal;
     const turn = phase.turn;
@@ -904,6 +1039,52 @@ export class ReactAgentService {
           `[Agent] loop_detected: ${call.name} ${inputKey.slice(0, 200)}`,
         );
         return { kind: "loop_detected", name: call.name, input: args };
+      }
+
+      // 交付守卫拦截：save 成功后禁止继续验证/修改（防"修到满意为止"循环）
+      const blockTools = guardState.validationRequested
+        ? DELIVERY_BLOCK_TOOLS_VALIDATION
+        : DELIVERY_BLOCK_TOOLS;
+      if (guardState.saveSucceeded && blockTools.has(call.name)) {
+        guardState.iterationBlockCount += 1;
+        const warning =
+          guardState.iterationBlockCount >= 2
+            ? "[系统强制停止] 工作流已保存成功，任务已完成。你已连续 2 次尝试继续验证/修改，本轮对话立即结束，请直接查看右侧面板的工作流与保存结果。"
+            : "[系统拦截] 工作流已保存成功，任务已完成。请直接向用户总结交付（含 workflowId），不要再调用 batch_validate / update_workflow / plan_workflow / generate_workflow。";
+        session.history.push(
+          new ToolMessage({
+            content: warning,
+            tool_call_id: call.id,
+            name: call.name,
+          }),
+        );
+        this.logger.warn(
+          `[Agent] turn=${turn} step=${step} 交付拦截: ${call.name}（第 ${guardState.iterationBlockCount} 次）`,
+        );
+        if (guardState.iterationBlockCount >= 2) {
+          return { kind: "forced_delivery" };
+        }
+        continue; // 跳过该工具，继续执行同一步内其余调用
+      }
+
+      // 重复规划拦截：plan_workflow 超次数直接拦截（planId 已句柄化，无需重新规划）
+      if (call.name === "plan_workflow") {
+        guardState.planCallCount += 1;
+        if (guardState.planCallCount > PLAN_CALL_LIMIT) {
+          const warning =
+            "[系统拦截] 本回合已多次调用 plan_workflow。不要重复规划：请基于已有 planId 调用 generate_workflow 继续，或直接向用户汇报当前进度。";
+          session.history.push(
+            new ToolMessage({
+              content: warning,
+              tool_call_id: call.id,
+              name: call.name,
+            }),
+          );
+          this.logger.warn(
+            `[Agent] turn=${turn} step=${step} 重复规划拦截: plan_workflow（第 ${guardState.planCallCount} 次）`,
+          );
+          continue; // 跳过该工具
+        }
       }
 
       // 工具开始事件（先发事件再执行，前端实时展示调用链）
@@ -975,6 +1156,42 @@ export class ReactAgentService {
         };
       }
 
+      // 交付信号检测：save_to_coze 成功 → 本 turn 进入交付模式（后续迭代工具被拦截）
+      if (
+        !toolError &&
+        call.name === "save_to_coze" &&
+        /"saved"\s*:\s*true/.test(outputText)
+      ) {
+        guardState.saveSucceeded = true;
+        this.logger.log(
+          `[Agent] turn=${turn} step=${step} save 成功，进入交付模式`,
+        );
+      }
+
+      // 连续失败拦截：同一工具连续失败 FAIL_REPEAT_LIMIT 次停止重试（防失败重试循环）
+      if (toolError) {
+        loopGuard.failStreak = loopGuard.lastFailed
+          ? loopGuard.failStreak + 1
+          : 1;
+      } else {
+        loopGuard.failStreak = 0;
+      }
+      loopGuard.lastFailed = !!toolError;
+      if (loopGuard.failStreak >= FAIL_REPEAT_LIMIT) {
+        const warning = `[系统拦截] 工具 ${call.name} 连续失败 ${FAIL_REPEAT_LIMIT} 次，已停止重试。请向用户汇报错误信息，等待用户指示。`;
+        session.history.push(
+          new ToolMessage({
+            content: warning,
+            tool_call_id: call.id,
+            name: call.name,
+          }),
+        );
+        this.logger.warn(
+          `[Agent] turn=${turn} step=${step} 连续失败拦截: ${call.name}（第 ${loopGuard.failStreak} 次）`,
+        );
+        return { kind: "repeat_failure", name: call.name, input: args };
+      }
+
       // 工具结果落 history（打断不丢失：直接写在权威记录里，无 checkpoint 机制）
       session.history.push(
         new ToolMessage({
@@ -1039,6 +1256,26 @@ export class ReactAgentService {
         continue;
       }
       if (isAIMessage(msg)) {
+        // 自愈：修复历史遗留的畸形 tool_calls（args 为字符串的双转义
+        // 污染）。LangChain 约定 args 为对象，字符串形态经
+        // convertLangChainToolCallToOpenAI 的 JSON.stringify 会二次转义。
+        let aiMsg: AIMessage = msg;
+        const dirtyCalls = (aiMsg.tool_calls ?? []).filter(
+          (c) => typeof c.args === "string",
+        );
+        if (dirtyCalls.length > 0) {
+          aiMsg = new AIMessage({
+            content: aiMsg.content,
+            tool_calls: (aiMsg.tool_calls ?? []).map((c) =>
+              typeof c.args === "string"
+                ? { ...c, args: parseToolArguments(c.args) }
+                : c,
+            ),
+            additional_kwargs: aiMsg.additional_kwargs,
+            response_metadata: aiMsg.response_metadata,
+            id: aiMsg.id,
+          });
+        }
         // 新 AI 消息前的未配对调用：上一工具序列已结束，补合成结果
         for (const [id] of pending) {
           patched.push(
@@ -1046,8 +1283,8 @@ export class ReactAgentService {
           );
         }
         pending.clear();
-        patched.push(msg);
-        for (const call of msg.tool_calls ?? []) {
+        patched.push(aiMsg);
+        for (const call of aiMsg.tool_calls ?? []) {
           if (call.id) {
             pending.set(call.id, {
               id: call.id,

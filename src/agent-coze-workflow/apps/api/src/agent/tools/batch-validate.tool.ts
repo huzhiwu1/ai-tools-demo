@@ -27,6 +27,7 @@ import { z } from "zod";
 import { cozeClient } from "./coze-client";
 import {
   incrementIteration,
+  peekIteration,
   MAX_ITERATIONS,
   iterationLimitMessage,
 } from "./iteration-counter";
@@ -252,11 +253,12 @@ async function runCase(
 
 export const batchValidateTool = tool(
   async ({ workflowId, cases: rawCases }) => {
-    // 迭代计数：每次调用 +1，超过上限直接返回错误，不执行验证
-    const iteration = incrementIteration(workflowId);
-    if (iteration > MAX_ITERATIONS) {
+    // 迭代计数：与 update_workflow 共用上限，先只读检查（peek），通过后再递增
+    const iteration = peekIteration(workflowId);
+    if (iteration >= MAX_ITERATIONS) {
       return iterationLimitMessage(workflowId);
     }
+    incrementIteration(workflowId);
 
     try {
       const cases = rawCases as Array<{
@@ -366,8 +368,8 @@ export const batchValidateTool = tool(
     description:
       "批量试运行已部署的工作流，对照期望值验证准确性。传入 cases 列表（由 LLM 构造），" +
       "每个用例含 input 和 expected，3 路并发执行并返回 accuracy + 失败明细 + 归因分组。" +
-      "失败明细只含失败用例（最多 10 个），用于验证闭环：accuracy < 100% 时分析 " +
-      "failurePatterns 归因，调用 update_workflow 修改后重新验证。",
+      "失败明细只含失败用例（最多 10 个）。返回结果用于向用户汇报验证结论；" +
+      "如需修复需另行调用 update_workflow（受系统迭代上限约束）。",
     schema: z.object({
       workflowId: z.string().describe("save_to_coze 返回的 workflowId"),
       cases: z

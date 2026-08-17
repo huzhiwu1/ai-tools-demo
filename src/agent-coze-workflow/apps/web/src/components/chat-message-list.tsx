@@ -11,6 +11,7 @@
 
 import { isToolOutputFailed } from "../api/data-stream.js";
 import type { DataStreamEvent } from "../api/data-stream.js";
+import { useState } from "react";
 
 /** useChat messages 的消息类型（宽松定义，兼容 role:"data" 消息） */
 export interface ChatMessage {
@@ -24,6 +25,11 @@ interface Props {
   messages: ChatMessage[];
   isLoading: boolean;
   pendingQuestion: { question: string; context?: string } | null;
+  // step → 段文本内容（reasoning_delta 在 App 里按 step 累积，
+  // 段锚点消息只存 step 号，渲染时从这里取完整文本）
+  stepContents: Record<number, string>;
+  // 正在流式打字的 step（null = 当前无打字段）
+  streamingStep: number | null;
 }
 
 /** 工具名 → 中文显示名（让用户看懂 AI 正在做什么） */
@@ -42,6 +48,58 @@ const TOOL_LABELS: Record<string, string> = {
 /** 工具名 → 中文显示名（未知工具回退原名） */
 function toolLabel(name: string): string {
   return TOOL_LABELS[name] ?? name;
+}
+
+/**
+ * 过程气泡（单个 step 的 LLM 叙述段）
+ *
+ * 流式累积打字；流结束后可点击头部折叠/展开（默认展开）。
+ * 最终回复段由 final_answer 事件升级为正文气泡，不经过本组件。
+ */
+function ThinkingBubble({
+  content,
+  isStreaming,
+}: {
+  content: string;
+  isStreaming: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  // 流式中的段强制展开（打字过程必须可见），结束后才允许折叠
+  const effectiveCollapsed = collapsed && !isStreaming;
+
+  return (
+    <div className="msg-row msg-ai">
+      <div className="msg-bubble thinking-bubble">
+        <div className="msg-avatar">AI</div>
+        <div className="msg-content">
+          <button
+            type="button"
+            className="thinking-toggle"
+            onClick={() => setCollapsed((c) => !c)}
+            title={effectiveCollapsed ? "展开过程" : "折叠过程"}
+            disabled={isStreaming}
+          >
+            <span className="thinking-label">
+              {isStreaming ? "🧠 处理中" : "🧠 过程"}
+            </span>
+            <span className="thinking-toggle-icon">
+              {effectiveCollapsed ? "▸" : "▾"}
+            </span>
+          </button>
+          {effectiveCollapsed ? (
+            <span className="thinking-collapsed-hint">
+              已折叠（{content.length} 字）
+            </span>
+          ) : (
+            <>
+              <div className="thinking-content">{content}</div>
+              {isStreaming && <span className="cursor-blink" />}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** 工具卡片：按 data 事件类型渲染 */
@@ -88,13 +146,42 @@ export function ChatMessageList({
   messages,
   isLoading,
   pendingQuestion,
+  stepContents,
+  streamingStep,
 }: Props) {
   return (
     <div className="chat-messages">
       {messages.map((msg, index) => {
-        // data 消息：渲染工具卡片（session/done/interrupt 事件不渲染）
+        // data 消息：渲染段气泡（step_text_start/final_answer）或工具卡片
         if (msg.role === "data") {
           const event = msg.data as DataStreamEvent | undefined;
+          // 段开始锚点：过程气泡（流式打字，结束后可折叠）；
+          // content 优先取锚点固化值（打断/新一轮时 stepContents 已清空），
+          // 流式期间锚点无 content，回退到 stepContents 累积值
+          if (event?.type === "step_text_start") {
+            const step = event.step ?? 0;
+            return (
+              <ThinkingBubble
+                key={msg.id}
+                content={event.content || (stepContents[step] ?? "")}
+                isStreaming={streamingStep === step}
+              />
+            );
+          }
+          // 最终回复锚点：升级为正式正文气泡（内容取该 step 累积文本）
+          if (event?.type === "final_answer") {
+            const step = event.step ?? 0;
+            return (
+              <div key={msg.id} className="msg-row msg-ai">
+                <div className="msg-bubble">
+                  <div className="msg-avatar">AI</div>
+                  <div className="msg-content">
+                    {event.content || (stepContents[step] ?? "")}
+                  </div>
+                </div>
+              </div>
+            );
+          }
           if (
             event &&
             (event.type === "tool_start" ||
@@ -132,34 +219,14 @@ export function ChatMessageList({
           );
         }
 
-        // 固化的思考段落：LLM 的推理过程（遇到什么问题、为什么这么做、准备怎么处理）
-        // 流式累积，工具调用/正式输出时封存，保留在消息流里可回看
-        if (msgData?.type === "reasoning") {
-          const isStreamingReasoning =
-            index === messages.length - 1 && isLoading;
-          return (
-            <div key={msg.id} className="msg-row msg-ai">
-              <div className="msg-bubble thinking-bubble">
-                <div className="msg-avatar">AI</div>
-                <div className="msg-content">
-                  <div className="thinking-label">🧠 处理中</div>
-                  <div className="thinking-content">
-                    {msgData.content ?? ""}
-                  </div>
-                  {isStreamingReasoning && <span className="cursor-blink" />}
-                </div>
-              </div>
-            </div>
-          );
+        // 跳过空正文气泡：后端不再发 0: 文本（打字效果由过程气泡承担），
+        // useChat 内部仍会留一条空 assistant 占位消息，始终不渲染
+        if (msg.role === "assistant" && msg.content === "") {
+          return null;
         }
 
         const isLast = index === messages.length - 1;
         const streaming = isLast && msg.role === "assistant" && isLoading;
-
-        // 跳过空气泡：非最后一条且内容为空的 assistant 消息
-        if (msg.role === "assistant" && msg.content === "" && !streaming) {
-          return null;
-        }
 
         return (
           <div
@@ -179,19 +246,13 @@ export function ChatMessageList({
         );
       })}
 
-      {/* LLM 处理中：没有流式文本、没有 reasoning 段落、没有提问卡片时显示 */}
+      {/* LLM 处理中：无流式文本/段气泡/工具卡片/提问卡片时显示 */}
       {isLoading &&
         !pendingQuestion &&
-        !messages.some(
-          (m) =>
-            m.role === "assistant" &&
-            m.content !== "" &&
-            m.id === messages[messages.length - 1]?.id,
-        ) &&
-        !messages.some(
-          (m) =>
-            (m.data as { type?: string } | undefined)?.type === "reasoning" &&
-            m.id === messages[messages.length - 1]?.id,
+        !(messages[messages.length - 1]?.role === "data") &&
+        !(
+          messages[messages.length - 1]?.role === "assistant" &&
+          messages[messages.length - 1]?.content !== ""
         ) && (
           <div className="msg-row msg-ai">
             <div className="msg-bubble thinking-bubble">

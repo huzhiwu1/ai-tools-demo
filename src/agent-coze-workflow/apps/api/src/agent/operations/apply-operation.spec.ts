@@ -15,11 +15,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { CozeWorkflow } from "@coze-workflow/workflow-schema";
-import {
-  UpdateOperationSchema,
-  UpdateOperationsParseSchema,
-  normalizeOperations,
-} from "./operations.schema";
+import { UpdateOperationSchema } from "./operations.schema";
 import { applyOperations, type ApplyContext } from "./apply-operation";
 
 /** 构造测试工作流：start → llm → code → condition → end */
@@ -72,7 +68,12 @@ function makeWorkflow(): CozeWorkflow {
       { id: "e1", sourceNodeId: "start", targetNodeId: "node_llm" },
       { id: "e2", sourceNodeId: "node_llm", targetNodeId: "node_code" },
       { id: "e3", sourceNodeId: "node_code", targetNodeId: "node_condition" },
-      { id: "e4", sourceNodeId: "node_condition", targetNodeId: "end", sourcePort: "true" },
+      {
+        id: "e4",
+        sourceNodeId: "node_condition",
+        targetNodeId: "end",
+        sourcePort: "true",
+      },
     ],
   } as unknown as CozeWorkflow;
 }
@@ -100,11 +101,18 @@ describe("applyOperations set", () => {
     const result = await applyOperations(
       wf,
       [
-        { op: "set", target: "LLM 处理", field: "config.model", value: "Qwen3.5-Omni-Plus" },
+        {
+          op: "set",
+          target: "LLM 处理",
+          field: "config.model",
+          value: "Qwen3.5-Omni-Plus",
+        },
       ],
       makeCtx(),
     );
-    expect(result.changes).toContain("节点 LLM 处理 模型已更新为 Qwen3.5-Omni-Plus");
+    expect(result.changes).toContain(
+      "节点 LLM 处理 模型已更新为 Qwen3.5-Omni-Plus",
+    );
     const llm = result.workflow.nodes.find((n) => n.id === "node_llm") as {
       config: { model: string };
     };
@@ -126,7 +134,9 @@ describe("applyOperations set", () => {
       makeCtx(),
     );
     expect(result.errors).toHaveLength(0);
-    const cond = result.workflow.nodes.find((n) => n.id === "node_condition") as {
+    const cond = result.workflow.nodes.find(
+      (n) => n.id === "node_condition",
+    ) as {
       branches: Array<{ expression: string; targetNodeId: string }>;
     };
     // expression 更新，targetNodeId 保留旧值（只改表达式场景）
@@ -157,9 +167,7 @@ describe("applyOperations set", () => {
     const wf = makeWorkflow();
     await applyOperations(
       wf,
-      [
-        { op: "set", target: "LLM 处理", field: "config.model", value: "X" },
-      ],
+      [{ op: "set", target: "LLM 处理", field: "config.model", value: "X" }],
       makeCtx(),
     );
     const llm = wf.nodes.find((n) => n.id === "node_llm") as {
@@ -190,11 +198,18 @@ describe("applyOperations set_ref", () => {
     const result = await applyOperations(
       wf,
       [
-        { op: "set_ref", target: "结束", outputName: "errorMsg", ref: "node_code.result" },
+        {
+          op: "set_ref",
+          target: "结束",
+          outputName: "errorMsg",
+          ref: "node_code.result",
+        },
       ],
       makeCtx(),
     );
-    expect(result.changes).toContain("节点 结束 输出变量 errorMsg 引用已更新为 node_code.result");
+    expect(result.changes).toContain(
+      "节点 结束 输出变量 errorMsg 引用已更新为 node_code.result",
+    );
     const end = result.workflow.nodes.find((n) => n.id === "end") as {
       outputVariables: Array<{ name: string; value: string }>;
     };
@@ -209,7 +224,14 @@ describe("applyOperations set_ref", () => {
     const wf = makeWorkflow();
     const result = await applyOperations(
       wf,
-      [{ op: "set_ref", target: "LLM 处理", outputName: "final", ref: "node_code.result" }],
+      [
+        {
+          op: "set_ref",
+          target: "LLM 处理",
+          outputName: "final",
+          ref: "node_code.result",
+        },
+      ],
       makeCtx(),
     );
     expect(result.changes).toHaveLength(0);
@@ -220,7 +242,14 @@ describe("applyOperations set_ref", () => {
     const wf = makeWorkflow();
     const result = await applyOperations(
       wf,
-      [{ op: "set_ref", target: "结束", outputName: "notExist", ref: "node_code.result" }],
+      [
+        {
+          op: "set_ref",
+          target: "结束",
+          outputName: "notExist",
+          ref: "node_code.result",
+        },
+      ],
       makeCtx(),
     );
     expect(result.changes).toHaveLength(0);
@@ -252,8 +281,14 @@ describe("applyOperations rewrite_code", () => {
     expect(result.errors).toHaveLength(0);
     const gen = ctx.codeGenerator.generateCode as ReturnType<typeof vi.fn>;
     // 合并了节点已有（歌A）+ op 内嵌（歌B）+ 工具级（歌C）
-    expect(gen.mock.calls[0][2]).toEqual({ 歌A: "歌词A", 歌B: "歌词B", 歌C: "歌词C" });
-    const codeNode = result.workflow.nodes.find((n) => n.id === "node_code") as {
+    expect(gen.mock.calls[0][2]).toEqual({
+      歌A: "歌词A",
+      歌B: "歌词B",
+      歌C: "歌词C",
+    });
+    const codeNode = result.workflow.nodes.find(
+      (n) => n.id === "node_code",
+    ) as {
       code: string;
     };
     expect(codeNode.code).toContain("refKeys=歌A,歌B,歌C");
@@ -262,10 +297,12 @@ describe("applyOperations rewrite_code", () => {
   it("无参考数据拒绝生成（废除仍生成+警告路径）", async () => {
     const wf = makeWorkflow();
     // 清掉节点 referenceData
-    delete (wf.nodes.find((n) => n.id === "node_code") as unknown as Record<
-      string,
-      unknown
-    >).referenceData;
+    delete (
+      wf.nodes.find((n) => n.id === "node_code") as unknown as Record<
+        string,
+        unknown
+      >
+    ).referenceData;
     const ctx = makeCtx();
     const result = await applyOperations(
       wf,
@@ -281,7 +318,9 @@ describe("applyOperations rewrite_code", () => {
     expect(result.changes).toHaveLength(0);
     expect(result.errors[0]).toContain("无参考数据");
     // 未调用生成器
-    expect((ctx.codeGenerator.generateCode as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    expect(
+      (ctx.codeGenerator.generateCode as ReturnType<typeof vi.fn>).mock.calls,
+    ).toHaveLength(0);
   });
 
   it("非 code 节点拒绝", async () => {
@@ -323,7 +362,12 @@ describe("applyOperations 二期 op 与多条混合", () => {
       [
         { op: "set", target: "LLM 处理", field: "config.model", value: "M1" },
         { op: "set", target: "不存在的节点", field: "data", value: 1 },
-        { op: "set", target: "LLM 处理", field: "userPrompt", value: "新提示词" },
+        {
+          op: "set",
+          target: "LLM 处理",
+          field: "userPrompt",
+          value: "新提示词",
+        },
       ],
       makeCtx(),
     );
@@ -408,53 +452,5 @@ describe("UpdateOperationSchema 校验", () => {
       logicDescription: "改用编辑距离",
     });
     expect(r.success).toBe(true);
-  });
-});
-
-// ============================================
-// fixInstruction 宽松解析（A/B 实测校准：模型输出形状不稳定）
-// ============================================
-
-describe("UpdateOperationsParseSchema + normalizeOperations", () => {
-  const one = { op: "set", target: "LLM 处理", field: "config.model", value: "M1" };
-  const two = [
-    one,
-    { op: "set", target: "LLM 处理", field: "userPrompt", value: "新提示词" },
-  ];
-
-  it("裸数组形状（理想输出）", () => {
-    const r = UpdateOperationsParseSchema.safeParse(two);
-    expect(r.success).toBe(true);
-    expect(normalizeOperations(r.data)).toHaveLength(2);
-  });
-
-  it("单个对象形状（模型省略数组包装，实测常见）", () => {
-    const r = UpdateOperationsParseSchema.safeParse(one);
-    expect(r.success).toBe(true);
-    expect(normalizeOperations(r.data)).toHaveLength(1);
-  });
-
-  it("{ops:[...]} 包裹壳形状（实测常见）", () => {
-    const r = UpdateOperationsParseSchema.safeParse({ ops: two });
-    expect(r.success).toBe(true);
-    expect(normalizeOperations(r.data)).toHaveLength(2);
-  });
-
-  it("{operations:[...]} 包裹壳形状", () => {
-    const r = UpdateOperationsParseSchema.safeParse({ operations: two });
-    expect(r.success).toBe(true);
-    expect(normalizeOperations(r.data)).toHaveLength(2);
-  });
-
-  it("非法形状仍拦截（乱字段对象）", () => {
-    const r = UpdateOperationsParseSchema.safeParse({ foo: "bar" });
-    expect(r.success).toBe(false);
-  });
-
-  it("元素非法仍拦截（壳内操作缺 target）", () => {
-    const r = UpdateOperationsParseSchema.safeParse({
-      ops: [{ op: "set", field: "data", value: 1 }],
-    });
-    expect(r.success).toBe(false);
   });
 });

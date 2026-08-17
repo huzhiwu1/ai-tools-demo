@@ -179,6 +179,13 @@ export default function App() {
   // data 数组已处理位置（发送新消息时归零，配合 setData(undefined) 使用）
   const processedDataCount = useRef(0);
 
+  // step → 段文本内容：reasoning_delta 按 step 累积，供段气泡/正文气泡渲染取用。
+  // 不写进 messages（@ai-sdk/react 1.0.13 的 onUpdate 会用请求时快照
+  // mutate 重置整个 messages，setMessages 插入的段消息会被覆盖）；
+  // 段气泡锚点消息（step_text_start/final_answer）由 useChat 自行累积的
+  // role:"data" 消息承担，不在覆盖范围内
+  const [stepContents, setStepContents] = useState<Record<number, string>>({});
+
   const busy = isLoading || resuming;
 
   // ============================================
@@ -186,24 +193,74 @@ export default function App() {
   // ============================================
 
   /**
-   * 处理单个 d: 事件（session/tool_start/tool_end/interrupt/done/error）
+   * 处理单个 d: 事件（session/tool_start/tool_end/interrupt/done/error/
+   * step_text_start/reasoning_delta/final_answer）
+   *
+   * source：chat = useChat 主流（step 锚点消息由 useChat 自动累积，不 setMessages）；
+   * resume = 手写 fetch 流（不走 useChat，需手动把锚点消息插入 messages）
    *
    * 使用函数式 setState，回调内无外部依赖。
    */
   const handleDataEvent = useCallback(
-    (event: DataStreamEvent) => {
+    (event: DataStreamEvent, source: "chat" | "resume") => {
       switch (event.type) {
         case "session": {
           if (typeof event.sessionId === "string") {
             setSessionId(event.sessionId);
           }
+          // 新 driver 开始：旧 step 号作废，清空段内容（已渲染的旧段保留）
+          setStepContents({});
+          break;
+        }
+
+        case "step_text_start": {
+          // 新 step 文本段开始：登记空内容；resume 流手动插入锚点消息
+          // （chat 流的锚点由 useChat 从 2: data 事件自行累积，无需手动插入）
+          const step = event.step ?? 0;
+          if (step <= 0) break;
+          setStepContents((prev) => ({ ...prev, [step]: prev[step] ?? "" }));
+          if (source === "resume") {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: "data",
+                content: "",
+                data: { type: "step_text_start", step },
+              },
+            ]);
+          }
           break;
         }
 
         case "reasoning_delta": {
-          // LLM 思考内容增量（DeepSeek reasoning_content）
-          // 由 useChat data 数组累积，渲染时从 data 派生，不再用 setMessages
-          // （setMessages 在当前架构下会被 useChat 内部的 mutate 覆盖）
+          // LLM 文本/思考增量：按 step 累积到段内容（过程气泡流式打字）
+          const step = event.step ?? 0;
+          const delta = event.content ?? "";
+          if (step <= 0 || !delta) break;
+          setStepContents((prev) => ({
+            ...prev,
+            [step]: (prev[step] ?? "") + delta,
+          }));
+          break;
+        }
+
+        case "final_answer": {
+          // 该 step 是最终回复：resume 流手动插入正文锚点消息，
+          // 渲染时按 step 取 stepContents 展示为正文气泡
+          const step = event.step ?? 0;
+          if (step <= 0) break;
+          if (source === "resume") {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: "data",
+                content: "",
+                data: { type: "final_answer", step },
+              },
+            ]);
+          }
           break;
         }
 
@@ -281,8 +338,8 @@ export default function App() {
         }
 
         case "done": {
-          // 一次对话完成。useChat 已通过原生 0: 协议累积了 assistant 消息，
-          // 无需手动重建——不再需要 textSegmentsRef / rebuildAssistantSegments。
+          // 一次对话完成。最终回复已由 final_answer 事件升级为正文气泡，
+          // 中间步骤叙述已按段渲染为过程气泡，无需在此重建消息。
           break;
         }
 
@@ -295,30 +352,6 @@ export default function App() {
     [setMessages],
   );
 
-  // 从 useChat data 数组派生 reasoning 内容（reasoning_delta 事件由后端经 d: 事件发送，
-  // 经 transformToDataProtocolStream 转为 2: data 事件后累积在 data 数组中）
-  const reasoningContent = useMemo(() => {
-    let result = "";
-    for (const d of data ?? []) {
-      if (d != null && typeof d === "object" && !Array.isArray(d) && d.type === "reasoning_delta") {
-        result += String(d.content ?? "");
-      }
-    }
-    return result;
-  }, [data]);
-
-  // 将 reasoning 注入 messages 末尾（ChatMessageList 识别 data.type="reasoning" 渲染思考气泡）
-  const displayMessages = useMemo(() => {
-    if (!reasoningContent) return messages as ChatMessage[];
-    const reasoningMsg: ChatMessage = {
-      id: "reasoning-live",
-      role: "assistant",
-      content: "",
-      data: { type: "reasoning", content: reasoningContent },
-    };
-    return [...(messages as ChatMessage[]), reasoningMsg];
-  }, [messages, reasoningContent]);
-
   // data 数组变化时增量处理新事件（避免重复处理已消费的事件）
   useEffect(() => {
     const events = data ?? [];
@@ -329,10 +362,30 @@ export default function App() {
 
     for (const item of fresh) {
       if (item && typeof item === "object") {
-        handleDataEvent(item as unknown as DataStreamEvent);
+        handleDataEvent(item as unknown as DataStreamEvent, "chat");
       }
     }
   }, [data, handleDataEvent]);
+
+  // 正在流式打字的 step 段：扫描 messages 中 step_text_start/final_answer
+  // 锚点，最后一个尚未 final_answer 的段即为当前打字段（流结束为 null）
+  const streamingStep = useMemo(() => {
+    if (!busy) return null;
+    let lastStep: number | null = null;
+    for (const m of messages) {
+      const anchor = (m.data as { type?: string; step?: number } | undefined);
+      if (m.role === "data" && anchor?.type === "step_text_start") {
+        lastStep = typeof anchor.step === "number" ? anchor.step : null;
+      } else if (
+        m.role === "data" &&
+        anchor?.type === "final_answer" &&
+        lastStep === anchor.step
+      ) {
+        lastStep = null;
+      }
+    }
+    return lastStep;
+  }, [messages, busy]);
 
   // ============================================
   // 发送消息
@@ -363,6 +416,29 @@ export default function App() {
 
   /** 真正发送一条消息（重置上一轮状态） */
   function sendNewMessage(text: string) {
+    // 先把当前 step 段内容固化到锚点消息（打断/流结束后 setMessages 不再被
+    // useChat 覆盖，渲染时优先取锚点自带 content，stepContents 清空后旧段
+    // 气泡文字不丢失）
+    const frozen = { ...stepContents };
+    if (Object.keys(frozen).length > 0) {
+      setMessages((prev) =>
+        prev.map((m) => {
+          const d = m.data as
+            | { type?: string; step?: number }
+            | undefined;
+          if (
+            m.role === "data" &&
+            (d?.type === "step_text_start" || d?.type === "final_answer") &&
+            d.step != null &&
+            frozen[d.step]
+          ) {
+            return { ...m, data: { ...d, content: frozen[d.step] } };
+          }
+          return m;
+        }),
+      );
+    }
+
     setInput("");
     setGlobalError(null);
     setPendingQuestion(null);
@@ -374,6 +450,8 @@ export default function App() {
     setToolCalls([]);
     processedDataCount.current = 0;
     setData(undefined);
+    // 新一轮对话：旧 step 段内容作废（打断后残留 reasoning_delta 不落到新段）
+    setStepContents({});
     append({ role: "user", content: text });
   }
 
@@ -417,25 +495,10 @@ export default function App() {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      // resume 流文本直接追加到末尾 assistant 消息（不走 useChat，无覆盖问题）
+      // resume 流：文本/段事件统一走 handleDataEvent（后端不再发 0: 文本，
+      // 全部文本经 reasoning_delta/final_answer 按 step 分段渲染）
       await parseDataStream(response, {
-        onText: (delta) => {
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === "assistant") {
-              return prev.map((m, i) =>
-                i === prev.length - 1
-                  ? { ...m, content: m.content + delta }
-                  : m,
-              );
-            }
-            return [
-              ...prev,
-              { id: crypto.randomUUID(), role: "assistant", content: delta },
-            ];
-          });
-        },
-        onEvent: (event) => handleDataEvent(event),
+        onEvent: (event) => handleDataEvent(event, "resume"),
       });
     } catch (e) {
       // 主动打断（用户发送新消息）不算错误，不弹提示
@@ -498,9 +561,11 @@ export default function App() {
           )}
 
           <ChatMessageList
-            messages={displayMessages}
+            messages={messages as ChatMessage[]}
             isLoading={busy}
             pendingQuestion={pendingQuestion}
+            stepContents={stepContents}
+            streamingStep={streamingStep}
           />
 
           <ChatInput
