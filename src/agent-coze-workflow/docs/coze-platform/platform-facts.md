@@ -54,6 +54,50 @@
 
 **查询方式**（CozeClient 可加方法）：`POST /api/plugin_api/library_resource_list`，body `{user_filter:0, res_type_filter:[7], name:"", publish_status_filter:0, space_id, size:15, owner_ids:[], desc:"", res_id:""}` → `resource_list[].res_id`。
 
+## 三·补、新节点类型结构要点（2026-08-18 线上真实产物确认）
+
+以下类型来自线上生产工作流导出（侧边栏点评/健康食养/custom_scene/image_comment），
+平台运行验证过；schema-converter 已支持数字类型透传还原（往返无损，勿手动重写结构）。
+
+### type 9 = 子工作流（嵌套调用其他工作流）
+```json
+{"type":"9","data":{"inputs":{
+  "workflowId":"7612844842615324672","spaceId":"7594778999100801024","workflowVersion":"v0.0.65",
+  "inputDefs":[{"name":"category","type":"string","required":true}],
+  "inputParameters":[{"name":"category","input":{"type":"string","value":{"type":"ref","content":{"source":"block-output","blockID":"100001","name":"category"}}}}],
+  "settingOnError":{"processType":1,"timeoutMs":60000,"retryTimes":0}
+}}}
+```
+大型工作流模块化手段（侧边栏点评 9 个子工作流）。
+
+### type 4 = 插件（调用已发布插件）
+```json
+{"type":"4","data":{"inputs":{
+  "apiParam":[{"name":"apiID","input":{"type":"string","value":{"type":"literal","content":"7599505802772086784","rawMeta":{"type":1}}}}],
+  "inputParameters":[...], "settingOnError":{...}
+}}}
+```
+apiID = 已发布插件的 API ID（如 gemini 点评）；subtitle 形如 "gemini点评:gemini_comment"。
+
+### type 21 = 循环
+```json
+{"type":"21","data":{"inputs":{
+  "loopType":"count","loopCount":{"type":"integer","value":{"type":"literal","content":"3","rawMeta":{"type":2}}},
+  "inputParameters":[...]
+}}}
+```
+配套 type19 终止循环 / type29 继续循环 / type20 设置变量。
+
+### condition（type8）多分支
+- branches 数组每个分支一个 condition；出边端口 true / true_1 / true_2 ... / false（false=否则）
+- ⚠️ 用 operator 7（字符串等于，left+right 成对）；**operator 11（布尔判断）运行时卡死**（executeStatus=1 无进展，2026-08-18 实测）——布尔判断改 code 输出 "yes"/"no" 字符串 + operator 7
+
+### LLM / end / merge 组合铁律（2026-08-18 实测）
+- **LLM 节点出边不要直连 merge**（720702089 conversion failed，加中间节点也不行）；LLM 出边只到 end / condition
+- end 节点支持多输入（不同来源 ref，按分支赋值）
+- merge 聚合"代码/错误处理"节点输出（真实产物模式），入边无端口
+- 全节点验证模板见 agent-coze-workflow 工作流 quote_analyzer_final（start双输入→db→code→condition→llm→end双输出）
+
 ## 三、可用节点类型（node_template_list 全量，2026-08-13 实测）
 
 **⚠️ 生成器 mapNodeType 的权威依据**：节点 type 字符串数字映射必须与下表一致。

@@ -187,6 +187,22 @@ export function convertToPlatformSchema(
           : ((upstreamNode as { outputs?: Array<{ name: string }> } | undefined)
               ?.outputs?.[0]?.name ?? "output");
 
+      // 平台原始类型节点透传（type9 子工作流 / type4 插件 / type21 循环 等）：
+      // 反转换（platform-to-project）对未知类型保留数字 type + 原始 data 进透传区，
+      // 正向转换直接还原，不做类型化重写（避免降级 LLM 丢失结构）
+      // ⚠️ 2026-08-18：从线上真实产物确认 type9/4/21 存在且常用（见 docs/coze-platform 真实工作流）
+      const passthroughRaw = (node as unknown as {
+        _temp?: { externalData?: { platformRaw?: { data?: unknown } } };
+      })?._temp?.externalData?.platformRaw?.data;
+      if (/^\d+$/.test(String(node.type)) && passthroughRaw) {
+        return {
+          id: platformId(node.id),
+          type: String(node.type),
+          meta: { position: node.position ?? { x: 0, y: 0 } },
+          data: passthroughRaw,
+        };
+      }
+
       const data: Record<string, unknown> = {
         nodeMeta: {
           title: node.title,
