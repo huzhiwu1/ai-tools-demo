@@ -761,6 +761,8 @@ export class ReactAgentService {
               content: `[系统拦截] ${name} 连续 4 次相同参数调用被判定为死循环，已强制停止。`,
             });
             await this.cancelStream(stream, "loop-detected");
+            // 善后：保存 AI 已输出的消息（同 stepLimitHit 的静默空回复修复）
+            await this.saveInterruptedState(session.graph, config, session);
             this.appendEvent(session, "error", {
               turn: session.turnState.currentTurn,
               code: "loop_detected",
@@ -786,6 +788,10 @@ export class ReactAgentService {
             const msg = `Agent 单轮执行超过 ${maxSteps} 步，已停止。请简化需求或提供更明确的信息后重试。`;
             turnEnd = { kind: "step_limit", maxSteps };
             await this.cancelStream(stream, "step-limit");
+            // 善后：保存 AI 已输出的消息到 session.messages，防止下一轮看到断层对话
+            // （静默空回复的根因：stepLimitHit 直接 return，AI 本轮所有输出全丢，
+            // 下一轮 LLM 看到连续两条 user 消息 → 空回复 → 前端无任何显示）
+            await this.saveInterruptedState(session.graph, config, session);
             this.appendEvent(session, "error", {
               turn: session.turnState.currentTurn,
               code: "step_limit",
@@ -811,6 +817,8 @@ export class ReactAgentService {
               "连续两次输出达到模型 token 上限（内容可能被截断）。请简化需求或拆分为更小的步骤。";
             turnEnd = { kind: "max_tokens", message: msg };
             await this.cancelStream(stream, "max-tokens");
+            // 善后：保存 AI 已输出的消息（同 stepLimitHit 的静默空回复修复）
+            await this.saveInterruptedState(session.graph, config, session);
             this.appendEvent(session, "error", {
               turn: session.turnState.currentTurn,
               code: "max_tokens",
@@ -1022,6 +1030,48 @@ export class ReactAgentService {
       );
     } catch {
       // cancel 失败可忽略：最坏情况是后台执行自行结束
+    }
+  }
+
+  /**
+   * 中断终止时的善后：保存 AI 已输出的消息到 session.messages
+   *
+   * stepLimitHit / loopDetected / maxTokensTerminated 等路径在 for await
+   * 循环中直接 return，跳过了 done 路径里唯一保存 AI 回复的代码
+   * （session.messages.push({ role: "assistant", ... })）。
+   * 导致下一轮对话时 LLM 看到「连续两条 user 消息、中间无 AI 回复」的
+   * 断层上下文 → 返回空回复 → 前端无任何显示（静默空回复 bug）。
+   *
+   * 此方法在 cancelStream 之后、return 之前调用，从 graph 的 checkpoint
+   * 中提取最后一条 AI 消息并保存到 session.messages，保证上下文连贯。
+   *
+   * @param graph - 当前 graph 实例（含 checkpoint）
+   * @param config - streamEvents 的 config（含 thread_id）
+   * @param session - 当前会话
+   */
+  private async saveInterruptedState(
+    graph: Session["graph"],
+    config: RunnableConfig,
+    session: Session,
+  ): Promise<void> {
+    try {
+      const state = await graph.getState(config);
+      const stateValues = state.values as Record<string, unknown> | undefined;
+      const finalContent = this.extractFinalContent(stateValues);
+      // 只有非兜底文案时才保存（"处理完成"是 extractFinalContent 的兜底，
+      // 说明 state 里确实没有 AI 消息，不需要保存）
+      if (finalContent && finalContent !== "处理完成") {
+        session.messages.push({ role: "assistant", content: finalContent });
+        this.logger.log(
+          `[Agent] 已保存中断前的 AI 回复到 session.messages（${finalContent.slice(0, 80)}）`,
+        );
+      }
+    } catch (e) {
+      // getState 失败（如 checkpoint 已被 cancelStream 清空）降级：
+      // 不计入 messages 但也不阻塞流程，下一轮靠 tool 摘要恢复上下文
+      this.logger.warn(
+        `[Agent] 保存中断状态失败: ${(e as Error).message}`,
+      );
     }
   }
 
