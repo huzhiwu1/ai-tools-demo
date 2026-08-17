@@ -681,16 +681,25 @@ export function convertToPlatformSchema(
           },
         );
 
+        // 优先恢复透传区的原始 selectParam（op 编辑反转换后防丢查询条件）；
+        // 否则生成默认空条件（注意：空 conditionList 会导致执行报 left clause required）
+        const rawSel = (
+          node as unknown as {
+            _temp?: { externalData?: { platformRaw?: { selectParam?: unknown } } };
+          }
+        )?._temp?.externalData?.platformRaw?.selectParam;
         data.inputs = {
           databaseInfoList: [{ databaseInfoID: db.connection ?? "" }],
-          selectParam: {
-            condition: {
-              conditionList: [[]],
-              logic: "AND",
+          selectParam:
+            rawSel ??
+            {
+              condition: {
+                conditionList: [[]],
+                logic: "AND",
+              },
+              orderByList: [],
+              limit: 100,
             },
-            orderByList: [],
-            limit: 100,
-          },
           settingOnError: {
             processType: 1,
             timeoutMs: 60000,
