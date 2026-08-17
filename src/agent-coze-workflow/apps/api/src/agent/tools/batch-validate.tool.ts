@@ -135,11 +135,12 @@ async function runCase(
   workflowId: string,
   testCase: { input: Record<string, unknown>; expected: string },
   signal: AbortSignal,
+  spaceId?: string,
 ): Promise<CaseOutcome> {
   const { input, expected } = testCase;
 
   try {
-    const executeId = await cozeClient.testRun(workflowId, input);
+    const executeId = await cozeClient.testRun(workflowId, input, spaceId);
 
     let actual = "";
     let pollError = "";
@@ -152,7 +153,7 @@ async function runCase(
       if (signal.aborted) return { kind: "skipped" };
 
       try {
-        const result = await cozeClient.getProcess(workflowId, executeId);
+        const result = await cozeClient.getProcess(workflowId, executeId, spaceId);
 
         if (result.executeStatus === 2) {
           // 已完成：从 end 节点的 output 提取结果
@@ -252,7 +253,7 @@ async function runCase(
 }
 
 export const batchValidateTool = tool(
-  async ({ workflowId, cases: rawCases }) => {
+  async ({ workflowId, cases: rawCases, spaceId }) => {
     // 迭代计数：与 update_workflow 共用上限，先只读检查（peek），通过后再递增
     const iteration = peekIteration(workflowId);
     if (iteration >= MAX_ITERATIONS) {
@@ -319,6 +320,7 @@ export const batchValidateTool = tool(
             workflowId,
             cases[index],
             earlyStop.signal,
+            spaceId,
           );
           recordOutcome(outcome);
         }
@@ -384,6 +386,7 @@ export const batchValidateTool = tool(
         .describe(
           "测试用例列表，由 LLM 根据用户需求 + 文件内容构造。每个用例含 input 和 expected",
         ),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
     }),
   },
 );

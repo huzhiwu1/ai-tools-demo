@@ -37,11 +37,11 @@ function sanitizeWorkflowName(name: string): string {
 }
 
 export const renameWorkflowTool = tool(
-  async ({ workflowId, name, desc }) => {
+  async ({ workflowId, name, desc, spaceId }) => {
     try {
       // 名称 sanitize：字母开头 + 字母数字下划线（平台约束）
       const cleanName = sanitizeWorkflowName(name);
-      await cozeClient.updateMeta(workflowId, cleanName, desc ?? "");
+      await cozeClient.updateMeta(workflowId, cleanName, desc ?? "", spaceId);
       return JSON.stringify(
         { workflowId, renamed: true, name: cleanName },
         null,
@@ -61,6 +61,7 @@ export const renameWorkflowTool = tool(
       workflowId: z.string().describe("已存在的工作流 ID"),
       name: z.string().describe("新名称（自动清洗为字母开头+字母数字下划线）"),
       desc: z.string().optional().describe("新描述（可选）"),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
     }),
   },
 );

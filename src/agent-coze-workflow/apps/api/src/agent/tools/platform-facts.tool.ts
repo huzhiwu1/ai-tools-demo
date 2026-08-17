@@ -172,11 +172,11 @@ const NODE_TYPES = [
 ];
 
 export const getPlatformFactsTool = tool(
-  async () => {
+  async ({ spaceId }) => {
     // 并行查询模型和数据库（其中一个失败不阻塞另一个）
     const [models, databases] = await Promise.allSettled([
-      cozeClient.listModels(),
-      cozeClient.listDatabases(),
+      cozeClient.listModels(spaceId),
+      cozeClient.listDatabases(spaceId),
     ]);
 
     // 上下文瘦身（2026-08-16）：输出越紧凑，主 LLM 上下文压力越小
@@ -219,6 +219,8 @@ export const getPlatformFactsTool = tool(
       "生成工作流前建议先调用本工具确认可用的模型和数据源：" +
       "LLM 节点模型必须从 models 列表选择（音频任务选 audio=true 的）；" +
       "database 节点必须用 databases 里的 resId；节点类型从 nodeTypes 选择。",
-    schema: z.object({}),
+    schema: z.object({
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
+    }),
   },
 );

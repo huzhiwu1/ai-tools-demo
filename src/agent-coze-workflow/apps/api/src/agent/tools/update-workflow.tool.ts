@@ -46,7 +46,7 @@ const client = new DeepSeekClient();
 const codeGenerator = new CodeGenerator(client);
 
 export const updateWorkflowTool = tool(
-  async ({ workflow, workflowId, operations, referenceData }) => {
+  async ({ workflow, workflowId, operations, referenceData, spaceId }) => {
     // 迭代计数：开头只读检查（peek，不递增），修改成功后才计数。
     // 与 batch_validate 共用上限：>= MAX_ITERATIONS 拒绝
     const iteration = peekIteration(workflowId);
@@ -76,7 +76,7 @@ export const updateWorkflowTool = tool(
       if (fromCache) {
         try {
           const { schemaJson, submitCommitId } =
-            await cozeClient.getSchema(workflowId);
+            await cozeClient.getSchema(workflowId, { spaceId });
           const entry = workflowCache.get(workflowId);
           if (entry && !entry.commitId) {
             // 缓存尚无 commitId（首次 save 后未记录）：补记，不刷新内容
@@ -202,6 +202,7 @@ export const updateWorkflowTool = tool(
         .describe(
           "可选。用户新提供的参考数据（如歌词库 {歌名: 歌词}）。重写代码节点时与节点已有参考数据合并，防止 LLM 幻觉编造数据",
         ),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
     }),
   },
 );

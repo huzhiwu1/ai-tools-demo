@@ -151,11 +151,12 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
       inputSchema: {
         workflowId: z.string(),
         input: z.record(z.string(), z.unknown()).describe("工作流输入参数对象"),
+        spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
       },
     },
-    async ({ workflowId, input }) => {
+    async ({ workflowId, input, spaceId }) => {
       try {
-        const executeId = await coze.testRun(workflowId, input);
+        const executeId = await coze.testRun(workflowId, input, spaceId);
         return {
           content: [
             { type: "text" as const, text: JSON.stringify({ executeId }) },
@@ -183,11 +184,12 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
       inputSchema: {
         size: z.number().int().positive().default(15),
         cursor: z.string().optional(),
+        spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
       },
     },
-    async ({ size, cursor }) => {
+    async ({ size, cursor, spaceId }) => {
       try {
-        const list = await coze.listWorkflows(size, cursor);
+        const list = await coze.listWorkflows(size, cursor, spaceId);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(list) }],
         };
@@ -214,11 +216,12 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
         workflowId: z.string(),
         name: z.string().describe("新名称（字母开头，字母数字下划线）"),
         desc: z.string().describe("新描述"),
+        spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
       },
     },
-    async ({ workflowId, name, desc }) => {
+    async ({ workflowId, name, desc, spaceId }) => {
       try {
-        await coze.updateMeta(workflowId, name, desc);
+        await coze.updateMeta(workflowId, name, desc, spaceId);
         return {
           content: [
             {
@@ -246,11 +249,14 @@ export function createCozeMcpServer(client?: CozeClient): McpServer {
     "coze_get_schema",
     {
       description: "获取工作流最新 schema + submit_commit_id",
-      inputSchema: { workflowId: z.string() },
+      inputSchema: {
+        workflowId: z.string(),
+        spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
+      },
     },
-    async ({ workflowId }) => {
+    async ({ workflowId, spaceId }) => {
       try {
-        const result = await coze.getSchema(workflowId);
+        const result = await coze.getSchema(workflowId, { spaceId });
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result) }],
         };

@@ -15,11 +15,12 @@ import { z } from "zod";
 import { cozeClient } from "./coze-client";
 
 export const testRunWorkflowTool = tool(
-  async ({ workflowId, input }) => {
+  async ({ workflowId, input, spaceId }) => {
     try {
       const executeId = await cozeClient.testRun(
         workflowId,
         (input ?? {}) as Record<string, unknown>,
+        spaceId,
       );
       return JSON.stringify({ executeId, workflowId }, null, 2);
     } catch (e) {
@@ -37,6 +38,7 @@ export const testRunWorkflowTool = tool(
         .record(z.string(), z.any())
         .optional()
         .describe("可选的试运行输入参数（JSON 对象），不传则使用默认空输入"),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID；先调 database_list_spaces 查可用空间）"),
     }),
   },
 );

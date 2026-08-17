@@ -54,9 +54,10 @@ function sanitizeWorkflowName(name: string): string {
  */
 async function findWorkflowByName(
   name: string,
+  spaceId?: string,
 ): Promise<{ workflowId: string } | null> {
   try {
-    const { workflows } = await cozeClient.listWorkflows(50);
+    const { workflows } = await cozeClient.listWorkflows(50, undefined, spaceId);
     const hit = workflows.find(
       (w) => w.name.toLowerCase() === name.toLowerCase(),
     );
@@ -81,16 +82,17 @@ async function findWorkflowByName(
 async function createWorkflowWithRetry(
   name: string,
   desc: string,
+  spaceId?: string,
 ): Promise<{ workflowId: string; usedName: string }> {
   try {
-    const workflowId = await cozeClient.createWorkflow(name, desc);
+    const workflowId = await cozeClient.createWorkflow(name, desc, spaceId);
     return { workflowId, usedName: name };
   } catch (e) {
     const msg = (e as Error).message;
 
     // 超时错误：create 可能已成功 → 查同名复用（避免残留空壳 + 第二个工作流）
     if (/超时|timeout/i.test(msg)) {
-      const existing = await findWorkflowByName(name);
+      const existing = await findWorkflowByName(name, spaceId);
       if (existing) {
         console.warn(
           `[save_to_coze] create 超时但同名工作流已存在，复用 ${existing.workflowId} 更新`,
@@ -101,7 +103,7 @@ async function createWorkflowWithRetry(
 
     // 重名错误：先查同名，存在则复用（不再无脑 _2）
     if (/已存在|exist|duplicate/i.test(msg)) {
-      const existing = await findWorkflowByName(name);
+      const existing = await findWorkflowByName(name, spaceId);
       if (existing) {
         console.warn(
           `[save_to_coze] 名称冲突，复用同名工作流 ${existing.workflowId} 更新（不新建）`,
@@ -112,7 +114,7 @@ async function createWorkflowWithRetry(
       for (let i = 2; i <= 4; i++) {
         const candidate = `${sanitizeWorkflowName(name)}_${i}`.slice(0, 50);
         try {
-          const workflowId = await cozeClient.createWorkflow(candidate, desc);
+          const workflowId = await cozeClient.createWorkflow(candidate, desc, spaceId);
           console.warn(`[save_to_coze] 名称冲突，使用 ${candidate} 保存`);
           return { workflowId, usedName: candidate };
         } catch (e2) {
@@ -131,7 +133,7 @@ async function createWorkflowWithRetry(
 }
 
 export const saveToCozeTool = tool(
-  async ({ workflow, workflowId, workflowHandle }) => {
+  async ({ workflow, workflowId, workflowHandle, spaceId }) => {
     // 1. 解析目标工作流来源：缓存条目（供句柄化取值 + dirty 快照用）
     const cached =
       typeof workflowId === "string" && workflowId.length > 0
@@ -183,7 +185,7 @@ export const saveToCozeTool = tool(
       // 动态拉取模型列表，构建 模型名 → modelType 映射（不硬编码，模型可能变更）
       let modelTypeMap: Record<string, number> | undefined;
       try {
-        const models = await cozeClient.listModels();
+        const models = await cozeClient.listModels(spaceId);
         if (models.length > 0) {
           modelTypeMap = Object.fromEntries(
             models.map((m) => [m.name, m.modelType]),
@@ -224,7 +226,7 @@ export const saveToCozeTool = tool(
         // 仅首次创建时删除空壳工作流；更新已有工作流时保留原工作流（修复迭代不删）
         if (!isUpdate) {
           try {
-            await cozeClient.deleteWorkflow(platformWorkflowId);
+            await cozeClient.deleteWorkflow(platformWorkflowId, spaceId);
           } catch {
             // 删除失败不影响主流程，继续返回错误信息
           }
@@ -244,6 +246,7 @@ export const saveToCozeTool = tool(
       const submitCommitId = await cozeClient.saveWorkflow(
         platformWorkflowId,
         schemaJson,
+        spaceId,
       );
 
       // 5. 缓存维护：来自缓存的更新 → clearDirty + 刷新 commitId；
@@ -309,6 +312,7 @@ export const saveToCozeTool = tool(
         .string()
         .optional()
         .describe("已有工作流 ID（可选）。传了=更新该工作流；不传=首次创建"),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
     }),
   },
 );

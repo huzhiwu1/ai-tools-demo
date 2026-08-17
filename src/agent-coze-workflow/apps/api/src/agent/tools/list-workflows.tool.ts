@@ -22,13 +22,13 @@ import { z } from "zod";
 import { cozeClient } from "./coze-client";
 
 export const listWorkflowsTool = tool(
-  async ({ keyword, size, cursor }) => {
+  async ({ keyword, size, cursor, spaceId }) => {
     try {
       const {
         workflows,
         cursor: nextCursor,
         hasMore,
-      } = await cozeClient.listWorkflows(size ?? 15, cursor);
+      } = await cozeClient.listWorkflows(size ?? 15, cursor, spaceId);
 
       // keyword 过滤在工具层做（底层不传 name 过滤，保持简单）
       const items = workflows.filter((item) => {
@@ -71,6 +71,7 @@ export const listWorkflowsTool = tool(
         .string()
         .optional()
         .describe("分页游标（上页返回的 cursor；不传=第一页）"),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
     }),
   },
 );

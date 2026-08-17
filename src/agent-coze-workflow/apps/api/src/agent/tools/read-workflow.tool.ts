@@ -29,13 +29,13 @@ import { workflowToDoc } from "../../workflow-engine/workflow-to-doc";
 const OVERVIEW_CUT_MARKER = "## 5. 配置详情";
 
 export const readWorkflowTool = tool(
-  async ({ workflowId, scope }) => {
+  async ({ workflowId, scope, spaceId }) => {
     try {
       // 1. 拉取平台最新 schema + submit_commit_id（stale 检测基线）
       // noLock：只读场景不拿 15 分钟编辑锁，避免阻塞其他会话的 save
       const { schemaJson, submitCommitId } = await cozeClient.getSchema(
         workflowId,
-        { noLock: true },
+        { noLock: true, spaceId },
       );
 
       // 2. 反转换为项目格式
@@ -92,6 +92,7 @@ export const readWorkflowTool = tool(
         .describe(
           "overview=只输出概览+节点清单+数据流（默认，省 token）；full=完整说明书含配置详情与验证报告",
         ),
+      spaceId: z.string().optional().describe("目标空间 ID（缺省用 .env 的 COZE_SPACE_ID）"),
     }),
   },
 );

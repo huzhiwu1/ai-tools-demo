@@ -67,12 +67,13 @@ export class CozeClient {
    *
    * @returns workflow_id
    */
-  async createWorkflow(name: string, desc: string): Promise<string> {
+  async createWorkflow(name: string, desc: string, spaceId?: string): Promise<string> {
+    const sid = spaceId ?? this.spaceId;
     const res = await this.request<CreateWorkflowData>("create", {
       name,
       desc,
       icon_uri: "default_icon/default_workflow_icon.png", // 必须传默认工作流图标，空字符串会导致创建的资源不完整、无法打开
-      space_id: this.spaceId,
+      space_id: sid,
       flow_mode: 0, // 0=工作流（样本实测）；2=智能体（会导致打开报"无法查看智能体"）
     });
     return res.data.workflow_id;
@@ -85,10 +86,11 @@ export class CozeClient {
    *
    * @returns remaining_ttl（秒）
    */
-  async acquireEditLock(workflowId: string): Promise<number> {
+  async acquireEditLock(workflowId: string, spaceId?: string): Promise<number> {
+    const sid = spaceId ?? this.spaceId;
     const res = await this.request<EditLockData>("edit_lock", {
       workflow_id: workflowId,
-      space_id: this.spaceId,
+      space_id: sid,
       action: "acquire",
     });
     this.lockExpireAt = Date.now() + LOCK_TTL_MS;
@@ -104,15 +106,16 @@ export class CozeClient {
    */
   async getSchema(
     workflowId: string,
-    opts?: { noLock?: boolean },
+    opts?: { noLock?: boolean; spaceId?: string },
   ): Promise<{ schemaJson: string; submitCommitId: string }> {
+    const sid = opts?.spaceId ?? this.spaceId;
     if (!opts?.noLock) {
-      await this.ensureLock(workflowId);
+      await this.ensureLock(workflowId, sid);
     }
 
     const res = await this.request<CanvasData>("canvas", {
       workflow_id: workflowId,
-      space_id: this.spaceId,
+      space_id: sid,
     });
     return {
       schemaJson: res.data.workflow.schema_json,
@@ -132,18 +135,20 @@ export class CozeClient {
   async saveWorkflow(
     workflowId: string,
     schemaJson: string,
+    spaceId?: string,
   ): Promise<string> {
+    const sid = spaceId ?? this.spaceId;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= MAX_SAVE_RETRIES; attempt++) {
       try {
-        await this.ensureLock(workflowId);
-        const { submitCommitId } = await this.getSchema(workflowId);
+        await this.ensureLock(workflowId, sid);
+        const { submitCommitId } = await this.getSchema(workflowId, { spaceId: sid });
 
         await this.request("save", {
           workflow_id: workflowId,
           schema: schemaJson,
-          space_id: this.spaceId,
+          space_id: sid,
           submit_commit_id: submitCommitId,
           ignore_status_transfer: true,
         });
@@ -174,11 +179,13 @@ export class CozeClient {
   async testRun(
     workflowId: string,
     input: Record<string, unknown>,
+    spaceId?: string,
   ): Promise<string> {
+    const sid = spaceId ?? this.spaceId;
     const res = await this.request<TestRunData>("test_run", {
       workflow_id: workflowId,
       input,
-      space_id: this.spaceId,
+      space_id: sid,
     });
     return res.data.execute_id;
   }
@@ -190,10 +197,12 @@ export class CozeClient {
     workflowId: string,
     name: string,
     desc: string,
+    spaceId?: string,
   ): Promise<void> {
+    const sid = spaceId ?? this.spaceId;
     await this.request("update_meta", {
       workflow_id: workflowId,
-      space_id: this.spaceId,
+      space_id: sid,
       name,
       desc,
       icon_uri: "",
@@ -237,12 +246,14 @@ export class CozeClient {
   async getProcess(
     workflowId: string,
     executeId: string,
+    spaceId?: string,
   ): Promise<GetProcessData> {
+    const sid = spaceId ?? this.spaceId;
     const res = await this.request<GetProcessData>(
       "get_process",
       {
         workflow_id: workflowId,
-        space_id: this.spaceId,
+        space_id: sid,
         execute_id: executeId,
         need_async: true,
       },
@@ -262,7 +273,7 @@ export class CozeClient {
    * 关键约束：LLM 生成节点的 modelType + modleName 必须来自此列表。
    * 音频/视频任务必须选 audio_understanding=true 的模型。
    */
-  async listModels(): Promise<
+  async listModels(spaceId?: string): Promise<
     Array<{
       name: string;
       modelType: number;
@@ -271,6 +282,7 @@ export class CozeClient {
       video: boolean;
     }>
   > {
+    const sid = spaceId ?? this.spaceId;
     const res = await this.request<{
       model_list: Array<{
         model_name: string;
@@ -286,7 +298,7 @@ export class CozeClient {
       "bot/get_model_list",
       {
         model: true,
-        space_id: this.spaceId,
+        space_id: sid,
         cur_model_ids: ["201"],
       },
       "/api/",
@@ -315,11 +327,13 @@ export class CozeClient {
   async listWorkflows(
     size = 15,
     cursor?: string,
+    spaceId?: string,
   ): Promise<{
     workflows: Array<{ workflowId: string; name: string; desc: string }>;
     cursor: string;
     hasMore: boolean;
   }> {
+    const sid = spaceId ?? this.spaceId;
     const res = (await this.request<unknown>(
       "plugin_api/library_resource_list",
       {
@@ -327,7 +341,7 @@ export class CozeClient {
         res_type_filter: [2],
         name: "",
         publish_status_filter: 0,
-        space_id: this.spaceId,
+        space_id: sid,
         size,
         is_get_imageflow: true,
         owner_ids: [],
@@ -372,9 +386,10 @@ export class CozeClient {
    *
    * @returns 数据库资源列表（name + resId + desc）
    */
-  async listDatabases(): Promise<
+  async listDatabases(spaceId?: string): Promise<
     Array<{ name: string; resId: string; desc: string }>
   > {
+    const sid = spaceId ?? this.spaceId;
     const res = await this.request<{
       resource_list: Array<{ name?: string; res_id?: string; desc?: string }>;
     }>(
@@ -384,7 +399,7 @@ export class CozeClient {
         res_type_filter: [7],
         name: "",
         publish_status_filter: 0,
-        space_id: this.spaceId,
+        space_id: sid,
         size: 15,
         owner_ids: [],
         desc: "",
@@ -407,10 +422,11 @@ export class CozeClient {
    *
    * @param workflowId - 要删除的工作流 ID
    */
-  async deleteWorkflow(workflowId: string): Promise<void> {
+  async deleteWorkflow(workflowId: string, spaceId?: string): Promise<void> {
+    const sid = spaceId ?? this.spaceId;
     await this.request("delete", {
       workflow_id: workflowId,
-      space_id: this.spaceId,
+      space_id: sid,
       action: 1,
     });
   }
@@ -534,8 +550,9 @@ export class CozeClient {
    *
    * 锁过期或未获取时自动重新 acquire。
    */
-  private async ensureLock(workflowId: string): Promise<void> {
+  private async ensureLock(workflowId: string, spaceId?: string): Promise<void> {
+    const sid = spaceId ?? this.spaceId;
     if (Date.now() < this.lockExpireAt) return;
-    await this.acquireEditLock(workflowId);
+    await this.acquireEditLock(workflowId, sid);
   }
 }
