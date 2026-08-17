@@ -1,41 +1,51 @@
 /**
- * ReactAgentService - ReAct Agent 核心服务
+ * ReactAgentService - ReAct Agent 核心服务（对齐 DeepSeek Harness 架构）
  *
  * 职责：
- * 管理 createReactAgent 实例的创建、流式对话、会话管理和 interrupt/resume 流程。
+ * 自建 kick → turn → step 双层主循环，彻底移除 LangGraph 编排：
+ * - LLM 直连 ChatOpenAI.stream（bindTools），工具结果以 ToolMessage 写回 history
+ * - abort 信号只在自建循环内传递：每个 promise 都由本服务创建并捕获，
+ *   不再经过 LangGraph combineAbortSignals 的同步转发链（「思考中打断必崩」的根因）
+ * - clarify_question 通过 __clarify 标记 + 服务层挂起实现（替代 LangGraph interrupt）
  *
  * 流程：
- * 1. 每个会话创建独立的 graph 实例（含 MemorySaver checkpointer）
- * 2. chat()：接收用户消息 → streamEvents 迭代 → 写 Data Stream 协议事件 → 检测 interrupt
- * 3. resume()：Command({ resume: answer }) → 继续 streamEvents
+ * 1. handleChat：打断旧 driver → 消息入 inbox.nextTurn → 启动新 driver
+ * 2. driver = 本次 HTTP 请求的生命周期：claim 用户消息 → step 循环 → SSE 收尾
+ * 3. handleResume：回答写回占位 ToolMessage → 重启 driver 继续原 turn
  *
- * 输出协议：Vercel AI SDK Data Stream Protocol
- * - 0:"text"   → LLM 文本增量（前端 useChat 自动拼接）
- * - d:{...}    → 结构化数据（session/tool_start/tool_end/interrupt/done/error）
- * - e:{...}    → 流结束标记（finish）
- * Content-Type 保持 text/event-stream（useChat 用 fetch 读流，兼容）
+ * 输出协议：Vercel AI SDK Data Stream Protocol（与旧实现完全一致，前端零改动）
+ * - 0:"text"   → LLM 文本增量
+ * - d:{...}    → 结构化数据（session/tool_start/tool_end/interrupt/done/error/aborted）
+ * - e:{...}    → 流结束标记
  *
  * 关键细节：
- * - MemorySaver 不支持跨实例恢复，每个会话必须缓存独立的 graph
- * - 多轮对话：messages 拼入 history，同时 checkpointer 按 thread_id 自动恢复状态
- * - interrupt 检测：stream 结束后通过 graph.getState(config) 读取 interrupt 值
- * - 客户端断开时停止迭代，避免内存泄漏
+ * - driver 收敛用 identity guard（finally 里 session.phase === phase 才收敛），
+ *   超时未收敛的旧 driver 不会破坏新 driver 的 phase
+ * - 打断时 AI 半截输出不落 history；已落 history 的半截 tool_calls 序列
+ *   由 buildMessages 自愈补全（对齐 Harness appendSkippedToolCall）
+ * - max_tokens 粘性（Harness 语义）：曾截断的 turn 不被后续正常 step 降级
  */
 
-import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
-import { MemorySaver, Command } from "@langchain/langgraph";
 import {
-  SystemMessage,
-  HumanMessage,
   AIMessage,
+  HumanMessage,
+  SystemMessage,
+  ToolMessage,
+  isAIMessage,
+  isToolMessage,
 } from "@langchain/core/messages";
-import type { BaseMessage } from "@langchain/core/messages";
-import type { RunnableConfig } from "@langchain/core/runnables";
+import type { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import { Logger } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { ALL_TOOLS } from "./tools";
-import { sessionStore } from "./session.store";
-import type { AgentEvent, Session, TurnEndReason } from "./session.store";
+import {
+  sessionStore,
+  type AgentEvent,
+  type Phase,
+  type Session,
+  type TurnEndReason,
+} from "./session.store";
 import { uploadPathStore } from "./upload-store";
 
 /**
@@ -143,7 +153,7 @@ const llm = new ChatOpenAI({
   // plan_workflow 输出大 JSON 后，主 LLM 下一步要重新背诵 plan 作为工具参数，
   // reasoning 吃掉 8192 大半预算 → 正文截断 → 无 tool_calls → Agent 静默 done。
   // 2026-08-16 尝试恢复思考（去掉 disabled），实测：打断并发送后前端仍不显示 reasoning，
-  // 且思考吃预算导致长工具参数截断风险。结论：关闭思考保稳定（前端已用“处理中”文案兜底）。
+  // 且思考吃预算导致长工具参数截断风险。结论：关闭思考保稳定（前端已用"处理中"文案兜底）。
   maxTokens: 16384,
   modelKwargs: { thinking: { type: "disabled" } },
   // 显式限制超时与重试：默认 maxRetries=6 会把单次失败放大为
@@ -152,6 +162,146 @@ const llm = new ChatOpenAI({
   maxRetries: 1,
 });
 
+/** 绑定工具后的模型（模块级单例：工具 schema 不变，无需每次重建） */
+const modelWithTools = llm.bindTools([...ALL_TOOLS]);
+
+// ============================================
+// 常量
+// ============================================
+
+/** 每 turn 最多 LLM 步数（死循环保护上限） */
+const MAX_STEPS_PER_TURN = 25;
+/** 发给 LLM 的历史消息滑动窗口上限 */
+const MAX_HISTORY_MESSAGES = 40;
+/** 等待旧 driver 收敛的超时（ms），超时后强制接管（identity guard 保证安全） */
+const DRIVER_CONVERGE_TIMEOUT_MS = 5_000;
+/** 事件日志上限（超出淘汰最旧） */
+const MAX_EVENTS = 1000;
+/** 同一工具同一参数连续调用达到该值判定死循环（第 4 次拦截，不执行） */
+const LOOP_REPEAT_LIMIT = 3;
+/** 截断工具调用的补位结果文本（对齐 Harness appendSkippedToolCall） */
+const TOOL_ABORTED_TEXT = "Error: tool call aborted before dispatch";
+
+// ============================================
+// 类型定义
+// ============================================
+
+/** clarify_question 返回的挂起标记（自建主循环协议，替代 LangGraph interrupt） */
+interface ClarifyMarker {
+  __clarify: true;
+  question: string;
+  context?: string;
+}
+
+/** 死循环检测状态（turn 内局部，跨 step 连续跟踪） */
+interface LoopGuard {
+  lastToolName: string;
+  lastToolInput: string;
+  repeatCount: number;
+}
+
+/** 模型顺序提交的工具调用（参数为原始 JSON 字符串） */
+interface PlannedCall {
+  id: string;
+  name: string;
+  args: string;
+}
+
+/** 单步 LLM 调用的结果（null = 工具执行完毕，继续下一步） */
+type StepOutcome =
+  | { kind: "completed" }
+  | { kind: "max_tokens" }
+  | { kind: "loop_detected"; name: string; input: unknown }
+  | { kind: "clarify"; question: string; context?: string }
+  | null;
+
+// ============================================
+// 模块级辅助函数
+// ============================================
+
+/**
+ * 解析工具参数：JSON 字符串 → 对象；解析失败保文本（对齐 Harness parseArguments）
+ *
+ * @param raw - LLM 输出的原始参数（流式组装后为完整 JSON 字符串）
+ * @returns 参数对象；非法 JSON 时以 _invalid_json 键保文本，供工具感知解析失败
+ */
+function parseToolArguments(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string") return raw as Record<string, unknown>;
+  try {
+    return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    return { _invalid_json: raw };
+  }
+}
+
+/**
+ * 提取消息内容的纯文本（兼容 string 与 content blocks 数组两种形态）
+ *
+ * @param content - AIMessage 的 content 字段
+ * @returns 纯文本内容
+ */
+function extractTextContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) =>
+        typeof block === "object" &&
+        block !== null &&
+        "text" in block &&
+        typeof (block as { text?: unknown }).text === "string"
+          ? (block as { text: string }).text
+          : "",
+      )
+      .join("");
+  }
+  return "";
+}
+
+/** 工具出参转字符串：对象序列化为 JSON（避免 [object Object]） */
+function stringifyToolOutput(result: unknown): string {
+  return typeof result === "object" && result !== null
+    ? JSON.stringify(result)
+    : String(result);
+}
+
+/**
+ * 错误链文本：沿 cause 链拼接（避免只看到最外层包装错误）
+ *
+ * @param error - 任意错误对象
+ * @returns 完整错误描述
+ */
+function errorChainText(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    parts.push(current.message);
+    current = current.cause;
+  }
+  return parts.length > 0 ? parts.join(" → ") : String(error);
+}
+
+/** clarify 挂起标记判定（类型守卫） */
+function isClarifyMarker(value: unknown): value is ClarifyMarker {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { __clarify?: unknown }).__clarify === true &&
+    typeof (value as { question?: unknown }).question === "string"
+  );
+}
+
+/** history 中最后一条有文本的 AI 消息内容（done 事件的 final 取值） */
+function lastAssistantText(session: Session): string {
+  for (let i = session.history.length - 1; i >= 0; i--) {
+    const msg = session.history[i];
+    if (isAIMessage(msg)) {
+      const text = extractTextContent(msg.content);
+      if (text) return text;
+    }
+  }
+  return "处理完成";
+}
+
 // ============================================
 // 服务类
 // ============================================
@@ -159,30 +309,16 @@ const llm = new ChatOpenAI({
 export class ReactAgentService {
   private readonly logger = new Logger("Agent");
 
-  /**
-   * 创建新的 graph 实例（每个会话独立）
-   *
-   * 每个 graph 持有独立的 MemorySaver（checkpointer），
-   * 确保 interrupt/resume 的状态隔离。
-   *
-   * 注意：@langchain/langgraph ^1.4.9 的 createReactAgent 直接返回
-   * 编译后的 CompiledStateGraph，无需再调 .compile()。
-   */
-  private createGraph() {
-    const checkpointer = new MemorySaver();
-    return createReactAgent({
-      llm,
-      tools: [...ALL_TOOLS],
-      checkpointer,
-      prompt: new SystemMessage(SYSTEM_PROMPT),
-      // 提高递归上限：默认 25 步，ReAct 循环含多次工具调用容易撞上限。
-      // 100 步容纳内部用户场景（update 失败→重建→save 超时重试→validate 多用例叠加步数），40 太紧
-      recursionLimit: 100,
-    } as Parameters<typeof createReactAgent>[0] & { recursionLimit: number });
-  }
+  // ============================================
+  // 对外入口
+  // ============================================
 
   /**
    * 处理聊天请求（SSE 流）
+   *
+   * 打断语义（对齐 Harness followup + cancel）：若旧 driver 正在运行，
+   * 先 abort 并等待收敛，再入队新消息、启动新 driver。旧 turn 的半截
+   * 输出不落 history，已落的部分由 buildMessages 自愈。
    *
    * @param sessionId - 会话 ID（可选，首次自动生成）
    * @param message - 用户消息
@@ -200,161 +336,39 @@ export class ReactAgentService {
 
     // 1. 获取或创建会话
     let session = sessionId ? sessionStore.get(sessionId) : undefined;
-
     if (!session) {
-      const graph = this.createGraph();
-      const newId = sessionStore.create(graph, sessionId);
-      session = sessionStore.get(newId)!;
-      sessionId = newId;
+      session = sessionStore.create(sessionId);
     }
 
-    // 2. Phase 状态机：如果 session 正在 running（上一轮还没跑完），
-    // 先 abort 旧 driver 并等它收敛退出，保证同一时刻只有一个 driver。
-    // （借鉴 DeepSeek Harness 的 kick/wake 模式：steer = 打断当前步，立刻处理新消息）
-    const wasInterrupted = session.phase === "running";
+    // 2. 打断旧 driver 并等其收敛（Harness cancel + whenIdle 语义）
+    const wasInterrupted = session.phase.kind === "running";
     if (wasInterrupted) {
-      this.logger.log(`[Agent] 打断旧 driver (session=${sessionId})`);
-      // 发出 abort 信号：AbortSignal 全程传递到 LLM 调用/工具调用边界
-      session.abortController?.abort("user-interrupt");
-      // 等待旧 driver 完全退出（最多等 5 秒，防止卡死在无法 abort 的系统调用中）
-      try {
-        await Promise.race([
-          session.runningPromise ?? Promise.resolve(),
-          new Promise((r) => setTimeout(r, 5000)),
-        ]);
-      } catch {
-        // 旧 driver 可能已经抛异常，忽略
-      }
-      // 重建 graph：旧 execution 被 abort，checkpoint 残留半截状态，必须重建清空；
-      // 对话记忆由 session.messages 保留，AI 仍记得之前的对话
-      session.graph = this.createGraph();
-      this.logger.log(
-        `[Agent] 旧 driver 已退出，graph 已重建 (session=${sessionId})`,
-      );
+      this.logger.log(`[Agent] 打断旧 driver (session=${session.id})`);
+      await this.abortAndAwait(session, "user-interrupt");
     }
 
-    // 3. Turn/Step 追踪 + 设置新 driver 的 phase 和 AbortController
-    // （Harness 双层循环：每次用户消息 = 1 个新 turn；turn 内一次 LLM 调用 = 1 个 step）
-    session.turnState.currentTurn += 1;
-    session.turnState.currentStep = 0;
-    session.turnState.turnEndReason = undefined;
-    session.phase = "running";
-    session.abortController = new AbortController();
-    this.logger.log(
-      `[Agent] phase: idle → running (turn=${session.turnState.currentTurn}, step=0)`,
-    );
-
-    // 4. 添加用户消息到历史 + Inbox 分离：用户消息进入 nextTurn 队列
-    // （工具结果只进 inbox.nextStep，不污染用户消息序列）
-    session.messages.push({ role: "user", content: message });
-    session.inbox.nextTurn.push({ role: "user", content: message });
-
-    // 5. 将历史消息转换为 LangChain BaseMessage 数组
-    //
-    // 关键：LangGraph checkpoint 按 thread_id 自动恢复历史消息。
-    // 正常多轮对话时不重建 graph，checkpoint 里已有完整历史，
-    // 此处只需传「本轮新增的消息」（工具摘要 + 新用户消息）。
-    // 如果传了全部历史消息，会与 checkpoint 已有的重复，导致
-    // LLM 看到畸形上下文（同一消息出现两次）→ 返回空回复。
-    //
-    // 打断恢复场景：graph 已重建，checkpoint 已清空，需要传全部历史。
-    const langchainMessages: BaseMessage[] = [];
-
-    // 打断恢复记忆：把 inbox.nextStep 中的工具结果摘要作为上下文注入
-    const toolSummaries = session.inbox.nextStep;
-    if (toolSummaries.length > 0) {
-      const contextText =
-        "【系统记录：以下是此前会话已完成的工具操作结果（用于恢复上下文，不是用户新消息）】\n" +
-        toolSummaries.map((m) => `- ${m.content}`).join("\n");
-      langchainMessages.push(new SystemMessage(contextText));
+    // 3. 新消息作废挂起中的 clarify 问题：
+    //    删除占位 ToolMessage（buildMessages 自愈补 aborted 结果），清空挂起状态
+    if (session.pendingClarify) {
+      const last = session.history[session.history.length - 1];
+      if (last && isToolMessage(last)) session.history.pop();
+      session.pendingClarify = null;
     }
 
-    if (wasInterrupted) {
-      // 打断恢复：graph 已重建（checkpoint 清空），传全部历史消息
-      for (const m of session.messages) {
-        if (m.role === "user")
-          langchainMessages.push(new HumanMessage(m.content));
-        if (m.role === "assistant")
-          langchainMessages.push(new AIMessage(m.content));
-      }
-    } else {
-      // 正常多轮：checkpoint 已有历史，只传本轮新用户消息
-      langchainMessages.push(new HumanMessage(message));
-    }
-
-    // 6. 设置 SSE 响应头
-    this.setSSEHeaders(res);
-
-    // 会话创建后 sessionId 必存在
-    const finalSessionId = sessionId!;
-
-    // 发送 sessionId 给前端（d: 结构化事件）
-    res.write(
-      `d:${JSON.stringify({ type: "session", sessionId: finalSessionId })}\n`,
-    );
-
-    // 7. 打断场景：告知前端上一轮任务已被打断，正在处理新消息
-    if (wasInterrupted) {
-      res.write(
-        `d:${JSON.stringify({ type: "aborted", message: "已打断上一轮任务，正在处理新消息..." })}\n`,
-      );
-    }
-
-    // 8. 发送 turn 事件（前端可展示「第 N 轮对话」）
-    res.write(
-      `d:${JSON.stringify({ type: "turn_start", turn: session.turnState.currentTurn })}\n`,
-    );
-    // 事件日志：turn 开始（Phase 5 轻量版 session log）
-    this.appendEvent(session, "turn_start", {
-      turn: session.turnState.currentTurn,
-    });
-
-    // 9. 创建 runningPromise：下一个 handleChat 打断时用它等旧 driver 退出
-    let resolvePromise: () => void;
-    session.runningPromise = new Promise<void>((resolve) => {
-      resolvePromise = resolve;
-    });
-
-    // 关键：把 AbortSignal 传给 LangGraph，config.signal 会传递到
-    // 底层 LLM 调用/工具调用边界，打断时立即中止而非等当前步跑完
-    const config: RunnableConfig = {
-      configurable: { thread_id: finalSessionId },
-      recursionLimit: 100,
-      signal: session.abortController.signal,
-    };
-
-    // 10. 流式执行：无论正常结束还是异常退出，都收敛到 idle
-    try {
-      await this.streamAgentEvents(
-        session.graph,
-        { messages: langchainMessages },
-        config,
-        session,
-        finalSessionId,
-        res,
-      );
-    } finally {
-      // 收敛：phase 回 idle、释放 AbortController、resolve runningPromise
-      // （等待中的下一个 handleChat 由此被唤醒）
-      // 断言打破控制流收窄：方法体前文已赋 undefined，TS 会把属性收窄成 never
-      const reason =
-        (session.turnState.turnEndReason as TurnEndReason | undefined)?.kind ??
-        "interrupt_pending";
-      session.phase = "idle";
-      session.abortController = null;
-      resolvePromise!();
-      this.logger.log(
-        `[Agent] phase: running → idle (turn=${session.turnState.currentTurn}, reason=${reason})`,
-      );
-    }
+    // 4. 消息入队 → 启动 driver（两行之间无 await，phase 不会被并发请求抢占）
+    session.inbox.nextTurn.push(message);
+    await this.runDriver(session, res, { interrupted: wasInterrupted });
   }
 
   /**
-   * 处理 resume 请求（SSE 流，从 interrupt 处继续）
+   * 处理 resume 请求（SSE 流，从 clarify 挂起处继续）
+   *
+   * 回答写回挂起时留下的占位 ToolMessage（clarify_question 的工具结果
+   * 即「用户回答: xxx」），随后重启 driver 继续原 turn。
    *
    * @param sessionId - 会话 ID
    * @param answer - 用户回答
-   * @param fileIds - 可选的文件 ID 列表（resume 时附带的上传文件引用）
+   * @param fileIds - 可选的文件 ID 列表（回答时附带的上传文件引用）
    * @param res - Express Response 对象
    */
   async handleResume(
@@ -370,41 +384,18 @@ export class ReactAgentService {
 
     const session = sessionStore.get(sessionId);
     if (!session) {
-      this.setSSEHeaders(res);
-      res.write(
-        `d:${JSON.stringify({ type: "error", message: "会话不存在或已过期" })}\n`,
-      );
-      res.end();
+      this.failImmediately(res, "会话不存在或已过期");
+      return;
+    }
+    if (!session.pendingClarify) {
+      this.failImmediately(res, "当前没有待回答的问题");
       return;
     }
 
-    // Phase 状态机：如果 session 正在 running（用户在上一轮还没跑完时
-    // 又发了新消息/新回答），先 abort 旧 driver 并等它收敛，再重建 graph
-    if (session.phase === "running") {
-      this.logger.log(`[Agent] resume 打断旧 driver (session=${sessionId})`);
-      session.abortController?.abort("user-interrupt");
-      try {
-        await Promise.race([
-          session.runningPromise ?? Promise.resolve(),
-          new Promise((r) => setTimeout(r, 5000)),
-        ]);
-      } catch {
-        // 旧 driver 可能已经抛异常，忽略
-      }
-      session.graph = this.createGraph();
+    // 打断旧 driver（用户在等待回答期间触发了其他操作）
+    if (session.phase.kind === "running") {
+      await this.abortAndAwait(session, "user-interrupt");
     }
-
-    // 设置新 phase 与 AbortController（resume 继续同一 turn，不递增 turn 计数，
-    // 但 step 从 0 重新计数：步数上限是单次执行的兜底保护）
-    session.turnState.currentStep = 0;
-    session.turnState.turnEndReason = undefined;
-    session.phase = "running";
-    session.abortController = new AbortController();
-    this.logger.log(
-      `[Agent] phase: idle → running (turn=${session.turnState.currentTurn}, step=0, resume)`,
-    );
-
-    this.setSSEHeaders(res);
 
     // 若有 fileIds，还原文件名与磁盘路径拼入 answer 文本让 LLM 感知文件并
     // 用 read_file 直接读取；纯文件上传时不以空文本开头
@@ -425,48 +416,668 @@ export class ReactAgentService {
         : answer
       : fileRefs || answer;
 
-    // 使用 Command API 恢复执行
-    const command = new Command({ resume: resumeText });
+    // 回答写回占位 ToolMessage：LLM 继续时看到 clarify_question 的
+    // 工具结果为「用户回答: ...」（与原 LangGraph interrupt 语义一致）
+    const last = session.history[session.history.length - 1];
+    if (last && isToolMessage(last)) {
+      session.history[session.history.length - 1] = new ToolMessage({
+        content: `用户回答: ${resumeText}`,
+        tool_call_id: last.tool_call_id,
+        name: last.name,
+      });
+    } else {
+      // 占位丢失（异常场景）：把回答作为新用户消息，走正常 turn 兜底
+      session.inbox.nextTurn.push(resumeText);
+    }
+    session.pendingClarify = null;
 
-    // 创建 runningPromise：下一个打断者用 await 等旧 driver 退出
-    let resolvePromise: () => void;
-    session.runningPromise = new Promise<void>((resolve) => {
-      resolvePromise = resolve;
+    await this.runDriver(session, res, { resume: true });
+  }
+
+  // ============================================
+  // Driver 生命周期（对齐 Harness wakeDriver/kick）
+  // ============================================
+
+  /**
+   * 打断旧 driver 并等待收敛
+   *
+   * abort 在自建循环内安全：所有受影响的 promise（LLM 流、工具调用）
+   * 都由本服务创建并在 turn 层捕获，不会产生无消费者的 rejection。
+   * 超时后强制接管：旧 driver 的 finally 有 identity guard，不会破坏新 phase。
+   *
+   * @param session - 会话
+   * @param reason - 打断原因（user-interrupt / client-disconnect）
+   */
+  private async abortAndAwait(session: Session, reason: string): Promise<void> {
+    const phase = session.phase;
+    if (phase.kind !== "running") return;
+    phase.abort.abort(reason);
+    const done = session.driverDone;
+    try {
+      await Promise.race([
+        done,
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, DRIVER_CONVERGE_TIMEOUT_MS),
+        ),
+      ]);
+    } catch {
+      // 旧 driver 可能带错退出（driver 边界已包含），这里忽略
+    }
+  }
+
+  /**
+   * 启动一个 driver（= 本次 HTTP 请求的生命周期）
+   *
+   * 调用方保证 phase 必是 idle。finally 统一收敛：移除 close 监听、
+   * 结束 SSE 流、identity guard 下把 phase 收回 idle、resolve driverDone。
+   *
+   * @param session - 会话
+   * @param res - SSE 响应
+   * @param options - interrupted: 是否打断旧 driver 而来（发 aborted 提示）；
+   *                   resume: 是否 resume 模式（继续原 turn）
+   */
+  private async runDriver(
+    session: Session,
+    res: SSEResponse,
+    options: { interrupted?: boolean; resume?: boolean } = {},
+  ): Promise<void> {
+    const phase: Phase = {
+      kind: "running",
+      abort: new AbortController(),
+      turn: (session.phase as { kind: "idle"; lastTurn: number }).lastTurn,
+      step: 0,
+      wakeRequested: false,
+    };
+    session.phase = phase;
+    // 初始空实现兜底：executor 同步执行保证 resolve 被赋值，但 TS 无法
+    // 追踪 Promise 构造器的同步性，这里给初值避免「赋值前使用」误报
+    let resolveDriver: () => void = () => {};
+    session.driverDone = new Promise<void>((resolve) => {
+      resolveDriver = resolve;
     });
 
-    const config: RunnableConfig = {
-      configurable: { thread_id: sessionId },
-      recursionLimit: 100,
-      signal: session.abortController.signal,
+    this.setSSEHeaders(res);
+    // close 兑底：用户直接关浏览器标签页时没有新请求补发 abort，
+    // close 事件由事件循环立即触发，这里补发信号让 LLM 流尽快退出
+    const onClose = () => {
+      if (!phase.abort.signal.aborted) phase.abort.abort("client-disconnect");
     };
+    res.on("close", onClose);
+
+    if (!options.resume) {
+      // 会话创建后把 sessionId 告知前端（d: 结构化事件）
+      this.sseEvent(res, { type: "session", sessionId: session.id });
+      // 打断场景：告知前端上一轮任务已被打断，正在处理新消息
+      if (options.interrupted) {
+        this.sseEvent(res, {
+          type: "aborted",
+          message: "已打断上一轮任务，正在处理新消息...",
+        });
+      }
+    }
 
     try {
-      await this.streamAgentEvents(
-        session.graph,
-        command,
-        config,
-        session,
-        sessionId,
-        res,
-      );
+      await this.kick(session, phase, res, options.resume ?? false);
     } finally {
-      // 收敛：phase 回 idle、释放 AbortController、resolve runningPromise
-      // 断言打破控制流收窄：方法体前文已赋 undefined，TS 会把属性收窄成 never
-      const reason =
-        (session.turnState.turnEndReason as TurnEndReason | undefined)?.kind ??
-        "interrupt_pending";
-      session.phase = "idle";
-      session.abortController = null;
-      resolvePromise!();
-      this.logger.log(
-        `[Agent] phase: running → idle (turn=${session.turnState.currentTurn}, reason=${reason})`,
-      );
+      // driver 边界收敛：identity guard 防止超时未收敛的旧 driver
+      // 在更晚时刻把新 driver 的 phase 误收为 idle
+      res.removeListener("close", onClose);
+      if (!res.destroyed) res.end();
+      if (session.phase === phase) {
+        session.phase = { kind: "idle", lastTurn: phase.turn };
+      }
+      resolveDriver();
+      this.logger.log(`[Agent] phase: running → idle (turn=${phase.turn})`);
+    }
+  }
+
+  /**
+   * driver 主循环（对齐 Harness kick）：执行一个 turn，
+   * 一切失败在 turn 内分类上报后由本边界包含（不向外抛，避免未处理 rejection）
+   */
+  private async kick(
+    session: Session,
+    phase: Extract<Phase, { kind: "running" }>,
+    res: SSEResponse,
+    resume: boolean,
+  ): Promise<void> {
+    try {
+      await this.turn(session, phase, res, resume);
+    } catch (error) {
+      // turn 已分类上报所有失败（aborted/error），driver 边界只负责包含
+      this.logger.warn(`[Agent] driver 异常退出: ${errorChainText(error)}`);
     }
   }
 
   // ============================================
-  // 私有方法
+  // Turn / Step 双层循环（对齐 Harness turn/step）
   // ============================================
+
+  /**
+   * 执行一个 turn：claim 用户消息 → step 循环 → SSE 收尾
+   *
+   * @param session - 会话
+   * @param phase - 本 driver 的 running phase
+   * @param res - SSE 响应
+   * @param resume - resume 模式（继续原 turn，不 claim 新消息）
+   */
+  private async turn(
+    session: Session,
+    phase: Extract<Phase, { kind: "running" }>,
+    res: SSEResponse,
+    resume: boolean,
+  ): Promise<void> {
+    const signal = phase.abort.signal;
+    signal.throwIfAborted();
+
+    let turn: number;
+    if (resume) {
+      // resume 继续原 turn（回答已写回 ToolMessage），不递增 turn 计数
+      turn = phase.turn;
+    } else {
+      const claimed = session.inbox.claimTurn();
+      if (claimed.length === 0) return; // 队列空（异常边缘），driver 直接退出
+      turn = phase.turn + 1;
+      phase.turn = turn;
+      phase.step = 0;
+
+      // 注入上轮系统警告（死循环拦截等），以 SystemMessage 形式不污染对话序列
+      const injected = session.inbox.claimStep();
+      if (injected.length > 0) {
+        session.history.push(
+          new SystemMessage(`【系统记录】${injected.join("\n")}`),
+        );
+      }
+      for (const msg of claimed) {
+        session.history.push(new HumanMessage(msg));
+      }
+
+      this.logger.log(`[Agent] phase: idle → running (turn=${turn}, step=0)`);
+      // turn 开始事件（前端可展示「第 N 轮对话」）
+      this.sseEvent(res, { type: "turn_start", turn });
+      this.appendEvent(session, "turn_start", { turn });
+    }
+
+    let turnEnd: TurnEndReason | null = null;
+    // max_tokens 粘性（Harness 语义）：一旦命中，后续正常 step 不能降级
+    let stickyMaxTokens = false;
+    let maxTokensStreak = 0;
+    // 死循环检测状态：turn 内局部，跨 step 连续跟踪
+    const loopGuard: LoopGuard = {
+      lastToolName: "",
+      lastToolInput: "",
+      repeatCount: 0,
+    };
+
+    try {
+      while (true) {
+        signal.throwIfAborted();
+        // 步数上限（死循环保护）
+        if (phase.step >= MAX_STEPS_PER_TURN) {
+          turnEnd = { kind: "step_limit", maxSteps: MAX_STEPS_PER_TURN };
+          break;
+        }
+        const outcome = await this.step(session, phase, res, loopGuard);
+        if (outcome === null) continue; // 工具执行完，继续下一步
+
+        switch (outcome.kind) {
+          case "completed":
+            turnEnd = stickyMaxTokens
+              ? {
+                  kind: "max_tokens",
+                  message: "输出可能因达到 token 上限被截断",
+                }
+              : { kind: "completed" };
+            break;
+          case "max_tokens":
+            // 粘性标记 + 连续截断计数（连续 2 步截断 → 终止）
+            stickyMaxTokens = true;
+            maxTokensStreak += 1;
+            this.logger.warn(
+              `[Agent] turn=${turn} step=${phase.step} max_tokens (finish_reason=length)`,
+            );
+            if (maxTokensStreak >= 2) {
+              turnEnd = {
+                kind: "max_tokens",
+                message:
+                  "连续两次输出达到模型 token 上限（内容可能被截断）。请简化需求或拆分为更小的步骤。",
+              };
+            }
+            break;
+          case "loop_detected":
+            turnEnd = {
+              kind: "error",
+              code: "loop_detected",
+              message: `检测到工具 ${outcome.name} 连续 4 次以相同参数被调用（疑似死循环），已停止执行。请简化需求或提供更明确的信息后重试。`,
+            };
+            break;
+          case "clarify":
+            // 挂起：interrupt 事件已在 step 内发送，turn 不记结束、不发收尾事件
+            return;
+        }
+        if (turnEnd) break;
+      }
+    } catch (error) {
+      // 结构化错误分类：AbortError → aborted；其余 → error+code
+      if (signal.aborted) {
+        turnEnd = {
+          kind: "aborted",
+          reason: String(signal.reason ?? "aborted"),
+        };
+      } else {
+        turnEnd = {
+          kind: "error",
+          code: "llm_error",
+          message: errorChainText(error),
+        };
+      }
+    }
+
+    // 结构化 turn 结束记录（clarify 挂起时 turnEnd 为 null，不记录）
+    if (turnEnd) {
+      this.appendEvent(session, "turn_end", { turn, reason: turnEnd });
+      this.logger.log(`[Agent] turn=${turn} ended kind=${turnEnd.kind}`);
+    }
+
+    // SSE 收尾事件（aborted 时旧连接通常已被前端放弃，sseEvent 内部有防御）
+    switch (turnEnd?.kind) {
+      case "completed":
+        this.sseEvent(res, { type: "done", final: lastAssistantText(session) });
+        this.sseLine(res, `e:${JSON.stringify({ type: "finish" })}`);
+        break;
+      case "max_tokens":
+        if (maxTokensStreak >= 2) {
+          // 连续截断终止：error 事件（不发 e:finish，与旧实现一致）
+          this.sseEvent(res, {
+            type: "error",
+            code: "max_tokens",
+            message: turnEnd.message,
+          });
+        } else {
+          // 粘性完成：done + warning 让前端提示用户
+          this.sseEvent(res, {
+            type: "done",
+            final: lastAssistantText(session),
+            warning:
+              "部分输出可能因达到 token 上限被截断，如需完整结果请简化需求。",
+          });
+          this.sseLine(res, `e:${JSON.stringify({ type: "finish" })}`);
+        }
+        break;
+      case "step_limit": {
+        const msg = `Agent 单轮执行超过 ${turnEnd.maxSteps} 步，已停止。请简化需求或提供更明确的信息后重试。`;
+        this.sseEvent(res, {
+          type: "step_limit",
+          maxSteps: turnEnd.maxSteps,
+          message: msg,
+        });
+        this.sseEvent(res, { type: "error", code: "step_limit", message: msg });
+        break;
+      }
+      case "error": {
+        if (turnEnd.code === "loop_detected") {
+          this.sseEvent(res, {
+            type: "loop_detected",
+            message: turnEnd.message,
+          });
+        }
+        this.sseEvent(res, {
+          type: "error",
+          code: turnEnd.code,
+          message: turnEnd.message,
+        });
+        break;
+      }
+      case "aborted":
+        this.sseEvent(res, { type: "aborted" });
+        break;
+      case undefined:
+        break; // clarify 挂起：interrupt 事件已发，无需收尾
+    }
+  }
+
+  /**
+   * 执行一步：一次 LLM 流式调用 + 工具顺序执行（对齐 Harness step）
+   *
+   * LLM 流 chunk 级检查 signal 与 res.destroyed——「思考中打断」即刻生效。
+   * abort 抛出的 AbortError 由本服务创建并向上传播，turn 层分类为 aborted。
+   * 半截 AI 输出不落 history（流被打断时直接抛，不 push AIMessage）。
+   *
+   * @param session - 会话
+   * @param phase - 本 driver 的 running phase
+   * @param res - SSE 响应
+   * @param loopGuard - 死循环检测状态
+   * @returns StepOutcome（null = 继续下一步）
+   */
+  private async step(
+    session: Session,
+    phase: Extract<Phase, { kind: "running" }>,
+    res: SSEResponse,
+    loopGuard: LoopGuard,
+  ): Promise<StepOutcome> {
+    const signal = phase.abort.signal;
+    signal.throwIfAborted();
+    const step = phase.step + 1;
+    phase.step = step;
+    const turn = phase.turn;
+
+    this.logger.log(`[Agent] turn=${turn} step=${step} llm_call`);
+    this.appendEvent(session, "step_start", { turn, step });
+
+    // 组装消息：系统提示词 + 滑动窗口 + 孤儿 ToolMessage 自愈
+    const messages = this.buildMessages(session);
+
+    // LLM 流式调用：chunk 累积进 full（AIMessageChunk.concat 组装完整 tool_calls）
+    let full: AIMessageChunk | null = null;
+    const stream = await modelWithTools.stream(messages, { signal });
+    for await (const chunk of stream) {
+      // 检查点 1：AbortSignal（「打断并发送」的主路径，比 res.destroyed 更及时）
+      signal.throwIfAborted();
+      // 检查点 2：客户端断开（close 事件已补发 abort，这里即时兜底）
+      if (res.destroyed) {
+        phase.abort.abort("client-disconnect");
+        signal.throwIfAborted();
+      }
+      full = full ? full.concat(chunk) : chunk;
+
+      // 思考内容增量（DeepSeek reasoning_content；当前模型已关思考，防御保留）
+      const reasoning = chunk.additional_kwargs?.reasoning_content;
+      if (typeof reasoning === "string" && reasoning.length > 0) {
+        this.sseEvent(res, { type: "reasoning_delta", content: reasoning });
+      }
+      // 文本增量
+      const text = extractTextContent(chunk.content);
+      if (text) {
+        this.sseLine(res, `0:${JSON.stringify(text)}`);
+      }
+    }
+    signal.throwIfAborted();
+
+    // 组装完整 AI 消息并落 history（tool_calls 参数为完整 JSON 字符串）
+    const rawToolCalls = full?.tool_calls ?? [];
+    const toolCalls: PlannedCall[] = rawToolCalls.map((tc) => ({
+      id: tc.id ?? `call_${randomUUID()}`,
+      name: tc.name,
+      args:
+        typeof tc.args === "string" ? tc.args : JSON.stringify(tc.args ?? {}),
+    }));
+    const content = full?.content ?? "";
+    session.history.push(
+      new AIMessage({
+        content,
+        tool_calls:
+          toolCalls.length > 0
+            ? toolCalls.map((c) => ({
+                id: c.id,
+                name: c.name,
+                args: c.args as unknown as Record<string, unknown>,
+              }))
+            : undefined,
+      }),
+    );
+
+    const textContent = extractTextContent(content);
+    this.appendEvent(session, "llm_call", {
+      turn,
+      step,
+      preview: textContent.slice(0, 50),
+    });
+    this.appendEvent(session, "step_end", { turn, step });
+
+    const finishReason =
+      (full?.response_metadata as { finish_reason?: string } | undefined)
+        ?.finish_reason ??
+      (full?.additional_kwargs as { finish_reason?: string } | undefined)
+        ?.finish_reason;
+
+    // 空回复保护：无文本且无工具调用（静默空回复 bug 的根因拦截）
+    if (!textContent && toolCalls.length === 0) {
+      this.logger.warn(
+        `[Agent] turn=${turn} step=${step} 空回复（无内容无工具调用）`,
+      );
+      return { kind: "completed" };
+    }
+
+    // max_tokens 粘性（Harness 语义）：截断的输出不可靠，不执行其 tool_calls
+    if (finishReason === "length") {
+      return { kind: "max_tokens" };
+    }
+
+    if (toolCalls.length === 0) return { kind: "completed" };
+
+    // 顺序执行工具（对齐 Harness executeToolCalls 的模型顺序提交）
+    return this.executeToolCalls(session, phase, res, toolCalls, loopGuard);
+  }
+
+  /**
+   * 顺序执行一步的工具调用（对齐 Harness executeToolCalls）：
+   * 模型顺序提交，结果以 ToolMessage 写回 history。abort 时未执行的调用
+   * 由 buildMessages 自愈补位。死循环在第 4 次同参调用时拦截（不执行）。
+   * clarify_question 的 __clarify 标记触发 turn 挂起。
+   *
+   * @param session - 会话
+   * @param phase - 本 driver 的 running phase
+   * @param res - SSE 响应
+   * @param toolCalls - 模型顺序的工具调用
+   * @param loopGuard - 死循环检测状态
+   * @returns StepOutcome（null = 全部执行完，继续下一步）
+   */
+  private async executeToolCalls(
+    session: Session,
+    phase: Extract<Phase, { kind: "running" }>,
+    res: SSEResponse,
+    toolCalls: PlannedCall[],
+    loopGuard: LoopGuard,
+  ): Promise<StepOutcome> {
+    const signal = phase.abort.signal;
+    const turn = phase.turn;
+    const step = phase.step;
+
+    for (const call of toolCalls) {
+      signal.throwIfAborted();
+      const args = parseToolArguments(call.args);
+      const inputKey = JSON.stringify(args);
+
+      // 死循环检测：同一工具 + 同一参数连续调用，第 4 次相同调用拦截（不执行）
+      if (
+        loopGuard.lastToolName === call.name &&
+        loopGuard.lastToolInput === inputKey
+      ) {
+        loopGuard.repeatCount += 1;
+      } else {
+        loopGuard.lastToolName = call.name;
+        loopGuard.lastToolInput = inputKey;
+        loopGuard.repeatCount = 0;
+      }
+      if (loopGuard.repeatCount >= LOOP_REPEAT_LIMIT) {
+        const warning = `[系统拦截] ${call.name} 连续 4 次相同参数调用被判定为死循环，已强制停止。`;
+        session.history.push(
+          new ToolMessage({
+            content: warning,
+            tool_call_id: call.id,
+            name: call.name,
+          }),
+        );
+        // 注入下轮上下文：下次对话时 LLM 能看到循环警告
+        session.inbox.nextStep.push(warning);
+        this.logger.warn(
+          `[Agent] loop_detected: ${call.name} ${inputKey.slice(0, 200)}`,
+        );
+        return { kind: "loop_detected", name: call.name, input: args };
+      }
+
+      // 工具开始事件（先发事件再执行，前端实时展示调用链）
+      this.logger.log(
+        `[Agent] turn=${turn} step=${step} tool_start ${call.name} ${inputKey.slice(0, 200)}`,
+      );
+      this.sseEvent(res, { type: "tool_start", name: call.name, input: args });
+      this.appendEvent(session, "tool_start", {
+        turn,
+        step,
+        name: call.name,
+        input: args,
+      });
+
+      // 执行工具（withToolTimeout 已包装超时；signal 传入供工具内感知打断）
+      let result: unknown;
+      let toolError: unknown;
+      try {
+        result = await this.invokeTool(call.name, args, signal);
+      } catch (error) {
+        toolError = error;
+      }
+      signal.throwIfAborted();
+
+      const outputText = toolError
+        ? `工具执行失败: ${errorChainText(toolError)}`
+        : stringifyToolOutput(result);
+
+      this.logger.log(
+        `[Agent] turn=${turn} step=${step} tool_end ${call.name} ${outputText.slice(0, 200)}`,
+      );
+      this.sseEvent(res, {
+        type: "tool_end",
+        name: call.name,
+        output: outputText,
+      });
+      this.appendEvent(session, "tool_end", {
+        turn,
+        step,
+        name: call.name,
+        output: outputText.slice(0, 200),
+      });
+
+      // clarify 挂起检测：工具返回 __clarify 标记 → 占位 ToolMessage + 挂起状态
+      // （resume 时占位被替换为「用户回答」，语义等价 LangGraph interrupt 返回值）
+      if (!toolError && isClarifyMarker(result)) {
+        session.history.push(
+          new ToolMessage({
+            content: "（等待用户回答中）",
+            tool_call_id: call.id,
+            name: call.name,
+          }),
+        );
+        session.pendingClarify = {
+          question: result.question,
+          context: result.context,
+        };
+        this.logger.log(`[Agent] clarify: ${result.question.slice(0, 100)}`);
+        this.sseEvent(res, {
+          type: "interrupt",
+          question: result.question,
+          context: result.context,
+          sessionId: session.id,
+        });
+        return {
+          kind: "clarify",
+          question: result.question,
+          context: result.context,
+        };
+      }
+
+      // 工具结果落 history（打断不丢失：直接写在权威记录里，无 checkpoint 机制）
+      session.history.push(
+        new ToolMessage({
+          content: outputText,
+          tool_call_id: call.id,
+          name: call.name,
+        }),
+      );
+    }
+    return null;
+  }
+
+  /**
+   * 按工具名调用注册工具
+   *
+   * @param name - 工具名
+   * @param args - 解析后的参数对象
+   * @param signal - driver 的 abort 信号（传入工具 invoke 配置）
+   * @returns 工具返回结果
+   */
+  private async invokeTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    const tool = (
+      ALL_TOOLS as unknown as Array<{
+        name: string;
+        invoke: (input: unknown, config?: unknown) => Promise<unknown>;
+      }>
+    ).find((t) => t.name === name);
+    if (!tool) throw new Error(`未知工具: ${name}`);
+    return tool.invoke(args, { signal });
+  }
+
+  // ============================================
+  // 消息组装与协议输出
+  // ============================================
+
+  /**
+   * 组装 LLM 输入消息：系统提示词 + 历史滑动窗口 + 孤儿 ToolMessage 自愈
+   *
+   * 自愈（对齐 Harness appendSkippedToolCall）：AIMessage.tool_calls 未配对
+   * ToolMessage 时补合成 aborted 结果——打断发生在工具执行中/LLM 输出中
+   * 都会留下半截序列，此处统一修复，保证 OpenAI 兼容协议合法。
+   *
+   * @param session - 会话
+   * @returns LLM 输入消息序列（SystemMessage 开头）
+   */
+  private buildMessages(session: Session): BaseMessage[] {
+    const window = session.history.slice(-MAX_HISTORY_MESSAGES);
+    // 裁剪窗口头的孤立 ToolMessage
+    while (window.length > 0 && isToolMessage(window[0])) window.shift();
+
+    const patched: BaseMessage[] = [];
+    // 等待配对的 tool_calls（id → 调用）
+    const pending = new Map<string, PlannedCall>();
+    for (const msg of window) {
+      if (isToolMessage(msg)) {
+        pending.delete(msg.tool_call_id);
+        patched.push(msg);
+        continue;
+      }
+      if (isAIMessage(msg)) {
+        // 新 AI 消息前的未配对调用：上一工具序列已结束，补合成结果
+        for (const [id] of pending) {
+          patched.push(
+            new ToolMessage({ content: TOOL_ABORTED_TEXT, tool_call_id: id }),
+          );
+        }
+        pending.clear();
+        patched.push(msg);
+        for (const call of msg.tool_calls ?? []) {
+          if (call.id) {
+            pending.set(call.id, {
+              id: call.id,
+              name: call.name,
+              args:
+                typeof call.args === "string"
+                  ? call.args
+                  : JSON.stringify(call.args ?? {}),
+            });
+          }
+        }
+        continue;
+      }
+      // user/system：配对中断（防御，正常不会出现在工具序列中间）
+      for (const [id] of pending) {
+        patched.push(
+          new ToolMessage({ content: TOOL_ABORTED_TEXT, tool_call_id: id }),
+        );
+      }
+      pending.clear();
+      patched.push(msg);
+    }
+    // 窗口尾部残余（被截断的 AIMessage 在窗口末尾）
+    for (const [id] of pending) {
+      patched.push(
+        new ToolMessage({ content: TOOL_ABORTED_TEXT, tool_call_id: id }),
+      );
+    }
+    return [new SystemMessage(SYSTEM_PROMPT), ...patched];
+  }
 
   /**
    * 设置 SSE 响应头
@@ -482,611 +1093,27 @@ export class ReactAgentService {
     res.flushHeaders();
   }
 
-  /**
-   * 流式迭代 graph 事件，写入 Data Stream 协议
-   *
-   * 借鉴 DeepSeek Harness 主循环设计（在 LangGraph ReAct 循环外层增强）：
-   * - Turn/Step 追踪：on_chat_model_start = step 边界，超 maxStepsPerTurn 终止
-   * - 死循环拦截：同一工具同一参数连续 4 次 → loop_detected 终止
-   * - max_tokens 检测：finish_reason=length 粘性标记，连续 2 步截断终止
-   * - 结构化错误：AbortError → aborted；Recursion → step_limit；其余 → error+code
-   * - 事件日志：turn/step/tool/llm 关键节点追加 AgentEvent
-   *
-   * 事件类型：
-   * - on_chat_model_stream → 0:"text"（LLM 文本增量）
-   * - on_tool_start → d:{"type":"tool_start",...}
-   * - on_tool_end → d:{"type":"tool_end",...}
-   * - 流结束后检查 interrupt → d:{"type":"interrupt",...} 或 d:{"type":"done",...} + e:finish
-   */
-  private async streamAgentEvents(
-    graph: Session["graph"],
-    input: any,
-    config: RunnableConfig,
-    session: Session,
-    sessionId: string,
-    res: SSEResponse,
-  ): Promise<void> {
-    // 主路径打断信号：handleChat/handleResume 打断时 abort 此 signal，
-    // AbortSignal 会全程传递到 LLM 调用/工具调用边界
-    const signal = config.signal;
-    let complete = false;
-    // 服务端主动结束标记：true 表示流由服务端正常完成（非客户端打断）
-    let finished = false;
-    // 结构化 turn 结束原因：每个退出路径（正常/截断/打断/错误/步数上限）
-    // 都赋值，finally 中统一持久化到 turnState + 事件日志
-    let turnEnd: TurnEndReason | null = null;
+  /** 写一行 SSE 文本（客户端断开时静默跳过） */
+  private sseLine(res: SSEResponse, line: string): void {
+    if (!res.destroyed) res.write(`${line}\n`);
+  }
 
-    // ============================================
-    // Pre-step 拦截状态（借鉴 Harness pre-step waterfall reject）
-    // ============================================
-    // 死循环检测：同一工具 + 同一参数连续调用（第 4 次相同调用被拦截）
-    let lastToolName = "";
-    let lastToolInput = "";
-    let repeatCount = 0;
-    let loopDetected: { name: string; input: unknown } | null = null;
-    // 步数上限：on_chat_model_start 时检测，超过 maxStepsPerTurn 终止
-    let stepLimitHit = false;
-    // max_tokens 检测：finish_reason === "length" 表示输出被 token 上限截断
-    let stickyMaxTokens = false;
-    let maxTokensStreak = 0;
-    let maxTokensTerminated = false;
-    // 每 step 首 chunk 标记：llm_call 事件只记一次（避免逐 chunk 刷事件日志）
-    let firstChunkOfStep = false;
+  /** 写一个 d: 结构化事件 */
+  private sseEvent(res: SSEResponse, data: Record<string, unknown>): void {
+    this.sseLine(res, `d:${JSON.stringify(data)}`);
+  }
 
-    // close 事件兑底：用户直接关浏览器标签页时没有新的 handleChat 调用来发
-    // abort，close 事件由事件循环立即触发（for await 循环里等下一事件时
-    // res.destroyed 检测会延迟），这里只负责补发 abort 信号。
-    // 不再依赖它打 graphDirty 标记——脏状态检测已被 phase 状态机替代。
-    const onClose = () => {
-      if (!finished) {
-        session.abortController?.abort("client-disconnect");
-      }
-    };
-    res.on("close", onClose);
-
-    try {
-      // 外层 try：确保 finally 在一切退出路径（含提前 return）前执行，
-      // 移除 close 监听器避免泄漏
-      try {
-        // PregelOptions extends RunnableConfig，config 字段直接平铺进 options
-        const stream = graph.streamEvents(input, {
-          version: "v2",
-          ...config,
-        });
-
-        for await (const event of stream) {
-          // 检查点 1：AbortSignal（主路径，比 res.destroyed 更及时）——
-          // 「打断并发送」时 handleChat 先 abort 再等旧 driver 退出，
-          // 这里立即停止迭代
-          if (signal?.aborted) {
-            // 主动取消底层 graph 执行：否则被放弃的执行会继续在后台跑完，
-            // 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务
-            await this.cancelStream(stream, String(signal.reason ?? "aborted"));
-            break;
-          }
-
-          // 检查点 2：res.destroyed（兑底，客户端已经断开但没发 abort）
-          if (res.destroyed) {
-            session.abortController?.abort("client-disconnect");
-            await this.cancelStream(stream, "client-disconnect");
-            break;
-          }
-
-          switch (event.event) {
-            case "on_chat_model_start": {
-              // Step 追踪：一次 LLM 调用 = 1 个 step（Harness 定义）
-              session.turnState.currentStep += 1;
-              const step = session.turnState.currentStep;
-              const turn = session.turnState.currentTurn;
-              this.logger.log(
-                `[Agent] turn=${turn} step=${step} llm_call (model=${event.name ?? "unknown"})`,
-              );
-              this.appendEvent(session, "step_start", {
-                turn,
-                step,
-                model: event.name ?? "unknown",
-              });
-              firstChunkOfStep = false;
-
-              // 步数上限检查（死循环保护）：超过 maxStepsPerTurn 终止
-              if (step > session.turnState.maxStepsPerTurn) {
-                stepLimitHit = true;
-              }
-              break;
-            }
-
-            case "on_chat_model_stream": {
-              // LLM 文本增量
-              const chunk = event.data?.chunk as
-                | ({
-                    content?: unknown;
-                    additional_kwargs?: Record<string, unknown>;
-                  } & Record<string, unknown>)
-                | undefined;
-
-              // 每 step 首 chunk：记录 llm_call 事件（内容预览 ≤ 50 字符）
-              if (!firstChunkOfStep) {
-                firstChunkOfStep = true;
-                const preview =
-                  typeof chunk?.content === "string"
-                    ? chunk.content.slice(0, 50)
-                    : "";
-                this.appendEvent(session, "llm_call", {
-                  turn: session.turnState.currentTurn,
-                  step: session.turnState.currentStep,
-                  preview,
-                });
-              }
-
-              // max_tokens 检测：最后一个 chunk 携带 finish_reason，
-              // "length" 表示输出被 token 上限截断（粘性标记，不可降级）
-              const finishReason =
-                (
-                  chunk?.response_metadata as
-                    | { finish_reason?: string }
-                    | undefined
-                )?.finish_reason ??
-                (chunk?.additional_kwargs?.finish_reason as string | undefined);
-              if (finishReason === "length") {
-                stickyMaxTokens = true;
-              }
-
-              // DeepSeek 思考内容（reasoning_content，流式增量）
-              // 单独输出 reasoning_delta 事件，前端在思考气泡里流式展示
-              const reasoning = chunk?.additional_kwargs?.reasoning_content;
-              if (typeof reasoning === "string" && reasoning.length > 0) {
-                res.write(
-                  `d:${JSON.stringify({ type: "reasoning_delta", content: reasoning })}\n`,
-                );
-              }
-
-              if (chunk?.content) {
-                const content =
-                  typeof chunk.content === "string"
-                    ? chunk.content
-                    : Array.isArray(chunk.content)
-                      ? chunk.content
-                          .map((c: unknown) =>
-                            typeof c === "object" &&
-                            c !== null &&
-                            "text" in (c as Record<string, unknown>)
-                              ? (c as Record<string, unknown>).text
-                              : "",
-                          )
-                          .join("")
-                      : "";
-                if (content) {
-                  res.write(`0:${JSON.stringify(content)}\n`);
-                }
-              }
-              break;
-            }
-
-            case "on_tool_start": {
-              // 工具开始
-              const toolName = event.name ?? "unknown";
-              const toolInput = event.data?.input ?? {};
-              // info 级别：默认可见，用于定位 Agent 循环/卡住的步骤（debug 不输出）
-              this.logger.log(
-                `[Agent] turn=${session.turnState.currentTurn} step=${session.turnState.currentStep} tool_start ${toolName} ${JSON.stringify(toolInput).slice(0, 200)}`,
-              );
-              res.write(
-                `d:${JSON.stringify({ type: "tool_start", name: toolName, input: toolInput })}\n`,
-              );
-              this.appendEvent(session, "tool_start", {
-                turn: session.turnState.currentTurn,
-                step: session.turnState.currentStep,
-                name: toolName,
-                input: toolInput,
-              });
-
-              // 死循环检测（pre-step 拦截）：同一工具 + 同一参数连续调用，
-              // 第 4 次相同调用判定为死循环（repeatCount >= 3 即第 4 次）
-              const inputKey = JSON.stringify(toolInput);
-              if (lastToolName === toolName && lastToolInput === inputKey) {
-                repeatCount += 1;
-              } else {
-                lastToolName = toolName;
-                lastToolInput = inputKey;
-                repeatCount = 0;
-              }
-              if (repeatCount >= 3) {
-                loopDetected = { name: toolName, input: toolInput };
-              }
-              break;
-            }
-
-            case "on_tool_end": {
-              // 工具结束
-              const toolName = event.name ?? "unknown";
-              const output = event.data?.output;
-              const toolContent = this.extractToolContent(output);
-              // info 级别：默认可见，用于定位 Agent 循环/卡住的步骤（debug 不输出）
-              this.logger.log(
-                `[Agent] turn=${session.turnState.currentTurn} step=${session.turnState.currentStep} tool_end ${toolName} ${toolContent.slice(0, 200)}`,
-              );
-              res.write(
-                `d:${JSON.stringify({ type: "tool_end", name: toolName, output: toolContent })}\n`,
-              );
-              this.appendEvent(session, "tool_end", {
-                turn: session.turnState.currentTurn,
-                step: session.turnState.currentStep,
-                name: toolName,
-                output: toolContent.slice(0, 200),
-              });
-              // 打断恢复记忆：关键工具结果以摘要形式记入 inbox.nextStep
-              // （Inbox 分离：工具结果不污染 session.messages 用户消息序列）
-              const summary = this.summarizeToolResult(toolName, toolContent);
-              if (summary) {
-                session.inbox.nextStep.push({
-                  role: "tool",
-                  toolName,
-                  content: summary,
-                });
-              }
-              break;
-            }
-
-            case "on_chat_model_end": {
-              // Step 结束：检查 finish_reason，检测 max_tokens 截断
-              const output = event.data?.output as
-                | {
-                    response_metadata?: { finish_reason?: string };
-                  }
-                | undefined;
-              this.appendEvent(session, "step_end", {
-                turn: session.turnState.currentTurn,
-                step: session.turnState.currentStep,
-              });
-              if (output?.response_metadata?.finish_reason === "length") {
-                // max_tokens 粘性：一旦命中，turn 结果锁定为 max_tokens
-                stickyMaxTokens = true;
-                maxTokensStreak += 1;
-                this.logger.warn(
-                  `[Agent] turn=${session.turnState.currentTurn} step=${session.turnState.currentStep} max_tokens (finish_reason=length)`,
-                );
-                // 连续 2 步被截断 → 直接终止并向用户报告
-                if (maxTokensStreak >= 2) {
-                  maxTokensTerminated = true;
-                }
-              } else {
-                maxTokensStreak = 0;
-              }
-              break;
-            }
-          }
-
-          // ============================================
-          // Pre-step 拦截点（借鉴 Harness pre-step waterfall reject）：
-          // 检测到死循环 / 步数超限 / 连续截断时，不执行下一步，
-          // 终止当前流并向用户汇报
-          // ============================================
-          if (loopDetected) {
-            const { name, input } = loopDetected;
-            const msg = `检测到工具 ${name} 连续 4 次以相同参数被调用（疑似死循环），已停止执行。请简化需求或提供更明确的信息后重试。`;
-            turnEnd = { kind: "error", code: "loop_detected", message: msg };
-            // 注入 stop 消息到 nextStep：下次对话时 LLM 能看到循环警告
-            session.inbox.nextStep.push({
-              role: "tool",
-              toolName: "system",
-              content: `[系统拦截] ${name} 连续 4 次相同参数调用被判定为死循环，已强制停止。`,
-            });
-            // 善后：保存 AI 已输出的消息（同 stepLimitHit 的静默空回复修复）
-            await this.saveInterruptedState(session.graph, config, session);
-            this.appendEvent(session, "error", {
-              turn: session.turnState.currentTurn,
-              code: "loop_detected",
-              message: msg,
-            });
-            this.logger.warn(
-              `[Agent] loop_detected: ${name} ${JSON.stringify(input).slice(0, 200)}`,
-            );
-            if (!res.destroyed) {
-              res.write(
-                `d:${JSON.stringify({ type: "loop_detected", tool: name, message: msg })}\n`,
-              );
-              res.write(
-                `d:${JSON.stringify({ type: "error", code: "loop_detected", message: msg })}\n`,
-              );
-              res.end();
-            }
-            return;
-          }
-
-          if (stepLimitHit) {
-            const maxSteps = session.turnState.maxStepsPerTurn;
-            const msg = `Agent 单轮执行超过 ${maxSteps} 步，已停止。请简化需求或提供更明确的信息后重试。`;
-            turnEnd = { kind: "step_limit", maxSteps };
-            // 善后：保存 AI 已输出的消息到 session.messages，防止下一轮看到断层对话
-            // （静默空回复的根因：stepLimitHit 直接 return，AI 本轮所有输出全丢，
-            // 下一轮 LLM 看到连续两条 user 消息 → 空回复 → 前端无任何显示）
-            await this.saveInterruptedState(session.graph, config, session);
-            this.appendEvent(session, "error", {
-              turn: session.turnState.currentTurn,
-              code: "step_limit",
-              message: msg,
-            });
-            this.logger.warn(
-              `[Agent] step_limit: turn=${session.turnState.currentTurn} steps>${maxSteps}`,
-            );
-            if (!res.destroyed) {
-              res.write(
-                `d:${JSON.stringify({ type: "step_limit", maxSteps, message: msg })}\n`,
-              );
-              res.write(
-                `d:${JSON.stringify({ type: "error", code: "step_limit", message: msg })}\n`,
-              );
-              res.end();
-            }
-            return;
-          }
-
-          if (maxTokensTerminated) {
-            const msg =
-              "连续两次输出达到模型 token 上限（内容可能被截断）。请简化需求或拆分为更小的步骤。";
-            turnEnd = { kind: "max_tokens", message: msg };
-            // 善后：保存 AI 已输出的消息（同 stepLimitHit 的静默空回复修复）
-            await this.saveInterruptedState(session.graph, config, session);
-            this.appendEvent(session, "error", {
-              turn: session.turnState.currentTurn,
-              code: "max_tokens",
-              message: msg,
-            });
-            this.logger.warn(
-              `[Agent] max_tokens: turn=${session.turnState.currentTurn} 连续 ${maxTokensStreak} 步输出被截断`,
-            );
-            if (!res.destroyed) {
-              res.write(
-                `d:${JSON.stringify({ type: "error", code: "max_tokens", message: msg })}\n`,
-              );
-              res.end();
-            }
-            return;
-          }
-        }
-
-        complete = true;
-      } catch (e) {
-        // ============================================
-        // 结构化错误分类（替代纯字符串 try/catch）：
-        // AbortError → aborted；Recursion limit → step_limit；其余 → error+code
-        // ============================================
-        if (signal?.aborted || (e as Error).name === "AbortError") {
-          turnEnd = {
-            kind: "aborted",
-            reason: String((e as Error).message ?? "aborted"),
-          };
-          this.appendEvent(session, "aborted", {
-            turn: session.turnState.currentTurn,
-            reason: turnEnd.reason,
-          });
-          if (!res.destroyed) {
-            res.write(`d:${JSON.stringify({ type: "aborted" })}\n`);
-            res.end();
-          }
-          return;
-        }
-
-        const msg = (e as Error).message;
-        // 递归上限错误 → step_limit（提示用户 Agent 循环过深）
-        if (
-          msg.includes("Recursion limit") ||
-          msg.includes("recursion_limit")
-        ) {
-          const friendly =
-            "Agent 执行步骤过多（可能陷入循环），已停止。请简化需求或提供更明确的信息后重试。";
-          turnEnd = { kind: "step_limit", maxSteps: 100 };
-          this.appendEvent(session, "error", {
-            turn: session.turnState.currentTurn,
-            code: "recursion_limit",
-            message: msg,
-          });
-          if (!res.destroyed) {
-            res.write(
-              `d:${JSON.stringify({ type: "step_limit", maxSteps: 100, message: friendly })}\n`,
-            );
-            res.write(
-              `d:${JSON.stringify({ type: "error", code: "recursion_limit", message: friendly })}\n`,
-            );
-            res.end();
-          }
-          return;
-        }
-
-        // 其余流异常 → error with code（LLM 调用失败等）
-        turnEnd = { kind: "error", code: "llm_error", message: msg };
-        this.logger.error(`[Agent] ✗ [llm_error] ${msg}`);
-        this.appendEvent(session, "error", {
-          turn: session.turnState.currentTurn,
-          code: "llm_error",
-          message: msg,
-        });
-        if (!res.destroyed) {
-          res.write(
-            `d:${JSON.stringify({ type: "error", code: "llm_error", message: msg })}\n`,
-          );
-          res.end();
-        }
-        return;
-      }
-
-      // 被 abort 打断的流：发送 aborted 事件并退出
-      // （新消息由新的 handleChat 响应处理，这里只负责收尾旧流）
-      if (signal?.aborted) {
-        turnEnd = {
-          kind: "aborted",
-          reason: String(signal.reason ?? "aborted"),
-        };
-        this.appendEvent(session, "aborted", {
-          turn: session.turnState.currentTurn,
-          reason: turnEnd.reason,
-        });
-        if (!res.destroyed) {
-          res.write(`d:${JSON.stringify({ type: "aborted" })}\n`);
-          res.end();
-        }
-        return;
-      }
-
-      // 客户端断开时不继续处理
-      if (res.destroyed) {
-        turnEnd = { kind: "aborted", reason: "client-disconnect" };
-        return;
-      }
-
-      if (!complete) {
-        return;
-      }
-
-      // 6. 流结束后检查是否处于 interrupt 状态
-      try {
-        const state = await graph.getState(config);
-        const stateValues = state.values as Record<string, unknown> | undefined;
-
-        // 检查 interrupt 值：LangGraph 将 interrupt 数据存储在 state.tasks 中
-        // （实测：state.tasks[].interrupts[].value 含 interrupt 传入的值）
-        const interruptData = this.extractInterruptData(state);
-
-        if (interruptData) {
-          // 处于 interrupt 状态，推送问题给前端
-          this.logger.log(
-            `[Agent] interrupt: ${interruptData.question.slice(0, 100)}`,
-          );
-          res.write(
-            `d:${JSON.stringify({ type: "interrupt", ...interruptData, sessionId })}\n`,
-          );
-          res.end();
-          return;
-        }
-
-        // 无 interrupt，提取最终消息
-        this.logger.log(`[Agent] turn=${session.turnState.currentTurn} done`);
-        const finalContent = this.extractFinalContent(stateValues);
-        if (session) {
-          session.messages.push({ role: "assistant", content: finalContent });
-        }
-
-        // max_tokens 粘性：曾命中截断的 turn 结束原因锁定为 max_tokens，
-        // 并在 done 事件附带 warning 让前端提示用户
-        turnEnd = stickyMaxTokens
-          ? { kind: "max_tokens", message: "输出可能因达到 token 上限被截断" }
-          : { kind: "completed" };
-        res.write(
-          `d:${JSON.stringify({
-            type: "done",
-            final: finalContent,
-            ...(stickyMaxTokens
-              ? {
-                  warning:
-                    "部分输出可能因达到 token 上限被截断，如需完整结果请简化需求。",
-                }
-              : {}),
-          })}\n`,
-        );
-        // 流结束标记（Data Stream 协议 e: 事件）
-        res.write(`e:${JSON.stringify({ type: "finish" })}\n`);
-      } catch (e) {
-        turnEnd = {
-          kind: "error",
-          code: "state_check_failed",
-          message: (e as Error).message,
-        };
-        if (!res.destroyed) {
-          res.write(
-            `d:${JSON.stringify({ type: "error", code: "state_check_failed", message: `状态检测失败: ${(e as Error).message}` })}\n`,
-          );
-        }
-      }
-
-      res.end();
-    } finally {
-      // 无论正常结束还是中断退出：标记服务端流程已结束并移除 close 监听
-      // 注意：res.end() 到 close 事件触发之间存在异步延迟，finished 须在
-      // 函数退出（finally）前置 true，确保正常结束不会误标脏
-      finished = true;
-      res.removeListener("close", onClose);
-
-      // 结构化 turn 结束记录：每个退出路径都在前面赋值了 turnEnd，
-      // 统一在此持久化到 turnState + 事件日志（interrupt 等待回答时
-      // turnEnd 为 null，turn 尚未结束，不记录）
-      if (turnEnd) {
-        session.turnState.turnEndReason = turnEnd;
-        this.appendEvent(session, "turn_end", {
-          turn: session.turnState.currentTurn,
-          reason: turnEnd,
-        });
-        this.logger.log(
-          `[Agent] turn=${session.turnState.currentTurn} ended kind=${turnEnd.kind}`,
-        );
-      }
-    }
+  /** 参数校验失败等场景：直接输出 error 事件并结束流 */
+  private failImmediately(res: SSEResponse, message: string): void {
+    this.setSSEHeaders(res);
+    this.sseEvent(res, { type: "error", message });
+    res.end();
   }
 
   /**
-   * 取消底层 graph 执行流（streamEvents 返回的流支持 cancel()）
+   * 追加 Agent 事件日志（轻量版 session log）
    *
-   * 通过 AbortSignal 终止后台执行。否则被放弃的执行会继续在后台跑完，
-   * 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务。
-   *
-   * @param stream - streamEvents 返回的流
-   * @param reason - 取消原因
-   */
-  private async cancelStream(stream: unknown, reason: string): Promise<void> {
-    try {
-      await (stream as { cancel?: (reason: string) => Promise<void> }).cancel?.(
-        reason,
-      );
-    } catch {
-      // cancel 失败可忽略：最坏情况是后台执行自行结束
-    }
-  }
-
-  /**
-   * 中断终止时的善后：保存 AI 已输出的消息到 session.messages
-   *
-   * stepLimitHit / loopDetected / maxTokensTerminated 等路径在 for await
-   * 循环中直接 return，跳过了 done 路径里唯一保存 AI 回复的代码
-   * （session.messages.push({ role: "assistant", ... })）。
-   * 导致下一轮对话时 LLM 看到「连续两条 user 消息、中间无 AI 回复」的
-   * 断层上下文 → 返回空回复 → 前端无任何显示（静默空回复 bug）。
-   *
-   * 此方法在 return 之前调用，从 graph 的 checkpoint
-   * 中提取最后一条 AI 消息并保存到 session.messages，保证上下文连贯。
-   *
-   * @param graph - 当前 graph 实例（含 checkpoint）
-   * @param config - streamEvents 的 config（含 thread_id）
-   * @param session - 当前会话
-   */
-  private async saveInterruptedState(
-    graph: Session["graph"],
-    config: RunnableConfig,
-    session: Session,
-  ): Promise<void> {
-    try {
-      const state = await graph.getState(config);
-      const stateValues = state.values as Record<string, unknown> | undefined;
-      const finalContent = this.extractFinalContent(stateValues);
-      // 只有非兜底文案时才保存（"处理完成"是 extractFinalContent 的兜底，
-      // 说明 state 里确实没有 AI 消息，不需要保存）
-      if (finalContent && finalContent !== "处理完成") {
-        session.messages.push({ role: "assistant", content: finalContent });
-        this.logger.log(
-          `[Agent] 已保存中断前的 AI 回复到 session.messages（${finalContent.slice(0, 80)}）`,
-        );
-      }
-    } catch (e) {
-      // getState 失败（如 checkpoint 已被 cancelStream 清空）降级：
-      // 不计入 messages 但也不阻塞流程，下一轮靠 tool 摘要恢复上下文
-      this.logger.warn(
-        `[Agent] 保存中断状态失败: ${(e as Error).message}`,
-      );
-    }
-  }
-
-  /**
-   * 追加 Agent 事件日志（Phase 5：轻量版 session log）
-   *
-   * 追加式不可变日志：与 session.messages（只保留最终结果）不同，
+   * 追加式不可变日志：与 history（只保留最终结果）不同，
    * 事件日志保留中间状态时间线，可按 turn/step 过滤排查问题。
    * 上限 1000 条，超出淘汰最旧的条目。
    *
@@ -1100,266 +1127,8 @@ export class ReactAgentService {
     data: Record<string, unknown>,
   ): void {
     session.events.push({ timestamp: Date.now(), type, data });
-    const MAX_EVENTS = 1000;
     if (session.events.length > MAX_EVENTS) {
       session.events.splice(0, session.events.length - MAX_EVENTS);
     }
-  }
-
-  /**
-   * 从 tool_end 事件的 output 中提取工具结果纯文本
-   *
-   * 实测（@langchain/langgraph ^1.4.9）：event.data.output 是 ToolMessage
-   * 的 JSON 字符串（LangChain 序列化格式），需解析后取 kwargs.content。
-   * 兼容三种形态：对象 / JSON 字符串 / 普通字符串。
-   *
-   * @param output - tool_end 事件的原始 output 值
-   * @returns 纯文本内容（工具返回的字符串，如 JSON 文本或错误信息）
-   */
-  private extractToolContent(output: unknown): string {
-    // 对象形态：可能是 ToolMessage 实例（content 平铺）或序列化形态（kwargs.content）
-    if (typeof output === "object" && output !== null) {
-      const obj = output as Record<string, unknown>;
-
-      // 序列化形态：{ lc, type, id, kwargs: { content } }
-      const kwargs = obj.kwargs;
-      if (
-        typeof kwargs === "object" &&
-        kwargs !== null &&
-        "content" in kwargs
-      ) {
-        return String((kwargs as Record<string, unknown>).content ?? "");
-      }
-
-      // ToolMessage 实例形态：content 属性直接平铺在实例上
-      if ("content" in obj && typeof obj.content === "string") {
-        return obj.content;
-      }
-
-      return JSON.stringify(output);
-    }
-
-    // 字符串形态：可能是 ToolMessage 的 JSON 序列化文本，尝试解析
-    if (typeof output === "string") {
-      try {
-        const parsed = JSON.parse(output) as Record<string, unknown>;
-        const kwargs = parsed.kwargs;
-        if (
-          typeof kwargs === "object" &&
-          kwargs !== null &&
-          "content" in kwargs
-        ) {
-          return String((kwargs as Record<string, unknown>).content ?? "");
-        }
-      } catch {
-        // 不是 JSON 字符串，原样返回
-      }
-      return output;
-    }
-
-    return JSON.stringify(output ?? "");
-  }
-
-  /**
-   * 为打断恢复记忆生成工具结果摘要
-   *
-   * 按工具名定制摘要策略，控制体积（≤1500 字符），只保留 LLM 恢复上下文
-   * 必需的关键信息（如 save 的 workflowId、read_file 的内容前几行）。
-   * 返回 null 表示该工具结果不需要记忆（如 get_platform_facts 每次可重查）。
-   *
-   * @param toolName - 工具名（如 read_file / save_to_coze）
-   * @param toolContent - 工具返回的完整文本（由 extractToolContent 提取）
-   * @returns 摘要字符串；无需记忆时返回 null
-   */
-  private summarizeToolResult(
-    toolName: string,
-    toolContent: string,
-  ): string | null {
-    const MAX_LEN = 1500;
-    const trunc = (s: string, max: number) =>
-      s.length > max ? s.slice(0, max) + "…（已截断）" : s;
-
-    // 尝试 JSON 解析，提取关键字段
-    let parsed: Record<string, unknown> | null = null;
-    try {
-      parsed = JSON.parse(toolContent) as Record<string, unknown>;
-    } catch {
-      // 不是 JSON，走纯文本截断
-    }
-
-    switch (toolName) {
-      case "read_file": {
-        // 保留文件内容前 1500 字符
-        return trunc(`[read_file] ${toolContent.slice(0, MAX_LEN)}`, MAX_LEN);
-      }
-
-      case "get_platform_facts":
-        // 平台事实每次可重查，且本身已瘦身，无需记忆
-        return null;
-
-      case "plan_workflow": {
-        if (parsed?.steps && Array.isArray(parsed.steps)) {
-          const steps = parsed.steps as Array<{
-            nodeType?: string;
-            description?: string;
-          }>;
-          const stepSummary = steps
-            .map((s) => `${s.nodeType ?? "?"}(${s.description ?? ""})`)
-            .join("→");
-          return `[plan_workflow] ${(parsed.name as string) ?? "?"}，${steps.length} 步: ${stepSummary}`;
-        }
-        return trunc(`[plan_workflow] ${toolContent.slice(0, 800)}`, MAX_LEN);
-      }
-
-      case "generate_workflow": {
-        if (parsed?.workflow) {
-          const wf = parsed.workflow as Record<string, unknown>;
-          const meta = wf.meta as Record<string, unknown> | undefined;
-          const name = meta?.name ?? "?";
-          const valid = (parsed.validation as Record<string, boolean>)?.valid
-            ? "通过"
-            : "失败";
-          return `[generate_workflow] ${name} 生成完成，结构校验${valid}`;
-        }
-        return trunc(
-          `[generate_workflow] ${toolContent.slice(0, 500)}`,
-          MAX_LEN,
-        );
-      }
-
-      case "save_to_coze": {
-        // 最关键：必须完整保留 workflowId + name + saved 状态
-        if (parsed) {
-          const id = parsed.workflowId ?? parsed.id ?? "?";
-          const name = parsed.name ?? "?";
-          const saved = parsed.saved ?? true;
-          return `[save_to_coze] workflowId=${id} name=${name} saved=${saved}`;
-        }
-        return trunc(`[save_to_coze] ${toolContent}`, MAX_LEN);
-      }
-
-      case "update_workflow": {
-        if (parsed?.changes) {
-          const changes =
-            typeof parsed.changes === "string"
-              ? parsed.changes
-              : JSON.stringify(parsed.changes);
-          return trunc(`[update_workflow] ${changes}`, MAX_LEN);
-        }
-        return trunc(`[update_workflow] ${toolContent.slice(0, 500)}`, MAX_LEN);
-      }
-
-      case "batch_validate": {
-        if (parsed) {
-          const accuracy = parsed.accuracy ?? "?";
-          const failed = parsed.failedCount ?? parsed.failed ?? "?";
-          const total = parsed.totalCount ?? parsed.total ?? "?";
-          return `[batch_validate] 通过 ${total}，accuracy=${accuracy}，${failed} 个失败`;
-        }
-        return trunc(`[batch_validate] ${toolContent.slice(0, 500)}`, MAX_LEN);
-      }
-
-      case "test_run_workflow": {
-        if (parsed?.executeId) {
-          return `[test_run_workflow] executeId=${parsed.executeId}`;
-        }
-        return trunc(
-          `[test_run_workflow] ${toolContent.slice(0, 300)}`,
-          MAX_LEN,
-        );
-      }
-
-      case "read_workflow": {
-        // 说明书内容很长，只取概览信息
-        const nodeMatch = toolContent.match(/节点数[：:]\s*(\d+)/);
-        const nameMatch = toolContent.match(/^#\s*工作流说明书[：:]\s*(.+)/m);
-        const name = nameMatch?.[1]?.trim() ?? "?";
-        const nodeCount = nodeMatch?.[1] ?? "?";
-        return `[read_workflow] 已读取 ${name}（${nodeCount} 节点）`;
-      }
-
-      case "list_workflows": {
-        if (parsed?.workflows && Array.isArray(parsed.workflows)) {
-          const wfs = parsed.workflows as Array<{
-            workflowId?: string;
-            name?: string;
-          }>;
-          const names = wfs
-            .slice(0, 5)
-            .map((w) => w.name ?? w.workflowId)
-            .join(", ");
-          return `[list_workflows] 找到 ${wfs.length} 个工作流: ${names}`;
-        }
-        return trunc(`[list_workflows] ${toolContent.slice(0, 500)}`, MAX_LEN);
-      }
-
-      case "clarify_question":
-        // interrupt 场景不走 on_tool_end 正常流，无需记录
-        return null;
-
-      case "rename_workflow": {
-        if (parsed?.name) {
-          return `[rename_workflow] 已改名 ${parsed.name}`;
-        }
-        return trunc(`[rename_workflow] ${toolContent.slice(0, 300)}`, MAX_LEN);
-      }
-
-      default:
-        // 未知工具：截断 500 字符
-        return trunc(`[${toolName}] ${toolContent.slice(0, 500)}`, MAX_LEN);
-    }
-  }
-
-  /**
-   * 从 state 中提取 interrupt 数据
-   *
-   * 实测（@langchain/langgraph ^1.4.9）：interrupt() 的值存在
-   * state.tasks[].interrupts[].value 中，而非 state.values.__interrupt__。
-   */
-  private extractInterruptData(state: {
-    tasks?: Array<{
-      interrupts?: Array<{
-        value?: unknown;
-      }>;
-    }>;
-  }): { question: string; context?: string } | null {
-    // 遍历 tasks 中的 interrupts，找到 clarify_question 抛出的问题
-    for (const task of state.tasks ?? []) {
-      for (const item of task.interrupts ?? []) {
-        const value = item.value as
-          | { question?: string; context?: string }
-          | undefined;
-        if (value && typeof value.question === "string") {
-          return {
-            question: value.question,
-            context: value.context,
-          };
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * 从 state 中提取最终消息内容
-   */
-  private extractFinalContent(
-    stateValues: Record<string, unknown> | undefined,
-  ): string {
-    if (!stateValues) return "处理完成";
-
-    const messages = stateValues.messages as Array<{
-      type?: string;
-      content?: string;
-    }>;
-    if (Array.isArray(messages) && messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg?.type === "ai" && lastMsg?.content) {
-        return lastMsg.content;
-      }
-    }
-
-    return "处理完成";
   }
 }

@@ -2,7 +2,7 @@
  * 工具注册列表
  *
  * 职责：
- * 汇总所有工具，供 createReactAgent 使用。
+ * 汇总所有工具，供 ReactAgentService 自建主循环使用。
  *
  * 关键细节：
  * - clarify_question 放在列表最前面，确保 LLM 优先考虑信息澄清
@@ -62,7 +62,6 @@ function stringifyToolOutput(result: unknown): string {
  * 单个工具调用超过阈值后放弃等待，返回「工具调用超时」提示给 LLM，
  * 不中断整个 Agent 流。JS 无法强制终止 Promise，底层任务继续在后台跑，
  * 但超时后其结果被丢弃、后续错误被吞掉，避免 unhandledRejection。
- * GraphInterrupt 等正常流程异常照常传播（不受超时影响）。
  *
  * @param tool - 原始工具实例
  * @param toolName - 工具名（用于超时提示）
@@ -115,12 +114,9 @@ function withToolTimeout<T extends StructuredToolInterface>(
  * 通过覆盖实例 invoke 方法实现（StructuredTool 原型方法可被实例属性遮蔽），
  * 在 ALL_TOOLS 注册时统一包装，12 个工具自动覆盖，无需逐文件埋点。
  *
- * 特殊处理：clarify_question 触发的 GraphInterrupt 是正常的 interrupt 暂停，
- * 记为 debug 而非 error，避免误报工具失败。
- *
  * @param tool - 原始工具实例
  * @param toolName - 工具名（用于日志）
- * @returns 包装后的工具实例（类型不变，可直接传给 createReactAgent）
+ * @returns 包装后的工具实例（类型不变，可直接传给 bindTools）
  */
 function withToolLog<T extends StructuredToolInterface>(
   tool: T,
@@ -146,14 +142,9 @@ function withToolLog<T extends StructuredToolInterface>(
       );
       return result;
     } catch (e) {
-      if (e instanceof Error && e.name === "GraphInterrupt") {
-        // interrupt 暂停是正常流程（clarify_question），不是失败
-        toolLogger.debug(`[Tool] ${toolName} interrupt 暂停`);
-      } else {
-        toolLogger.error(
-          `[Tool] ${toolName} ✗ ${Date.now() - start}ms ${(e as Error).message}`,
-        );
-      }
+      toolLogger.error(
+        `[Tool] ${toolName} ✗ ${Date.now() - start}ms ${(e as Error).message}`,
+      );
       throw e;
     }
   };
@@ -161,7 +152,7 @@ function withToolLog<T extends StructuredToolInterface>(
 }
 
 /**
- * 工具注册列表（供 createReactAgent 使用）
+ * 工具注册列表（供自建主循环 bindTools 使用）
  *
  * 每个工具都用 withToolLog 包装，统一埋入入参/出参/耗时日志。
  */
