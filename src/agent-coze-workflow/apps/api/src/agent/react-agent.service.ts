@@ -35,7 +35,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { Logger } from "@nestjs/common";
 import { ALL_TOOLS } from "./tools";
 import { sessionStore } from "./session.store";
-import type { Session } from "./session.store";
+import type { AgentEvent, Session, TurnEndReason } from "./session.store";
 import { uploadPathStore } from "./upload-store";
 
 /**
@@ -233,20 +233,29 @@ export class ReactAgentService {
       );
     }
 
-    // 3. 设置新 driver 的 phase 和 AbortController
+    // 3. Turn/Step 追踪 + 设置新 driver 的 phase 和 AbortController
+    // （Harness 双层循环：每次用户消息 = 1 个新 turn；turn 内一次 LLM 调用 = 1 个 step）
+    session.turnState.currentTurn += 1;
+    session.turnState.currentStep = 0;
+    session.turnState.turnEndReason = undefined;
     session.phase = "running";
     session.abortController = new AbortController();
+    this.logger.log(
+      `[Agent] phase: idle → running (turn=${session.turnState.currentTurn}, step=0)`,
+    );
 
-    // 4. 添加用户消息到历史
+    // 4. 添加用户消息到历史 + Inbox 分离：用户消息进入 nextTurn 队列
+    // （工具结果只进 inbox.nextStep，不污染用户消息序列）
     session.messages.push({ role: "user", content: message });
+    session.inbox.nextTurn.push({ role: "user", content: message });
 
     // 5. 将历史消息转换为 LangChain BaseMessage 数组
     const langchainMessages: BaseMessage[] = [];
 
-    // 打断恢复记忆：把此前会话的工具结果摘要作为上下文注入（纯文本 SystemMessage，
-    // 不做 ToolMessage，避免 LangGraph 消息配对校验失败）。
-    // 所有 chat 请求都注入（正常链路 tool 消息不存在，代价可忽略）。
-    const toolSummaries = session.messages.filter((m) => m.role === "tool");
+    // 打断恢复记忆：把 inbox.nextStep 中的工具结果摘要作为上下文注入
+    // （纯文本 SystemMessage，不做 ToolMessage，避免 LangGraph 消息配对校验失败）。
+    // 所有 chat 请求都注入（正常链路 nextStep 为空，代价可忽略）。
+    const toolSummaries = session.inbox.nextStep;
     if (toolSummaries.length > 0) {
       const contextText =
         "【系统记录：以下是此前会话已完成的工具操作结果（用于恢复上下文，不是用户新消息）】\n" +
@@ -281,8 +290,13 @@ export class ReactAgentService {
     }
 
     // 8. 发送 turn 事件（前端可展示「第 N 轮对话」）
-    const turnCount = session.messages.filter((m) => m.role === "user").length;
-    res.write(`d:${JSON.stringify({ type: "turn_start", turn: turnCount })}\n`);
+    res.write(
+      `d:${JSON.stringify({ type: "turn_start", turn: session.turnState.currentTurn })}\n`,
+    );
+    // 事件日志：turn 开始（Phase 5 轻量版 session log）
+    this.appendEvent(session, "turn_start", {
+      turn: session.turnState.currentTurn,
+    });
 
     // 9. 创建 runningPromise：下一个 handleChat 打断时用它等旧 driver 退出
     let resolvePromise: () => void;
@@ -311,9 +325,16 @@ export class ReactAgentService {
     } finally {
       // 收敛：phase 回 idle、释放 AbortController、resolve runningPromise
       // （等待中的下一个 handleChat 由此被唤醒）
+      // 断言打破控制流收窄：方法体前文已赋 undefined，TS 会把属性收窄成 never
+      const reason =
+        (session.turnState.turnEndReason as TurnEndReason | undefined)?.kind ??
+        "interrupt_pending";
       session.phase = "idle";
       session.abortController = null;
       resolvePromise!();
+      this.logger.log(
+        `[Agent] phase: running → idle (turn=${session.turnState.currentTurn}, reason=${reason})`,
+      );
     }
   }
 
@@ -362,9 +383,15 @@ export class ReactAgentService {
       session.graph = this.createGraph();
     }
 
-    // 设置新 phase 与 AbortController
+    // 设置新 phase 与 AbortController（resume 继续同一 turn，不递增 turn 计数，
+    // 但 step 从 0 重新计数：步数上限是单次执行的兜底保护）
+    session.turnState.currentStep = 0;
+    session.turnState.turnEndReason = undefined;
     session.phase = "running";
     session.abortController = new AbortController();
+    this.logger.log(
+      `[Agent] phase: idle → running (turn=${session.turnState.currentTurn}, step=0, resume)`,
+    );
 
     this.setSSEHeaders(res);
 
@@ -413,9 +440,16 @@ export class ReactAgentService {
       );
     } finally {
       // 收敛：phase 回 idle、释放 AbortController、resolve runningPromise
+      // 断言打破控制流收窄：方法体前文已赋 undefined，TS 会把属性收窄成 never
+      const reason =
+        (session.turnState.turnEndReason as TurnEndReason | undefined)?.kind ??
+        "interrupt_pending";
       session.phase = "idle";
       session.abortController = null;
       resolvePromise!();
+      this.logger.log(
+        `[Agent] phase: running → idle (turn=${session.turnState.currentTurn}, reason=${reason})`,
+      );
     }
   }
 
@@ -440,6 +474,13 @@ export class ReactAgentService {
   /**
    * 流式迭代 graph 事件，写入 Data Stream 协议
    *
+   * 借鉴 DeepSeek Harness 主循环设计（在 LangGraph ReAct 循环外层增强）：
+   * - Turn/Step 追踪：on_chat_model_start = step 边界，超 maxStepsPerTurn 终止
+   * - 死循环拦截：同一工具同一参数连续 4 次 → loop_detected 终止
+   * - max_tokens 检测：finish_reason=length 粘性标记，连续 2 步截断终止
+   * - 结构化错误：AbortError → aborted；Recursion → step_limit；其余 → error+code
+   * - 事件日志：turn/step/tool/llm 关键节点追加 AgentEvent
+   *
    * 事件类型：
    * - on_chat_model_stream → 0:"text"（LLM 文本增量）
    * - on_tool_start → d:{"type":"tool_start",...}
@@ -460,6 +501,26 @@ export class ReactAgentService {
     let complete = false;
     // 服务端主动结束标记：true 表示流由服务端正常完成（非客户端打断）
     let finished = false;
+    // 结构化 turn 结束原因：每个退出路径（正常/截断/打断/错误/步数上限）
+    // 都赋值，finally 中统一持久化到 turnState + 事件日志
+    let turnEnd: TurnEndReason | null = null;
+
+    // ============================================
+    // Pre-step 拦截状态（借鉴 Harness pre-step waterfall reject）
+    // ============================================
+    // 死循环检测：同一工具 + 同一参数连续调用（第 4 次相同调用被拦截）
+    let lastToolName = "";
+    let lastToolInput = "";
+    let repeatCount = 0;
+    let loopDetected: { name: string; input: unknown } | null = null;
+    // 步数上限：on_chat_model_start 时检测，超过 maxStepsPerTurn 终止
+    let stepLimitHit = false;
+    // max_tokens 检测：finish_reason === "length" 表示输出被 token 上限截断
+    let stickyMaxTokens = false;
+    let maxTokensStreak = 0;
+    let maxTokensTerminated = false;
+    // 每 step 首 chunk 标记：llm_call 事件只记一次（避免逐 chunk 刷事件日志）
+    let firstChunkOfStep = false;
 
     // close 事件兑底：用户直接关浏览器标签页时没有新的 handleChat 调用来发
     // abort，close 事件由事件循环立即触发（for await 循环里等下一事件时
@@ -487,37 +548,42 @@ export class ReactAgentService {
           // 「打断并发送」时 handleChat 先 abort 再等旧 driver 退出，
           // 这里立即停止迭代
           if (signal?.aborted) {
-            // 主动取消底层 graph 执行：streamEvents 返回的流支持 cancel()，
-            // 终止后台执行。否则被放弃的执行会继续在后台跑完，
+            // 主动取消底层 graph 执行：否则被放弃的执行会继续在后台跑完，
             // 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务
-            try {
-              await (
-                stream as unknown as {
-                  cancel?: (reason: string) => Promise<void>;
-                }
-              ).cancel?.(String(signal.reason ?? "aborted"));
-            } catch {
-              // cancel 失败可忽略：signal 已发，底层 LLM 调用也会响应 abort
-            }
+            await this.cancelStream(stream, String(signal.reason ?? "aborted"));
             break;
           }
 
           // 检查点 2：res.destroyed（兑底，客户端已经断开但没发 abort）
           if (res.destroyed) {
             session.abortController?.abort("client-disconnect");
-            try {
-              await (
-                stream as unknown as {
-                  cancel?: (reason: string) => Promise<void>;
-                }
-              ).cancel?.("client-disconnect");
-            } catch {
-              // cancel 失败可忽略
-            }
+            await this.cancelStream(stream, "client-disconnect");
             break;
           }
 
           switch (event.event) {
+            case "on_chat_model_start": {
+              // Step 追踪：一次 LLM 调用 = 1 个 step（Harness 定义）
+              session.turnState.currentStep += 1;
+              const step = session.turnState.currentStep;
+              const turn = session.turnState.currentTurn;
+              this.logger.log(
+                `[Agent] turn=${turn} step=${step} llm_call (model=${event.name ?? "unknown"})`,
+              );
+              this.appendEvent(session, "step_start", {
+                turn,
+                step,
+                model: event.name ?? "unknown",
+              });
+              firstChunkOfStep = false;
+
+              // 步数上限检查（死循环保护）：超过 maxStepsPerTurn 终止
+              if (step > session.turnState.maxStepsPerTurn) {
+                stepLimitHit = true;
+              }
+              break;
+            }
+
             case "on_chat_model_stream": {
               // LLM 文本增量
               const chunk = event.data?.chunk as
@@ -526,6 +592,33 @@ export class ReactAgentService {
                     additional_kwargs?: Record<string, unknown>;
                   } & Record<string, unknown>)
                 | undefined;
+
+              // 每 step 首 chunk：记录 llm_call 事件（内容预览 ≤ 50 字符）
+              if (!firstChunkOfStep) {
+                firstChunkOfStep = true;
+                const preview =
+                  typeof chunk?.content === "string"
+                    ? chunk.content.slice(0, 50)
+                    : "";
+                this.appendEvent(session, "llm_call", {
+                  turn: session.turnState.currentTurn,
+                  step: session.turnState.currentStep,
+                  preview,
+                });
+              }
+
+              // max_tokens 检测：最后一个 chunk 携带 finish_reason，
+              // "length" 表示输出被 token 上限截断（粘性标记，不可降级）
+              const finishReason =
+                (
+                  chunk?.response_metadata as
+                    | { finish_reason?: string }
+                    | undefined
+                )?.finish_reason ??
+                (chunk?.additional_kwargs?.finish_reason as string | undefined);
+              if (finishReason === "length") {
+                stickyMaxTokens = true;
+              }
 
               // DeepSeek 思考内容（reasoning_content，流式增量）
               // 单独输出 reasoning_delta 事件，前端在思考气泡里流式展示
@@ -564,11 +657,31 @@ export class ReactAgentService {
               const toolInput = event.data?.input ?? {};
               // info 级别：默认可见，用于定位 Agent 循环/卡住的步骤（debug 不输出）
               this.logger.log(
-                `[Agent] tool_start ${toolName} ${JSON.stringify(toolInput).slice(0, 200)}`,
+                `[Agent] turn=${session.turnState.currentTurn} step=${session.turnState.currentStep} tool_start ${toolName} ${JSON.stringify(toolInput).slice(0, 200)}`,
               );
               res.write(
                 `d:${JSON.stringify({ type: "tool_start", name: toolName, input: toolInput })}\n`,
               );
+              this.appendEvent(session, "tool_start", {
+                turn: session.turnState.currentTurn,
+                step: session.turnState.currentStep,
+                name: toolName,
+                input: toolInput,
+              });
+
+              // 死循环检测（pre-step 拦截）：同一工具 + 同一参数连续调用，
+              // 第 4 次相同调用判定为死循环（repeatCount >= 3 即第 4 次）
+              const inputKey = JSON.stringify(toolInput);
+              if (lastToolName === toolName && lastToolInput === inputKey) {
+                repeatCount += 1;
+              } else {
+                lastToolName = toolName;
+                lastToolInput = inputKey;
+                repeatCount = 0;
+              }
+              if (repeatCount >= 3) {
+                loopDetected = { name: toolName, input: toolInput };
+              }
               break;
             }
 
@@ -579,15 +692,22 @@ export class ReactAgentService {
               const toolContent = this.extractToolContent(output);
               // info 级别：默认可见，用于定位 Agent 循环/卡住的步骤（debug 不输出）
               this.logger.log(
-                `[Agent] tool_end ${toolName} ${toolContent.slice(0, 200)}`,
+                `[Agent] turn=${session.turnState.currentTurn} step=${session.turnState.currentStep} tool_end ${toolName} ${toolContent.slice(0, 200)}`,
               );
               res.write(
                 `d:${JSON.stringify({ type: "tool_end", name: toolName, output: toolContent })}\n`,
               );
-              // 打断恢复记忆：关键工具结果以摘要形式记入 session.messages（role:"tool"）
+              this.appendEvent(session, "tool_end", {
+                turn: session.turnState.currentTurn,
+                step: session.turnState.currentStep,
+                name: toolName,
+                output: toolContent.slice(0, 200),
+              });
+              // 打断恢复记忆：关键工具结果以摘要形式记入 inbox.nextStep
+              // （Inbox 分离：工具结果不污染 session.messages 用户消息序列）
               const summary = this.summarizeToolResult(toolName, toolContent);
               if (summary) {
-                session.messages.push({
+                session.inbox.nextStep.push({
                   role: "tool",
                   toolName,
                   content: summary,
@@ -595,40 +715,196 @@ export class ReactAgentService {
               }
               break;
             }
+
+            case "on_chat_model_end": {
+              // Step 结束：检查 finish_reason，检测 max_tokens 截断
+              const output = event.data?.output as
+                | {
+                    response_metadata?: { finish_reason?: string };
+                  }
+                | undefined;
+              this.appendEvent(session, "step_end", {
+                turn: session.turnState.currentTurn,
+                step: session.turnState.currentStep,
+              });
+              if (output?.response_metadata?.finish_reason === "length") {
+                // max_tokens 粘性：一旦命中，turn 结果锁定为 max_tokens
+                stickyMaxTokens = true;
+                maxTokensStreak += 1;
+                this.logger.warn(
+                  `[Agent] turn=${session.turnState.currentTurn} step=${session.turnState.currentStep} max_tokens (finish_reason=length)`,
+                );
+                // 连续 2 步被截断 → 直接终止并向用户报告
+                if (maxTokensStreak >= 2) {
+                  maxTokensTerminated = true;
+                }
+              } else {
+                maxTokensStreak = 0;
+              }
+              break;
+            }
+          }
+
+          // ============================================
+          // Pre-step 拦截点（借鉴 Harness pre-step waterfall reject）：
+          // 检测到死循环 / 步数超限 / 连续截断时，不执行下一步，
+          // 终止当前流并向用户汇报
+          // ============================================
+          if (loopDetected) {
+            const { name, input } = loopDetected;
+            const msg = `检测到工具 ${name} 连续 4 次以相同参数被调用（疑似死循环），已停止执行。请简化需求或提供更明确的信息后重试。`;
+            turnEnd = { kind: "error", code: "loop_detected", message: msg };
+            // 注入 stop 消息到 nextStep：下次对话时 LLM 能看到循环警告
+            session.inbox.nextStep.push({
+              role: "tool",
+              toolName: "system",
+              content: `[系统拦截] ${name} 连续 4 次相同参数调用被判定为死循环，已强制停止。`,
+            });
+            await this.cancelStream(stream, "loop-detected");
+            this.appendEvent(session, "error", {
+              turn: session.turnState.currentTurn,
+              code: "loop_detected",
+              message: msg,
+            });
+            this.logger.warn(
+              `[Agent] loop_detected: ${name} ${JSON.stringify(input).slice(0, 200)}`,
+            );
+            if (!res.destroyed) {
+              res.write(
+                `d:${JSON.stringify({ type: "loop_detected", tool: name, message: msg })}\n`,
+              );
+              res.write(
+                `d:${JSON.stringify({ type: "error", code: "loop_detected", message: msg })}\n`,
+              );
+              res.end();
+            }
+            return;
+          }
+
+          if (stepLimitHit) {
+            const maxSteps = session.turnState.maxStepsPerTurn;
+            const msg = `Agent 单轮执行超过 ${maxSteps} 步，已停止。请简化需求或提供更明确的信息后重试。`;
+            turnEnd = { kind: "step_limit", maxSteps };
+            await this.cancelStream(stream, "step-limit");
+            this.appendEvent(session, "error", {
+              turn: session.turnState.currentTurn,
+              code: "step_limit",
+              message: msg,
+            });
+            this.logger.warn(
+              `[Agent] step_limit: turn=${session.turnState.currentTurn} steps>${maxSteps}`,
+            );
+            if (!res.destroyed) {
+              res.write(
+                `d:${JSON.stringify({ type: "step_limit", maxSteps, message: msg })}\n`,
+              );
+              res.write(
+                `d:${JSON.stringify({ type: "error", code: "step_limit", message: msg })}\n`,
+              );
+              res.end();
+            }
+            return;
+          }
+
+          if (maxTokensTerminated) {
+            const msg =
+              "连续两次输出达到模型 token 上限（内容可能被截断）。请简化需求或拆分为更小的步骤。";
+            turnEnd = { kind: "max_tokens", message: msg };
+            await this.cancelStream(stream, "max-tokens");
+            this.appendEvent(session, "error", {
+              turn: session.turnState.currentTurn,
+              code: "max_tokens",
+              message: msg,
+            });
+            this.logger.warn(
+              `[Agent] max_tokens: turn=${session.turnState.currentTurn} 连续 ${maxTokensStreak} 步输出被截断`,
+            );
+            if (!res.destroyed) {
+              res.write(
+                `d:${JSON.stringify({ type: "error", code: "max_tokens", message: msg })}\n`,
+              );
+              res.end();
+            }
+            return;
           }
         }
 
         complete = true;
       } catch (e) {
-        // 被 abort 打断视为正常打断：发送 aborted 事件，不报错
+        // ============================================
+        // 结构化错误分类（替代纯字符串 try/catch）：
+        // AbortError → aborted；Recursion limit → step_limit；其余 → error+code
+        // ============================================
         if (signal?.aborted || (e as Error).name === "AbortError") {
+          turnEnd = {
+            kind: "aborted",
+            reason: String((e as Error).message ?? "aborted"),
+          };
+          this.appendEvent(session, "aborted", {
+            turn: session.turnState.currentTurn,
+            reason: turnEnd.reason,
+          });
           if (!res.destroyed) {
             res.write(`d:${JSON.stringify({ type: "aborted" })}\n`);
             res.end();
           }
           return;
         }
-        // 流异常
+
         const msg = (e as Error).message;
-        this.logger.error(`[Agent] ✗ ${msg}`);
-        // 识别递归上限错误 → 提示用户 Agent 循环过深
-        const isRecursion =
-          msg.includes("Recursion limit") || msg.includes("recursion_limit");
-        res.write(
-          `d:${JSON.stringify({
-            type: "error",
-            message: isRecursion
-              ? "Agent 执行步骤过多（可能陷入循环），已停止。请简化需求或提供更明确的信息后重试。"
-              : msg,
-          })}\n`,
-        );
-        res.end();
+        // 递归上限错误 → step_limit（提示用户 Agent 循环过深）
+        if (
+          msg.includes("Recursion limit") ||
+          msg.includes("recursion_limit")
+        ) {
+          const friendly =
+            "Agent 执行步骤过多（可能陷入循环），已停止。请简化需求或提供更明确的信息后重试。";
+          turnEnd = { kind: "step_limit", maxSteps: 100 };
+          this.appendEvent(session, "error", {
+            turn: session.turnState.currentTurn,
+            code: "recursion_limit",
+            message: msg,
+          });
+          if (!res.destroyed) {
+            res.write(
+              `d:${JSON.stringify({ type: "step_limit", maxSteps: 100, message: friendly })}\n`,
+            );
+            res.write(
+              `d:${JSON.stringify({ type: "error", code: "recursion_limit", message: friendly })}\n`,
+            );
+            res.end();
+          }
+          return;
+        }
+
+        // 其余流异常 → error with code（LLM 调用失败等）
+        turnEnd = { kind: "error", code: "llm_error", message: msg };
+        this.logger.error(`[Agent] ✗ [llm_error] ${msg}`);
+        this.appendEvent(session, "error", {
+          turn: session.turnState.currentTurn,
+          code: "llm_error",
+          message: msg,
+        });
+        if (!res.destroyed) {
+          res.write(
+            `d:${JSON.stringify({ type: "error", code: "llm_error", message: msg })}\n`,
+          );
+          res.end();
+        }
         return;
       }
 
       // 被 abort 打断的流：发送 aborted 事件并退出
       // （新消息由新的 handleChat 响应处理，这里只负责收尾旧流）
       if (signal?.aborted) {
+        turnEnd = {
+          kind: "aborted",
+          reason: String(signal.reason ?? "aborted"),
+        };
+        this.appendEvent(session, "aborted", {
+          turn: session.turnState.currentTurn,
+          reason: turnEnd.reason,
+        });
         if (!res.destroyed) {
           res.write(`d:${JSON.stringify({ type: "aborted" })}\n`);
           res.end();
@@ -638,6 +914,7 @@ export class ReactAgentService {
 
       // 客户端断开时不继续处理
       if (res.destroyed) {
+        turnEnd = { kind: "aborted", reason: "client-disconnect" };
         return;
       }
 
@@ -667,21 +944,42 @@ export class ReactAgentService {
         }
 
         // 无 interrupt，提取最终消息
-        this.logger.log("[Agent] done");
+        this.logger.log(`[Agent] turn=${session.turnState.currentTurn} done`);
         const finalContent = this.extractFinalContent(stateValues);
         if (session) {
           session.messages.push({ role: "assistant", content: finalContent });
         }
 
+        // max_tokens 粘性：曾命中截断的 turn 结束原因锁定为 max_tokens，
+        // 并在 done 事件附带 warning 让前端提示用户
+        turnEnd = stickyMaxTokens
+          ? { kind: "max_tokens", message: "输出可能因达到 token 上限被截断" }
+          : { kind: "completed" };
         res.write(
-          `d:${JSON.stringify({ type: "done", final: finalContent })}\n`,
+          `d:${JSON.stringify({
+            type: "done",
+            final: finalContent,
+            ...(stickyMaxTokens
+              ? {
+                  warning:
+                    "部分输出可能因达到 token 上限被截断，如需完整结果请简化需求。",
+                }
+              : {}),
+          })}\n`,
         );
         // 流结束标记（Data Stream 协议 e: 事件）
         res.write(`e:${JSON.stringify({ type: "finish" })}\n`);
       } catch (e) {
-        res.write(
-          `d:${JSON.stringify({ type: "error", message: `状态检测失败: ${(e as Error).message}` })}\n`,
-        );
+        turnEnd = {
+          kind: "error",
+          code: "state_check_failed",
+          message: (e as Error).message,
+        };
+        if (!res.destroyed) {
+          res.write(
+            `d:${JSON.stringify({ type: "error", code: "state_check_failed", message: `状态检测失败: ${(e as Error).message}` })}\n`,
+          );
+        }
       }
 
       res.end();
@@ -691,6 +989,62 @@ export class ReactAgentService {
       // 函数退出（finally）前置 true，确保正常结束不会误标脏
       finished = true;
       res.removeListener("close", onClose);
+
+      // 结构化 turn 结束记录：每个退出路径都在前面赋值了 turnEnd，
+      // 统一在此持久化到 turnState + 事件日志（interrupt 等待回答时
+      // turnEnd 为 null，turn 尚未结束，不记录）
+      if (turnEnd) {
+        session.turnState.turnEndReason = turnEnd;
+        this.appendEvent(session, "turn_end", {
+          turn: session.turnState.currentTurn,
+          reason: turnEnd,
+        });
+        this.logger.log(
+          `[Agent] turn=${session.turnState.currentTurn} ended kind=${turnEnd.kind}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * 取消底层 graph 执行流（streamEvents 返回的流支持 cancel()）
+   *
+   * 通过 AbortSignal 终止后台执行。否则被放弃的执行会继续在后台跑完，
+   * 到达 recursionLimit 时抛出的异常无处理器 → 未捕获异常崩溃整个服务。
+   *
+   * @param stream - streamEvents 返回的流
+   * @param reason - 取消原因
+   */
+  private async cancelStream(stream: unknown, reason: string): Promise<void> {
+    try {
+      await (stream as { cancel?: (reason: string) => Promise<void> }).cancel?.(
+        reason,
+      );
+    } catch {
+      // cancel 失败可忽略：最坏情况是后台执行自行结束
+    }
+  }
+
+  /**
+   * 追加 Agent 事件日志（Phase 5：轻量版 session log）
+   *
+   * 追加式不可变日志：与 session.messages（只保留最终结果）不同，
+   * 事件日志保留中间状态时间线，可按 turn/step 过滤排查问题。
+   * 上限 1000 条，超出淘汰最旧的条目。
+   *
+   * @param session - 会话
+   * @param type - 事件类型
+   * @param data - 事件数据
+   */
+  private appendEvent(
+    session: Session,
+    type: AgentEvent["type"],
+    data: Record<string, unknown>,
+  ): void {
+    session.events.push({ timestamp: Date.now(), type, data });
+    const MAX_EVENTS = 1000;
+    if (session.events.length > MAX_EVENTS) {
+      session.events.splice(0, session.events.length - MAX_EVENTS);
     }
   }
 
