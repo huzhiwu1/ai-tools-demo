@@ -8,14 +8,16 @@
  * - 右侧面板展示：工具调用链 / 工作流草图 / JSON 输出 / 校验结果 / 保存按钮
  *
  * 关键细节：
- * - 后端输出自定义 Data Stream（0:/d:/e:），useChat 自定义 fetch 适配为
- *   AI SDK 标准协议（0:/2:[...]/3:），d: 事件进入 data 数组
+ * - 后端输出自定义 Data Stream（0:/d:/e:），useChat 自定义 fetch 仅将 d: 事件
+ *   适配为 AI SDK 标准 2: data 事件；0: 文本行直通 useChat 原生累积，
+ *   不再手动分段——彻底消除了 useChat 快照重置覆盖前端 setMessages 的根因
  * - 请求体通过 experimental_prepareRequestBody 改写为后端期望的
  *   { sessionId, message } 格式（useChat 默认发 messages 数组）
  * - resume 走手写 fetch + parseDataStream（方案 A），流式追加 AI 回复
+ * - reasoning 内容从 useChat data 数组派生，注入 messages 末尾渲染思考气泡
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import type {
   WorkflowPlan,
@@ -45,43 +47,7 @@ interface PendingQuestion {
   context?: string;
 }
 
-/**
- * 用分段累积文本重建 AI 气泡（done/interrupt 补偿）
- *
- * 背景：useChat 每收到一个 data 事件，都会用「发送时的消息快照 + 它自己累积的
- * assistant 消息」重置 messages。本应用把所有 0: 文本行都转成了 2: data 事件，
- * useChat 自己累积的消息恒为空 → 每次重置都会覆盖掉 text_delta 期间 setMessages
- * 添加的 AI 气泡（前端表现为 AI 回复完全不可见）。done/interrupt 是流的最后
- * 一个 data 事件，此时重建不会再被覆盖。
- *
- * 泛型 T 兼容 AI SDK 的 Message 与本地 ChatMessage 两种消息形态。
- *
- * @param prev - 当前消息列表
- * @param segments - 本轮累积的文本分段（每个分段 = 一个气泡）
- * @returns 重建后的消息列表
- */
-function rebuildAssistantSegments<T extends { id: string; content: string }>(
-  prev: T[],
-  segments: Array<{ id: string; content: string }>,
-): T[] {
-  let next = prev;
-  for (const seg of segments) {
-    const idx = next.findIndex((m) => m.id === seg.id);
-    if (idx === -1) {
-      // 气泡被快照重置覆盖 → 重建
-      next = [
-        ...next,
-        { id: seg.id, role: "assistant", content: seg.content } as unknown as T,
-      ];
-    } else if (next[idx].content !== seg.content) {
-      // 部分残留（覆盖竞态中间态）→ 补齐完整文本
-      next = next.map((m) =>
-        m.id === seg.id ? { ...m, content: seg.content } : m,
-      );
-    }
-  }
-  return next;
-}
+
 
 /**
  * 把 WorkflowPlan 映射为 WorkflowSketch 形态（供 WorkflowCanvas 展示）
@@ -213,18 +179,6 @@ export default function App() {
   // data 数组已处理位置（发送新消息时归零，配合 setData(undefined) 使用）
   const processedDataCount = useRef(0);
 
-  /** 当前正在累积文本的 assistant 消息 id（null = 没有开放的分段） */
-  const currentAssistantIdRef = useRef<string | null>(null);
-  /** 当前正在累积的思考段落消息 id（reasoning_delta 流式写入，工具调用/正式输出时封存） */
-  const currentReasoningIdRef = useRef<string | null>(null);
-  /**
-   * 本轮文本分段累积（每个分段 = 一个 AI 气泡的完整文本）
-   *
-   * 用于 done/interrupt 时的覆盖竞态补偿重建（详见 rebuildAssistantSegments）。
-   * 分段边界（tool_start/tool_end/interrupt）不截断数组，只切新分段。
-   */
-  const textSegmentsRef = useRef<Array<{ id: string; content: string }>>([]);
-
   const busy = isLoading || resuming;
 
   // ============================================
@@ -246,81 +200,14 @@ export default function App() {
           break;
         }
 
-        case "text_delta": {
-          const content = event.content ?? "";
-          if (!content) break;
-
-          // 正式输出开始 → 思考段落封存（固化到消息流，不再累积）
-          currentReasoningIdRef.current = null;
-
-          // 分段累积（done 补偿重建用）
-          const segments = textSegmentsRef.current;
-          const lastSeg = segments[segments.length - 1];
-          const openId = currentAssistantIdRef.current;
-
-          if (!openId || lastSeg?.id !== openId) {
-            // 没有开放分段 → 新建分段 + assistant 消息
-            const newId = crypto.randomUUID();
-            currentAssistantIdRef.current = newId;
-            segments.push({ id: newId, content });
-            setMessages((prev) => [
-              ...prev,
-              { id: newId, role: "assistant", content },
-            ]);
-            break;
-          }
-
-          // 有开放分段 → 追加文本
-          lastSeg.content += content;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === openId ? { ...m, content: m.content + content } : m,
-            ),
-          );
-          break;
-        }
-
         case "reasoning_delta": {
           // LLM 思考内容增量（DeepSeek reasoning_content）
-          // 固化到消息流（data.type="reasoning"），让用户看到完整决策过程
-          // （遇到什么问题、为什么这么做、准备怎么处理）
-          const content = event.content ?? "";
-          if (!content) break;
-          setMessages((prev) => {
-            // 没有开放的思考段落 → 新建一条 reasoning 消息
-            if (!currentReasoningIdRef.current) {
-              const newId = crypto.randomUUID();
-              currentReasoningIdRef.current = newId;
-              return [
-                ...prev,
-                {
-                  id: newId,
-                  role: "assistant",
-                  content: "",
-                  data: { type: "reasoning", content },
-                },
-              ];
-            }
-            // 有开放段落 → 追加内容
-            return prev.map((m) => {
-              if (m.id !== currentReasoningIdRef.current) return m;
-              const cur =
-                (m.data as { content?: string } | undefined)?.content ?? "";
-              return {
-                ...m,
-                data: { type: "reasoning", content: cur + content },
-              };
-            });
-          });
+          // 由 useChat data 数组累积，渲染时从 data 派生，不再用 setMessages
+          // （setMessages 在当前架构下会被 useChat 内部的 mutate 覆盖）
           break;
         }
 
         case "tool_start": {
-          // 分段边界：封存当前文本分段，后续文本进新气泡
-          currentAssistantIdRef.current = null;
-          // 工具调用前的思考段落封存（固化到消息流，用户能看到为什么调这个工具）
-          currentReasoningIdRef.current = null;
-
           const name = event.name ?? "unknown";
           // 渲染 key 用随机 UUID：不能用自增序号——打断发送新消息时旧流
           // 残留事件会重放（processedDataCount 已归零），HMR 时 ref 会随组件
@@ -338,9 +225,6 @@ export default function App() {
         }
 
         case "tool_end": {
-          // 工具结束后 AI 若继续说话 → 新气泡
-          currentAssistantIdRef.current = null;
-
           const name = event.name ?? "unknown";
           const output = event.output ?? "";
           // 判断工具是否真正失败（靠输出格式 + 错误前缀，不靠 contains "失败"）
@@ -382,46 +266,23 @@ export default function App() {
           const question = event.question ?? "请补充信息";
           const context = event.context;
           setPendingQuestion({ question, context });
-          // 封存思考段落
-          currentReasoningIdRef.current = null;
-          // 底部输入框切换为回复模式
           setReplyMode(true);
-          // interrupt 是流结束前最后一个 data 事件：先重建被覆盖的文本气泡，
-          // 再把问题固化到消息流（回答后仍保留，不会消失）
-          // 渲染时通过 data.type==="question" 显示提问卡片
-          const segments = textSegmentsRef.current;
-          setMessages((prev) => {
-            const base =
-              segments.length > 0
-                ? rebuildAssistantSegments(prev, segments)
-                : prev;
-            return [
-              ...base,
-              {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: "",
-                data: { type: "question", question, context: context ?? null },
-              },
-            ];
-          });
-          textSegmentsRef.current = [];
-          // 分段边界：封存当前文本分段
-          currentAssistantIdRef.current = null;
+          // 把问题固化到消息流（回答后仍保留，不会消失）
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              data: { type: "question", question, context: context ?? null },
+            },
+          ]);
           break;
         }
 
         case "done": {
-          // 一次对话完成。done 是流的最后一个 data 事件，此处用分段累积文本
-          // 重建被 useChat 快照重置覆盖的 AI 气泡（此后流结束，不再有覆盖）
-          const segments = textSegmentsRef.current;
-          if (segments.length > 0) {
-            setMessages((prev) => rebuildAssistantSegments(prev, segments));
-          }
-          textSegmentsRef.current = [];
-          // 关闭当前分段
-          currentAssistantIdRef.current = null;
-          currentReasoningIdRef.current = null;
+          // 一次对话完成。useChat 已通过原生 0: 协议累积了 assistant 消息，
+          // 无需手动重建——不再需要 textSegmentsRef / rebuildAssistantSegments。
           break;
         }
 
@@ -433,6 +294,30 @@ export default function App() {
     },
     [setMessages],
   );
+
+  // 从 useChat data 数组派生 reasoning 内容（reasoning_delta 事件由后端经 d: 事件发送，
+  // 经 transformToDataProtocolStream 转为 2: data 事件后累积在 data 数组中）
+  const reasoningContent = useMemo(() => {
+    let result = "";
+    for (const d of data ?? []) {
+      if (d != null && typeof d === "object" && !Array.isArray(d) && d.type === "reasoning_delta") {
+        result += String(d.content ?? "");
+      }
+    }
+    return result;
+  }, [data]);
+
+  // 将 reasoning 注入 messages 末尾（ChatMessageList 识别 data.type="reasoning" 渲染思考气泡）
+  const displayMessages = useMemo(() => {
+    if (!reasoningContent) return messages as ChatMessage[];
+    const reasoningMsg: ChatMessage = {
+      id: "reasoning-live",
+      role: "assistant",
+      content: "",
+      data: { type: "reasoning", content: reasoningContent },
+    };
+    return [...(messages as ChatMessage[]), reasoningMsg];
+  }, [messages, reasoningContent]);
 
   // data 数组变化时增量处理新事件（避免重复处理已消费的事件）
   useEffect(() => {
@@ -489,10 +374,6 @@ export default function App() {
     setToolCalls([]);
     processedDataCount.current = 0;
     setData(undefined);
-    // 发新消息时重置分段状态
-    currentAssistantIdRef.current = null;
-    currentReasoningIdRef.current = null;
-    textSegmentsRef.current = [];
     append({ role: "user", content: text });
   }
 
@@ -510,9 +391,6 @@ export default function App() {
     setPendingQuestion(null);
     setReplyMode(false);
     setGlobalError(null);
-
-    // 恢复对话前关闭当前分段，确保回答后的文本从新气泡开始
-    currentAssistantIdRef.current = null;
 
     setMessages((prev) => [
       ...prev,
@@ -539,13 +417,23 @@ export default function App() {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      // 复用 handleDataEvent 的 text_delta 分段逻辑
+      // resume 流文本直接追加到末尾 assistant 消息（不走 useChat，无覆盖问题）
       await parseDataStream(response, {
         onText: (delta) => {
-          handleDataEvent({
-            type: "text_delta",
-            content: delta,
-          } as DataStreamEvent);
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last && last.role === "assistant") {
+              return prev.map((m, i) =>
+                i === prev.length - 1
+                  ? { ...m, content: m.content + delta }
+                  : m,
+              );
+            }
+            return [
+              ...prev,
+              { id: crypto.randomUUID(), role: "assistant", content: delta },
+            ];
+          });
         },
         onEvent: (event) => handleDataEvent(event),
       });
@@ -610,7 +498,7 @@ export default function App() {
           )}
 
           <ChatMessageList
-            messages={messages as ChatMessage[]}
+            messages={displayMessages}
             isLoading={busy}
             pendingQuestion={pendingQuestion}
           />

@@ -137,7 +137,7 @@ export async function parseDataStream(
  * （供 useChat 的自定义 fetch 使用）
  *
  * 转换规则：
- * - 0:"text" → 2:[{type:"text_delta",content:"text"}]（转为 data 事件，前端手动分段管理）
+ * - 0:"text" → 直通（useChat 原生累积 assistant 消息，不再手动分段）
  * - d:{...}  → 2:[{...}]（数据事件，useChat 的 data 数组接收）
  * - d:{"type":"error"} → 3:"message"（触发 useChat 的 error 状态）
  * - e:{...}  → 丢弃（流自然结束，useChat 自动收尾）
@@ -160,13 +160,10 @@ export function transformToDataProtocolStream(
     if (!trimmed) return null;
 
     if (trimmed.startsWith("0:")) {
-      // 文本增量不再直通 useChat, 转为 text_delta data 事件
-      // 前端在 handleDataEvent 里手动分段管理
-      const text: unknown = JSON.parse(trimmed.slice(2));
-      if (typeof text === "string" && text.length > 0) {
-        return `2:${JSON.stringify([{ type: "text_delta", content: text }])}\n`;
-      }
-      return null;
+      // 文本增量直通 useChat（AI SDK 原生 0: 协议，useChat 自行累积 assistant 消息）
+      // 不再转为 2: data 事件——那是根因：useChat 收不到 0: 行 → 内部 assistant
+      // 消息恒为空 → 每次 data 事件用快照覆盖前端手动 setMessages → AI 回复不可见
+      return `${trimmed}\n`;
     }
 
     if (trimmed.startsWith("d:")) {
