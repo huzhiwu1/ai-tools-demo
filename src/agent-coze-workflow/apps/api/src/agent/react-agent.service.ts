@@ -250,11 +250,17 @@ export class ReactAgentService {
     session.inbox.nextTurn.push({ role: "user", content: message });
 
     // 5. 将历史消息转换为 LangChain BaseMessage 数组
+    //
+    // 关键：LangGraph checkpoint 按 thread_id 自动恢复历史消息。
+    // 正常多轮对话时不重建 graph，checkpoint 里已有完整历史，
+    // 此处只需传「本轮新增的消息」（工具摘要 + 新用户消息）。
+    // 如果传了全部历史消息，会与 checkpoint 已有的重复，导致
+    // LLM 看到畸形上下文（同一消息出现两次）→ 返回空回复。
+    //
+    // 打断恢复场景：graph 已重建，checkpoint 已清空，需要传全部历史。
     const langchainMessages: BaseMessage[] = [];
 
     // 打断恢复记忆：把 inbox.nextStep 中的工具结果摘要作为上下文注入
-    // （纯文本 SystemMessage，不做 ToolMessage，避免 LangGraph 消息配对校验失败）。
-    // 所有 chat 请求都注入（正常链路 nextStep 为空，代价可忽略）。
     const toolSummaries = session.inbox.nextStep;
     if (toolSummaries.length > 0) {
       const contextText =
@@ -263,12 +269,17 @@ export class ReactAgentService {
       langchainMessages.push(new SystemMessage(contextText));
     }
 
-    // 原有 user/assistant 消息
-    for (const m of session.messages) {
-      if (m.role === "user")
-        langchainMessages.push(new HumanMessage(m.content));
-      if (m.role === "assistant")
-        langchainMessages.push(new AIMessage(m.content));
+    if (wasInterrupted) {
+      // 打断恢复：graph 已重建（checkpoint 清空），传全部历史消息
+      for (const m of session.messages) {
+        if (m.role === "user")
+          langchainMessages.push(new HumanMessage(m.content));
+        if (m.role === "assistant")
+          langchainMessages.push(new AIMessage(m.content));
+      }
+    } else {
+      // 正常多轮：checkpoint 已有历史，只传本轮新用户消息
+      langchainMessages.push(new HumanMessage(message));
     }
 
     // 6. 设置 SSE 响应头
