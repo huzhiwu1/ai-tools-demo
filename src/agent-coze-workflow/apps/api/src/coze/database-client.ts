@@ -165,6 +165,11 @@ export class DatabaseClient {
     return { progress: r.data?.progress ?? -1 };
   }
 
+  /** 删除数据库（2026-08-18 实测，body 只要 id） */
+  async deleteDatabase(databaseId: string): Promise<unknown> {
+    return this.request("/api/memory/database/delete", { id: databaseId });
+  }
+
   /** 数据库列表（顶层 database_info_list） */
   async listDatabases(spaceId: string): Promise<Array<{ id: string; table_name: string }>> {
     const r = await this.request<{

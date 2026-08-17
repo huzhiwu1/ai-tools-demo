@@ -125,6 +125,24 @@ export const databaseImportTool = tool(
   },
 );
 
+export const databaseDeleteTool = tool(
+  async ({ databaseId }) => {
+    try {
+      await client().deleteDatabase(databaseId);
+      return JSON.stringify({ databaseId, deleted: true });
+    } catch (e) {
+      return `删除数据库失败: ${(e as Error).message}`;
+    }
+  },
+  {
+    name: "database_delete",
+    description: "删除数据库（不可恢复，谨慎调用）",
+    schema: z.object({
+      databaseId: z.string(),
+    }),
+  },
+);
+
 export const databaseProgressTool = tool(
   async ({ databaseId }) => {
     try {
