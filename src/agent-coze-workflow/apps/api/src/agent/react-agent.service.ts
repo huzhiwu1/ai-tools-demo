@@ -760,7 +760,6 @@ export class ReactAgentService {
               toolName: "system",
               content: `[系统拦截] ${name} 连续 4 次相同参数调用被判定为死循环，已强制停止。`,
             });
-            await this.cancelStream(stream, "loop-detected");
             // 善后：保存 AI 已输出的消息（同 stepLimitHit 的静默空回复修复）
             await this.saveInterruptedState(session.graph, config, session);
             this.appendEvent(session, "error", {
@@ -787,7 +786,6 @@ export class ReactAgentService {
             const maxSteps = session.turnState.maxStepsPerTurn;
             const msg = `Agent 单轮执行超过 ${maxSteps} 步，已停止。请简化需求或提供更明确的信息后重试。`;
             turnEnd = { kind: "step_limit", maxSteps };
-            await this.cancelStream(stream, "step-limit");
             // 善后：保存 AI 已输出的消息到 session.messages，防止下一轮看到断层对话
             // （静默空回复的根因：stepLimitHit 直接 return，AI 本轮所有输出全丢，
             // 下一轮 LLM 看到连续两条 user 消息 → 空回复 → 前端无任何显示）
@@ -816,7 +814,6 @@ export class ReactAgentService {
             const msg =
               "连续两次输出达到模型 token 上限（内容可能被截断）。请简化需求或拆分为更小的步骤。";
             turnEnd = { kind: "max_tokens", message: msg };
-            await this.cancelStream(stream, "max-tokens");
             // 善后：保存 AI 已输出的消息（同 stepLimitHit 的静默空回复修复）
             await this.saveInterruptedState(session.graph, config, session);
             this.appendEvent(session, "error", {
@@ -1042,7 +1039,7 @@ export class ReactAgentService {
    * 导致下一轮对话时 LLM 看到「连续两条 user 消息、中间无 AI 回复」的
    * 断层上下文 → 返回空回复 → 前端无任何显示（静默空回复 bug）。
    *
-   * 此方法在 cancelStream 之后、return 之前调用，从 graph 的 checkpoint
+   * 此方法在 return 之前调用，从 graph 的 checkpoint
    * 中提取最后一条 AI 消息并保存到 session.messages，保证上下文连贯。
    *
    * @param graph - 当前 graph 实例（含 checkpoint）
