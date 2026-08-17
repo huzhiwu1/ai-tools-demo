@@ -1,5 +1,17 @@
 # 借鉴 DeepSeek Harness Agent 主循环设计
 
+## ⚠️ 铁律：先删后建，不在屎山上堆代码
+
+本 prompt 要求你对现有代码做**替换和增强**，不是叠加。具体规则：
+
+1. **删除旧代码再写新代码**：不要保留旧的异常处理方式（纯字符串 try/catch），用结构化错误码替代
+2. **不要新旧并存**：不要出现 `if (newErrorCode) ... else { oldStringError }` 的兼容代码
+3. **不要保留注释掉的旧代码**：删干净，git 历史里有旧版本可以回看
+4. **改动范围**：只改 `session.store.ts` 和 `react-agent.service.ts` 两个文件
+5. **注意**：本 prompt 中有部分新增代码（turn/step 追踪、事件日志），这些是**新增到现有结构上**，但旧的错误处理逻辑要**替换掉**
+
+---
+
 ## 背景
 
 当前 agent-coze-workflow 的 Agent 主循环基于 LangGraph `createReactAgent`，它是一个黑盒 ReAct 循环。我们从日志中看到几个核心问题：
