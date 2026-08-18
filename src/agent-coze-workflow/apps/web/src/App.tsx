@@ -75,6 +75,108 @@ function planToSketch(plan: WorkflowPlan): WorkflowSketch {
 }
 
 /**
+ * 把 data 数组里的分段事件（step_text_start/final_answer/tool_start/tool_end/error）
+ * 转成渲染层可用的锚点伪消息序列
+ *
+ * 背景：@ai-sdk/react 1.0.13 对 2: data 事件只 push 进 data 数组，不会以
+ * role:"data" 消息进入 messages（见 ui-utils 源码 onDataPart）；纯 data-only
+ * 流下 useChat 内部 assistant 消息恒为空，messages 里只有用户消息。
+ * 因此段气泡/正文气泡/工具卡片的锚点必须由前端从 data 数组派生。
+ *
+ * 派生规则：
+ * - step_text_start：过程气泡锚点（若同 step 有 final_answer 则跳过——
+ *   最终回复段升级为正文气泡，不重复显示过程气泡）
+ * - final_answer：正文气泡锚点
+ * - tool_start：运行中卡片锚点（若后续有同名 tool_end 则跳过——
+ *   工具完成后运行中卡片消失；tool_end 不渲染完成卡片，
+ *   完成/失败状态由右侧 ToolCallPanel 展示）
+ * - error：错误卡片锚点
+ *
+ * @param events - data 数组（每项一个后端 d: 事件）
+ * @param stepContents - step → 段文本累积（流式期间实时填充）
+ * @param idPrefix - 锚点 id 前缀：多轮对话每轮 step 号都从 1 开始，
+ *   同前缀的 key 会跨轮冲突（React key 警告），派生时传 turn 号、
+ *   固化时传随机唯一前缀区分轮次
+ * @returns 锚点伪消息数组（渲染层按 data.type 分发）
+ */
+function buildAnchorMessages(
+  events: DataStreamEvent[],
+  stepContents: Record<number, string>,
+  idPrefix: string,
+): Array<{ id: string; role: "data"; content: string; data: DataStreamEvent }> {
+  // 先扫描一遍收集「升级/去重」信息：final_answer 覆盖的 step、已结束的工具
+  const finalSteps = new Set<number>();
+  const endedTools = new Set<string>();
+  for (const e of events) {
+    if (e.type === "final_answer" && (e.step ?? 0) > 0) {
+      finalSteps.add(e.step ?? 0);
+    }
+    if (e.type === "tool_end") {
+      endedTools.add(e.name ?? "unknown");
+    }
+  }
+
+  const result: Array<{
+    id: string;
+    role: "data";
+    content: string;
+    data: DataStreamEvent;
+  }> = [];
+  let toolStartIndex = 0;
+  for (const e of events) {
+    switch (e.type) {
+      case "step_text_start": {
+        const step = e.step ?? 0;
+        if (step <= 0 || finalSteps.has(step)) continue;
+        result.push({
+          id: `${idPrefix}-step-${step}-start`,
+          role: "data",
+          content: stepContents[step] ?? "",
+          data: e,
+        });
+        break;
+      }
+      case "final_answer": {
+        const step = e.step ?? 0;
+        if (step <= 0) continue;
+        result.push({
+          id: `${idPrefix}-step-${step}-final`,
+          role: "data",
+          content: stepContents[step] ?? "",
+          data: e,
+        });
+        break;
+      }
+      case "tool_start": {
+        // 同名工具已结束（有 tool_end）→ 运行中卡片消失（不渲染 tool_end
+        // 完成卡片，完成/失败状态由右侧 ToolCallPanel 展示）
+        if (endedTools.has(e.name ?? "unknown")) continue;
+        result.push({
+          id: `${idPrefix}-tool-start-${toolStartIndex++}`,
+          role: "data",
+          content: "",
+          data: e,
+        });
+        break;
+      }
+      case "error": {
+        result.push({
+          id: `${idPrefix}-tool-${e.type}-${e.name ?? "unknown"}-${result.length}`,
+          role: "data",
+          content: "",
+          data: e,
+        });
+        break;
+      }
+      default:
+        // session/turn_start/reasoning_delta/interrupt/done 等非渲染事件忽略
+        break;
+    }
+  }
+  return result;
+}
+
+/**
  * 解析 generate_workflow 工具输出（JSON 文本），提取 workflow 与校验结果
  */
 function parseGenerateOutput(output: string): {
@@ -179,12 +281,21 @@ export default function App() {
   // data 数组已处理位置（发送新消息时归零，配合 setData(undefined) 使用）
   const processedDataCount = useRef(0);
 
+  // data 数组已固化位置：流终止（done/interrupt）时把锚点写入 messages，
+  // 此后的 data 事件不再派生渲染（避免与固化消息重复）；发送新消息时归零
+  const finalizedDataCount = useRef(0);
+
   // step → 段文本内容：reasoning_delta 按 step 累积，供段气泡/正文气泡渲染取用。
   // 不写进 messages（@ai-sdk/react 1.0.13 的 onUpdate 会用请求时快照
-  // mutate 重置整个 messages，setMessages 插入的段消息会被覆盖）；
-  // 段气泡锚点消息（step_text_start/final_answer）由 useChat 自行累积的
-  // role:"data" 消息承担，不在覆盖范围内
+  // mutate 重置整个 messages，setMessages 插入的段消息会被覆盖）。
+  // 锚点消息由 useChat 的 data 数组派生（displayMessages）+ 流终止时固化进
+  // messages 承担——data 事件不会以 role:"data" 消息进入 messages（见
+  // ui-utils 源码 onDataPart：2: data 事件只 push 进 data 数组）
   const [stepContents, setStepContents] = useState<Record<number, string>>({});
+  // stepContents 的最新值快照（固化/插入锚点时在 effect/回调里读取，
+  // 避免闭包捕获过期 state）
+  const stepContentsRef = useRef<Record<number, string>>({});
+  stepContentsRef.current = stepContents;
 
   const busy = isLoading || resuming;
 
@@ -246,7 +357,8 @@ export default function App() {
         }
 
         case "final_answer": {
-          // 该 step 是最终回复：resume 流手动插入正文锚点消息，
+          // 该 step 是最终回复：resume 流手动插入正文锚点消息（自带完整文本，
+          // final_answer 是该 step 最后一个文本事件，stepContents 已累积完成），
           // 渲染时按 step 取 stepContents 展示为正文气泡
           const step = event.step ?? 0;
           if (step <= 0) break;
@@ -257,7 +369,13 @@ export default function App() {
                 id: crypto.randomUUID(),
                 role: "data",
                 content: "",
-                data: { type: "final_answer", step },
+                data: {
+                  type: "final_answer",
+                  step,
+                  // 固化完整文本：下一轮发送时 stepContents 会被清空，
+                  // 锚点自带 content 保证多轮后正文不丢失
+                  content: stepContentsRef.current[step] ?? "",
+                },
               },
             ]);
           }
@@ -365,15 +483,80 @@ export default function App() {
         handleDataEvent(item as unknown as DataStreamEvent, "chat");
       }
     }
-  }, [data, handleDataEvent]);
 
-  // 正在流式打字的 step 段：扫描 messages 中 step_text_start/final_answer
-  // 锚点，最后一个尚未 final_answer 的段即为当前打字段（流结束为 null）
+    // 流终止（done/interrupt）后固化锚点：done/interrupt 是流的最后一个
+    // data 事件，useChat 的快照 mutate 已全部完成，此时 setMessages 追加
+    // 不会被覆盖。固化后锚点随 messages 持久化（多轮对话不丢失）。
+    const terminated = fresh.some((e) => {
+      if (e == null || typeof e !== "object") return false;
+      const t = (e as { type?: unknown }).type;
+      return t === "done" || t === "interrupt";
+    });
+    if (terminated && events.length > finalizedDataCount.current) {
+      const anchors = buildAnchorMessages(
+        events as unknown as DataStreamEvent[],
+        stepContentsRef.current,
+        // 固化锚点用随机唯一前缀：多轮对话每轮 step 号都从 1 开始，
+        // 固定前缀会跨轮撞 React key
+        `fixed-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      );
+      finalizedDataCount.current = events.length;
+      if (anchors.length > 0) {
+        setMessages((prev) => [...prev, ...(anchors as unknown as typeof prev)]);
+      }
+    }
+  }, [data, handleDataEvent, setMessages]);
+
+  // ============================================
+  // 渲染消息流：固化消息 + data 数组派生的实时锚点
+  // ============================================
+
+  /**
+   * 渲染用消息序列 = messages（用户消息/固化锚点/提问卡片）+
+   * data 数组未固化部分的派生锚点（流进行中的过程气泡/正文气泡/工具卡片）
+   *
+   * 流终止后 finalizedDataCount 推进到 data 末尾 → 派生为空，
+   * 锚点完全由 messages 里的固化消息承担（下一轮发送时 data 被清空，
+   * 固化消息仍保留，实现多轮持久化）。
+   */
+  const displayMessages = useMemo<ChatMessage[]>(() => {
+    const live = data ?? [];
+    if (live.length <= finalizedDataCount.current) {
+      return messages as ChatMessage[];
+    }
+    // 提取当前 turn 号（turn_start 事件）作派生锚点 key 前缀：
+    // 多轮对话每轮 step 号都从 1 开始，固定 key 会跨轮冲突
+    let turn = 0;
+    for (const e of live) {
+      const t = e as { type?: unknown; turn?: unknown } | null;
+      if (
+        t &&
+        typeof t === "object" &&
+        t.type === "turn_start" &&
+        typeof t.turn === "number"
+      ) {
+        turn = t.turn;
+      }
+    }
+    const anchors = buildAnchorMessages(
+      live.slice(finalizedDataCount.current) as unknown as DataStreamEvent[],
+      stepContents,
+      `live-t${turn}`,
+    );
+    if (anchors.length === 0) {
+      return messages as ChatMessage[];
+    }
+    return [...(messages as ChatMessage[]), ...anchors];
+  }, [messages, data, stepContents]);
+
+  // 正在流式打字的 step 段：扫描 displayMessages 中 step_text_start/
+  // final_answer 锚点，最后一个尚未 final_answer 的段即为当前打字段
+  // （流结束为 null）
   const streamingStep = useMemo(() => {
     if (!busy) return null;
     let lastStep: number | null = null;
-    for (const m of messages) {
-      const anchor = (m.data as { type?: string; step?: number } | undefined);
+    for (const m of displayMessages) {
+      const anchor = m.data as { type?: string; step?: number } | undefined;
       if (m.role === "data" && anchor?.type === "step_text_start") {
         lastStep = typeof anchor.step === "number" ? anchor.step : null;
       } else if (
@@ -385,7 +568,7 @@ export default function App() {
       }
     }
     return lastStep;
-  }, [messages, busy]);
+  }, [displayMessages, busy]);
 
   // ============================================
   // 发送消息
@@ -449,6 +632,7 @@ export default function App() {
     setSavedResult(null);
     setToolCalls([]);
     processedDataCount.current = 0;
+    finalizedDataCount.current = 0;
     setData(undefined);
     // 新一轮对话：旧 step 段内容作废（打断后残留 reasoning_delta 不落到新段）
     setStepContents({});
@@ -561,7 +745,7 @@ export default function App() {
           )}
 
           <ChatMessageList
-            messages={messages as ChatMessage[]}
+            messages={displayMessages}
             isLoading={busy}
             pendingQuestion={pendingQuestion}
             stepContents={stepContents}
